@@ -71,7 +71,9 @@ public final class OwnUiClick {
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
                 "Macro", "Agregar punto", "Ubicar", "Asignar", "Quitar tecla de suspensión",
                 "Espera punto 1, milisegundos", "Aceptar espera", "Repetir", "Mapa/Mochila",
-                "Intervalo de repetición, milisegundos", "Mostrar controles en pantalla", "Jugar Free Fire").contains(args[0])) {
+                "Intervalo de repetición, milisegundos", "Mostrar controles en pantalla", "Jugar Free Fire",
+                "UwU Mouse · abrir opciones", "Perfiles", "Crear perfil", "Activar perfil Free Fire · principal",
+                "Activar perfil Perfil 2", "Tecla de perfil Perfil 2").contains(args[0])) {
             throw new IllegalArgumentException("Unsupported own UI action");
         }
         Looper.prepareMainLooper();
