@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">UwU Mouse</string>
+    <string name="capture_description">Captura teclado y ratón durante una sesión de UwU Mouse. Usa los controles de sesión para pausar o cerrar.</string>
+</resources>

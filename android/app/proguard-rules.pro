@@ -1,0 +1,4 @@
+-keep class dev.mobimapper.mobimapper.backend.ShellMain { *; }
+-keep class dev.mobimapper.mobimapper.backend.InjectionWorkerMain { *; }
+-keep class dev.mobimapper.mobimapper.backend.IBackendEvents** { *; }
+-keep class dev.mobimapper.mobimapper.backend.IInjector** { *; }

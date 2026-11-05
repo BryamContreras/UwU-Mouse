@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="32dp" android:height="32dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:pathData="M5.8 6.2 L18.2 6.2 Q21.2 6.2 21.2 9.2 L21.2 17.2 Q21.2 20.2 18.2 20.2 L5.8 20.2 Q2.8 20.2 2.8 17.2 L2.8 9.2 Q2.8 6.2 5.8 6.2 Z" android:fillColor="#6AC8FF" android:fillAlpha="0.14" />
+    <path android:pathData="M5.8 6.2 L18.2 6.2 Q21.2 6.2 21.2 9.2 L21.2 17.2 Q21.2 20.2 18.2 20.2 L5.8 20.2 Q2.8 20.2 2.8 17.2 L2.8 9.2 Q2.8 6.2 5.8 6.2 Z" android:fillColor="@android:color/transparent" android:strokeColor="#E6F4FF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M7.6 6.2 L9.3 3.6 L14.7 3.6 L16.4 6.2" android:fillColor="@android:color/transparent" android:strokeColor="#E6F4FF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M16 13 C16 15.2091 14.2091 17 12 17 C9.7909 17 8 15.2091 8 13 C8 10.7909 9.7909 9 12 9 C14.2091 9 16 10.7909 16 13 Z" android:fillColor="@android:color/transparent" android:strokeColor="#5BD1FF" android:strokeWidth="1.8" android:strokeLineCap="round" android:strokeLineJoin="round" />
+    <path android:pathData="M18.85 9.1 C18.85 9.5142 18.5142 9.85 18.1 9.85 C17.6858 9.85 17.35 9.5142 17.35 9.1 C17.35 8.6858 17.6858 8.35 18.1 8.35 C18.5142 8.35 18.85 8.6858 18.85 9.1 Z" android:fillColor="#E6F4FF" android:fillAlpha="1" />
+</vector>
+

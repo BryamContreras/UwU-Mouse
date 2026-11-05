@@ -1,0 +1,153 @@
+package dev.mobimapper.mobimapper.profile
+
+import org.json.JSONArray
+import org.json.JSONException
+import org.json.JSONObject
+
+data class ProfileDocument(val profiles: List<GameProfile>, val selectedProfileId: String?)
+
+/** Versioned data only. No class names, commands or executable expressions are accepted. */
+object ProfileCodec {
+    const val MAX_DOCUMENT_CHARS = 1_048_576
+    private const val MAX_PROFILE_CHARS = 65_536
+    const val MAX_PROFILES = 128
+
+    fun encode(profile: GameProfile): String = toJson(ProfileValidator.requireValid(profile)).toString()
+
+    fun decode(json: String): GameProfile {
+        require(json.length <= MAX_PROFILE_CHARS) { "Perfil demasiado grande" }
+        return jsonRead { fromJson(JSONObject(json)) }
+    }
+
+    fun encodeDocument(document: ProfileDocument): String {
+        require(document.profiles.size <= MAX_PROFILES) { "Demasiados perfiles" }
+        require(document.profiles.map { it.id }.distinct().size == document.profiles.size) { "Perfiles duplicados" }
+        ProfileSwitchKeys.requireValid(document.profiles)
+        require(document.selectedProfileId == null || document.profiles.any { it.id == document.selectedProfileId }) { "Perfil seleccionado inexistente" }
+        val rows = JSONArray()
+        document.profiles.forEach { rows.put(toJson(ProfileValidator.requireValid(it))) }
+        return JSONObject().put("schemaVersion", GameProfile.SCHEMA_VERSION).put("profiles", rows)
+            .put("selectedProfileId", document.selectedProfileId ?: JSONObject.NULL).toString()
+            .also { require(it.length <= MAX_DOCUMENT_CHARS) { "Almacén de perfiles demasiado grande" } }
+    }
+
+    fun decodeDocument(json: String): ProfileDocument {
+        require(json.length <= MAX_DOCUMENT_CHARS) { "Almacén de perfiles demasiado grande" }
+        return jsonRead {
+            val root = JSONObject(json)
+            require(int(root, "schemaVersion") in 1..GameProfile.SCHEMA_VERSION) { "Versión del almacén no compatible" }
+            val rows = root.getJSONArray("profiles")
+            require(rows.length() <= MAX_PROFILES) { "Demasiados perfiles" }
+            val profiles = (0 until rows.length()).map { fromJson(rows.getJSONObject(it)) }
+            require(profiles.map { it.id }.distinct().size == profiles.size) { "Perfiles duplicados" }
+            ProfileSwitchKeys.requireValid(profiles)
+            val selected = if (root.isNull("selectedProfileId")) null else string(root, "selectedProfileId")
+            require(selected == null || profiles.any { it.id == selected }) { "Perfil seleccionado inexistente" }
+            ProfileDocument(profiles, selected)
+        }
+    }
+
+    fun toJson(profile: GameProfile): JSONObject {
+        ProfileValidator.requireValid(profile)
+        val c = profile.calibration; val a = c.area; val j = profile.joystick
+        val camera = profile.camera; val action = profile.action; val shortcuts = profile.shortcuts
+        return JSONObject().put("schemaVersion", profile.schemaVersion).put("id", profile.id)
+            .put("name", profile.name).put("packageName", profile.packageName).put("orientation", profile.orientation).put("switchKey",profile.switchKey)
+            .put("calibration", JSONObject().put("screenWidth", c.screenWidth).put("screenHeight", c.screenHeight)
+                .put("rotation", c.rotation).put("confirmed", c.confirmed)
+                .put("area", JSONObject().put("left", a.left).put("top", a.top).put("right", a.right).put("bottom", a.bottom)))
+            .put("joystick", JSONObject().put("x", j.x).put("y", j.y).put("radius", j.radius)
+                .put("upKey", j.upKey).put("downKey", j.downKey).put("leftKey", j.leftKey).put("rightKey", j.rightKey).put("enabled", j.enabled))
+            .put("camera", JSONObject().put("x", camera.x).put("y", camera.y).put("width", camera.width).put("height", camera.height)
+                .put("sensitivityX", camera.sensitivityX).put("sensitivityY", camera.sensitivityY).put("mode", camera.mode)
+                .put("updateRateHz",camera.updateRateHz).put("markerSizeDp",camera.markerSizeDp)
+                .put("precisionAim",camera.precisionAim).put("suspendKey",camera.suspendKey).put("enabled",camera.enabled))
+            .put("action", actionToJson(action))
+            .put("additionalActions", JSONArray().apply { profile.additionalActions.forEach { a -> put(actionToJson(a)) } })
+            .put("macros", JSONArray().apply { profile.macros.forEach { macro -> put(macroToJson(macro)) } })
+            .put("shortcuts", JSONObject().put("cameraToggle", shortcuts.cameraToggle).put("stop", shortcuts.stop).put("edit", shortcuts.edit))
+    }
+
+    fun fromJson(root: JSONObject): GameProfile {
+        val schema=int(root,"schemaVersion")
+        require(schema in 1..GameProfile.SCHEMA_VERSION) { "Versión del perfil no compatible" }
+        val additional=if(schema==1) emptyList() else root.getJSONArray("additionalActions").let { rows ->
+            require(rows.length()<=GameProfile.MAX_ACTIONS) { "Demasiadas acciones" }
+            (0 until rows.length()).map { index -> actionFromJson(rows.getJSONObject(index),schema) }
+        }
+        val macros = if (schema < 6) emptyList() else root.getJSONArray("macros").let { rows ->
+            require(rows.length() <= GameProfile.MAX_MACROS) { "Demasiadas macros" }
+            (0 until rows.length()).map { index -> macroFromJson(rows.getJSONObject(index)) }
+        }
+        val c = root.getJSONObject("calibration"); val area = c.getJSONObject("area")
+        val j = root.getJSONObject("joystick"); val camera = root.getJSONObject("camera")
+        val action = root.getJSONObject("action"); val shortcuts = root.getJSONObject("shortcuts")
+        val profile = GameProfile(string(root, "id"), string(root, "name"), string(root, "packageName"), GameProfile.SCHEMA_VERSION,
+            Calibration(int(c, "screenWidth"), int(c, "screenHeight"), int(c, "rotation"),
+                GameArea(float(area, "left"), float(area, "top"), float(area, "right"), float(area, "bottom")), bool(c, "confirmed")),
+            JoystickSpec(float(j, "x"), float(j, "y"), float(j, "radius"), int(j, "upKey"), int(j, "downKey"), int(j, "leftKey"), int(j, "rightKey"),
+                if(schema>=7) bool(j,"enabled") else true),
+            CameraSpec(float(camera, "x"), float(camera, "y"), float(camera, "width"), float(camera, "height"),
+                float(camera, "sensitivityX"), float(camera, "sensitivityY"),
+                if(schema>=3) string(camera,"mode") else CameraSpec.BOUNDED,
+                if(schema>=4) int(camera,"updateRateHz") else 0,
+                if(schema>=4) float(camera,"markerSizeDp") else MarkerStyle.DEFAULT_DP,
+                if(schema>=5) bool(camera,"precisionAim") else false,
+                if(schema>=6) int(camera,"suspendKey") else 0,
+                if(schema>=7) bool(camera,"enabled") else true),
+            actionFromJson(action,schema),
+            SessionShortcuts(int(shortcuts, "cameraToggle"), int(shortcuts, "stop"), int(shortcuts, "edit")), additional, macros,
+            if(schema>=8) int(root,"switchKey") else 0)
+        require(string(root, "orientation") == profile.orientation) { "Orientación y dimensiones del perfil no coinciden" }
+        return ProfileValidator.requireValid(profile)
+    }
+
+    private fun actionToJson(action: ActionSpec): JSONObject = JSONObject().put("x",action.x).put("y",action.y)
+        .put("triggerKind",action.triggerKind).put("code",action.code).put("markerSizeDp",action.markerSizeDp)
+        .put("behavior",action.behavior).put("repeatIntervalMs",action.repeatIntervalMs).put("enabled",action.enabled)
+
+    private fun actionFromJson(action: JSONObject,schema: Int): ActionSpec = ActionSpec(
+        float(action,"x"),float(action,"y"),string(action,"triggerKind"),int(action,"code"),
+        if(schema>=4) float(action,"markerSizeDp") else MarkerStyle.DEFAULT_DP,
+        if(schema>=7) string(action,"behavior") else ActionSpec.TAP,
+        if(schema>=7) int(action,"repeatIntervalMs") else 100,
+        if(schema>=7) bool(action,"enabled") else true)
+
+    private fun macroToJson(macro: MacroSpec): JSONObject = JSONObject()
+        .put("id", macro.id).put("name", macro.name).put("x", macro.x).put("y", macro.y)
+        .put("triggerKind", macro.triggerKind).put("code", macro.code).put("markerSizeDp", macro.markerSizeDp)
+        .put("steps", JSONArray().apply { macro.steps.forEach { step ->
+            put(JSONObject().put("x", step.x).put("y", step.y).put("waitMs", step.waitMs))
+        } })
+
+    private fun macroFromJson(macro: JSONObject): MacroSpec {
+        val steps = macro.getJSONArray("steps")
+        require(steps.length() in 1..GameProfile.MAX_MACRO_STEPS) { "Cada macro necesita entre 1 y 16 puntos" }
+        return MacroSpec(string(macro, "id"), string(macro, "name"), float(macro, "x"), float(macro, "y"),
+            string(macro, "triggerKind"), int(macro, "code"), float(macro, "markerSizeDp"),
+            (0 until steps.length()).map { index -> steps.getJSONObject(index).let {
+                MacroStep(float(it, "x"), float(it, "y"), int(it, "waitMs"))
+            } })
+    }
+
+    private fun int(value: JSONObject, key: String): Int {
+        val number = value.get(key)
+        require(number is Number) { "$key necesita un número entero" }
+        val d = number.toDouble()
+        require(d.isFinite() && d >= Int.MIN_VALUE && d <= Int.MAX_VALUE && d % 1.0 == 0.0) { "$key necesita un número entero válido" }
+        return number.toInt()
+    }
+
+    private fun float(value: JSONObject, key: String): Float {
+        val number = value.get(key)
+        require(number is Number && number.toDouble().isFinite() && number.toFloat().isFinite()) { "$key necesita un número finito" }
+        return number.toFloat()
+    }
+
+    private fun string(value: JSONObject, key: String): String = (value.get(key) as? String)
+        ?: throw IllegalArgumentException("$key necesita texto")
+    private fun bool(value: JSONObject, key: String): Boolean = (value.get(key) as? Boolean)
+        ?: throw IllegalArgumentException("$key necesita verdadero o falso")
+    private fun <T> jsonRead(read: () -> T): T = try { read() }
+        catch (e: JSONException) { throw IllegalArgumentException("Documento de perfiles no válido: ${e.message}", e) }
+}
