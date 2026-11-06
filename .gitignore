@@ -55,6 +55,7 @@ app.*.map.json
 !/docs/CI_ANDROID.md
 !/docs/PUBLIC_ARCHITECTURE.md
 !/docs/ACTIVAR_PC.md
+!/docs/ACTIVAR_TELEFONO.md
 /attachments/
 /.codex/
 /.vscode/

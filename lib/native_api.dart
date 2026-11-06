@@ -85,6 +85,25 @@ enum NativeCommand {
   shutdownBackend,
 }
 
+class LocalActivationStatus {
+  LocalActivationStatus.fromWire(Map<Object?, Object?> wire)
+    : phase = wire['phase'] as String? ?? 'idle',
+      message = wire['message'] as String? ?? '',
+      busy = wire['busy'] == true,
+      paired = wire['paired'] == true,
+      pairingPort = _port(wire['pairingPort']),
+      connectPort = _port(wire['connectPort']),
+      host = wire['host'] as String? ?? '127.0.0.1';
+
+  final String phase, message, host;
+  final bool busy, paired;
+  final int? pairingPort, connectPort;
+  bool get ready => phase == 'ready';
+
+  static int? _port(Object? value) =>
+      value is int && value > 0 && value <= 65535 ? value : null;
+}
+
 class NativeApi {
   const NativeApi();
   static const _channel = MethodChannel('dev.mobimapper/control.v1');
@@ -96,6 +115,36 @@ class NativeApi {
     }
     return NativeStatus.fromWire(wire);
   }
+
+  Future<LocalActivationStatus> activationStatus() async {
+    final wire = await _channel.invokeMapMethod<Object?, Object?>(
+      'activationStatus',
+    );
+    if (wire == null) throw const FormatException('Sin estado de activación');
+    return LocalActivationStatus.fromWire(wire);
+  }
+
+  Future<void> activationStartDiscovery() =>
+      _channel.invokeMethod<void>('activationStartDiscovery');
+
+  Future<void> activationPair({
+    required String host,
+    required int port,
+    required String code,
+  }) => _channel.invokeMethod<void>('activationPair', {
+    'host': host,
+    'port': port,
+    'code': code,
+  });
+
+  Future<void> activationConnect({String? host, int? port}) => _channel
+      .invokeMethod<void>('activationConnect', {'host': ?host, 'port': ?port});
+
+  Future<void> activationCancel() =>
+      _channel.invokeMethod<void>('activationCancel');
+
+  Future<void> wirelessDebuggingSettings() =>
+      _channel.invokeMethod<void>('wirelessDebuggingSettings');
 
   Future<List<LaunchableApp>> listApps() async {
     final values = await _channel.invokeListMethod<Object?>('listApps');

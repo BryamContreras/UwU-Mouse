@@ -2,11 +2,13 @@
 
 Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, desarrollado con Flutter y Kotlin. La interfaz gestiona juegos, perfiles y ajustes; la entrada y composición multitáctil se procesan en Kotlin dentro del teléfono.
 
-La versión de desarrollo actual es **0.2.0+33**. Conserva la identidad Android `dev.mobimapper.mobimapper` para mantener perfiles y autorizaciones al actualizar con el mismo certificado. El nombre visible pasa de MobiMapper a **UwU Mouse**.
+La versión de desarrollo actual es **0.2.0+34**. Conserva la identidad Android `dev.mobimapper.mobimapper` para mantener perfiles y autorizaciones al actualizar con el mismo certificado. El nombre visible pasa de MobiMapper a **UwU Mouse**.
 
 ## Uso
 
-**Activación necesaria en esta versión:** el motor de toques se inicia mediante ADB desde una PC. Accesibilidad y Depuración inalámbrica, por sí solas, no lo arrancan. En Windows usa **Activar-UwU-Mouse.cmd** antes de abrir el juego; cuando indique que el servicio está listo, toca el juego en la app. Si el servicio se detiene, vuelve a ejecutar el lanzador. La activación autónoma dentro del teléfono todavía no está implementada. [Pasos de activación](docs/ACTIVAR_PC.md).
+**Activación desde el teléfono:** en **Ajustes → Conexión → Activar en este teléfono**, abre Depuración inalámbrica, elige **Emparejar dispositivo con código** e introduce sus seis dígitos desde la notificación de UwU Mouse. La app empareja e inicia el motor local; después puedes usar **Reactivar sin código** mientras Android conserve la autorización. Accesibilidad es un componente adicional y debe estar habilitada. [Guía paso a paso](docs/ACTIVAR_TELEFONO.md). En +34 se comprobaron el código por notificación, la conservación de autorización al actualizar y el arranque local desde **Reactivar sin código** en el Samsung, con UID2000 y permiso de inyección verificados.
+
+Después de reiniciar o perder el proceso puede hacer falta reactivar el motor. No se inicia el juego ni se recuperan acciones mantenidas automáticamente. **InputLab es opcional** para jugar. El [activador de PC](docs/ACTIVAR_PC.md) permanece como alternativa.
 
 1. Agrega un juego a la biblioteca y ábrelo desde su círculo.
 2. Coloca los controles con **Mapear** y guarda el perfil.
@@ -50,7 +52,7 @@ Las salidas se encuentran en `build/app/outputs/flutter-apk/`. En PowerShell sus
 
 ## Instalar y activar
 
-Con depuración Android autorizada, teclado y ratón conectados por OTG o Bluetooth:
+Instala encima de la versión existente con el mismo certificado. Para activar desde el teléfono sigue la [guía local](docs/ACTIVAR_TELEFONO.md); no requiere una PC. Como alternativa de desarrollo, con depuración Android autorizada y teclado y ratón conectados por OTG o Bluetooth:
 
 ```powershell
 .\scripts\Install.ps1 -Release -Serial '<serial>'
@@ -63,8 +65,8 @@ Detén la sesión y confirma que no quedan contactos antes de actualizar. Reutil
 
 El historial distingue la evidencia de InputLab, los registros del mapeador y el comportamiento visible confirmado en Free Fire. Un ACK de inyección no prueba que una acción haya ocurrido dentro de un juego. La referencia física disponible corresponde a Samsung/Free Fire en un escenario controlado; no se anuncia compatibilidad universal.
 
-Las pruebas físicas nuevas de perfiles y atajos, Repetir, Mapa/Mochila, macros y Suspender deben registrarse por separado. Los periodos de repetición son nominales: si hay retrasos se omiten periodos en lugar de acumular ráfagas. Las métricas internas no representan latencia hasta imagen. CI verifica compilación, pruebas automatizadas y empaquetado; no sustituye esas pruebas físicas.
+La activación local +34 tiene evidencia de dispositivo; siguen pendientes las pruebas tras reinicio físico, revocación y ejecución con InputLab ausente. Las pruebas físicas nuevas de perfiles y atajos, Repetir, Mapa/Mochila, macros y Suspender deben registrarse por separado. Los periodos de repetición son nominales: si hay retrasos se omiten periodos en lugar de acumular ráfagas. Las métricas internas no representan latencia hasta imagen. CI verifica compilación, pruebas automatizadas y empaquetado; no sustituye esas pruebas físicas.
 
 Las capturas, perfiles, inventarios y logs del dispositivo en `evidence/`, las entregas locales de `dist/`, los informes históricos privados y los archivos de firma se excluyen del repositorio público.
 
-No se ha definido una licencia general para el proyecto. Las dependencias conservan sus licencias respectivas.
+No se ha definido una licencia general para el proyecto. Las dependencias conservan sus licencias respectivas. El cliente de activación adapta componentes de Shizuku bajo Apache 2.0 y utiliza Conscrypt, Bouncy Castle y BoringSSL; se incluyen atribuciones y textos en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) y en el APK.

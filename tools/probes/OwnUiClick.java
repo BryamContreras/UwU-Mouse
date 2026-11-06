@@ -57,6 +57,9 @@ public final class OwnUiClick {
             case "freefire" -> "Free Fire";
             case "settings" -> "Ajustes";
             case "check_service" -> "Comprobar servicio";
+            case "activate_phone" -> "Activar en este teléfono";
+            case "wireless_settings" -> "Abrir Depuración inalámbrica";
+            case "reactivate" -> "Reactivar sin código";
             case "keys" -> "Teclas de sesión";
             case "controls" -> "Editar controles";
             case "play" -> "Jugar";
@@ -74,7 +77,8 @@ public final class OwnUiClick {
                 "Espera punto 1, milisegundos", "Aceptar espera", "Repetir", "Mapa/Mochila",
                 "Intervalo de repetición, milisegundos", "Mostrar controles en pantalla", "Jugar Free Fire",
                 "UwU Mouse · abrir opciones", "Perfiles", "Crear perfil", "Activar perfil Free Fire · principal",
-                "Activar perfil Perfil 2", "Tecla de perfil Perfil 2").contains(args[0])) {
+                "Activar perfil Perfil 2", "Tecla de perfil Perfil 2", "Activar en este teléfono",
+                "Abrir Depuración inalámbrica", "Reactivar sin código").contains(args[0])) {
             throw new IllegalArgumentException("Unsupported own UI action");
         }
         Looper.prepareMainLooper();

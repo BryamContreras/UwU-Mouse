@@ -19,8 +19,10 @@ import java.security.SecureRandom
 /** Stable authorized broker; the actual injector is a replaceable child process. */
 class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     private val appUid=context.packageManager.getPackageUid("dev.mobimapper.mobimapper",0)
-    private var targetPackage="dev.mobimapper.inputlab"
-    private var targetUid=context.packageManager.getPackageUid(targetPackage,0)
+    // Bootstrap is idle and must not require the optional laboratory to be installed.
+    // A real target is resolved and authorized by selectTarget before any worker/session starts.
+    private var targetPackage="dev.mobimapper.mobimapper"
+    private var targetUid=appUid
     private var coordinatePolicy=TouchCoordinatePolicy.STRICT
     private val journal=RecoveryJournal()
     private val recoveryThread=HandlerThread("MobiRecovery").apply { start() }

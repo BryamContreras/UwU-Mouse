@@ -38,6 +38,10 @@
         <service android:name=".session.SessionService" android:exported="false" android:foregroundServiceType="specialUse">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User-initiated local keyboard/mouse mapping for the explicitly selected application and calibrated local profile" />
         </service>
+        <service android:name=".activation.ActivationService" android:exported="false" android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="User initiated local wireless debugging pairing and fixed mapper backend activation while Android settings displays the pairing code" />
+        </service>
+        <receiver android:name=".activation.ActivationReplyReceiver" android:exported="false" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

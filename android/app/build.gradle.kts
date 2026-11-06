@@ -28,6 +28,11 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        externalNativeBuild {
+            cmake {
+                arguments += "-DANDROID_STL=c++_static"
+            }
+        }
     }
 
     // CI restores the existing development certificate at an explicit path. Local builds
@@ -47,7 +52,16 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-    buildFeatures { aidl = true }
+    buildFeatures {
+        aidl = true
+        prefab = true
+    }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/adb/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 kotlin {
@@ -61,6 +75,10 @@ flutter {
 }
 
 dependencies {
+    // TLS exporter and SPAKE2 use public, permissively licensed implementations.
+    implementation("org.conscrypt:conscrypt-android:2.5.3")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
+    implementation("io.github.vvb2060.ndk:boringssl:20250114")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
 }

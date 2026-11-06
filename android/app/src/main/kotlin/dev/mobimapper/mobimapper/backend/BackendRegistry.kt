@@ -73,6 +73,13 @@ class BackendProvider : ContentProvider() {
             return try { Bundle().apply { putString("json", org.json.JSONObject(SessionController.status(requireNotNull(context))).toString()) } }
             finally { Binder.restoreCallingIdentity(identity) }
         }
+        if(method=="activationStatus") {
+            val identity=Binder.clearCallingIdentity()
+            return try {
+                dev.mobimapper.mobimapper.activation.LocalActivation.initialize(requireNotNull(context))
+                Bundle().apply { putString("json",org.json.JSONObject(dev.mobimapper.mobimapper.activation.LocalActivation.status()).toString()) }
+            } finally { Binder.restoreCallingIdentity(identity) }
+        }
         if (method == "profiles") {
             val identity = Binder.clearCallingIdentity()
             return try {

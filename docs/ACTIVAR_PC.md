@@ -1,6 +1,6 @@
 # Activar UwU Mouse desde la PC
 
-La versión actual necesita dos componentes activos: **Accesibilidad** y **Motor de toques**. El motor se arranca desde una PC mediante ADB. Todavía no existe activación autónoma dentro del teléfono; encender Depuración inalámbrica y accesibilidad no inicia ese motor por sí solo.
+UwU Mouse necesita dos componentes activos: **Accesibilidad** y **Motor de toques**. Desde +34 puedes iniciar el motor en el propio teléfono mediante Depuración inalámbrica y un emparejamiento visible de Android: [activar sin PC](ACTIVAR_TELEFONO.md). Este documento describe la alternativa desde Windows. Encender Depuración inalámbrica y accesibilidad no inicia el motor por sí solo; debes completar una de las dos rutas de activación.
 
 ## Pasos
 
@@ -11,7 +11,7 @@ La versión actual necesita dos componentes activos: **Accesibilidad** y **Motor
 
 El motor corre localmente en el teléfono; la PC se utiliza para arrancarlo. No hace falta repetir la activación cada vez que conectas el teclado o el ratón. Repítela cuando el servicio esté apagado, por ejemplo después de un reinicio o si el proceso se pierde.
 
-Conserva **InputLab** instalado: el arranque de desarrollo actual todavía depende de ese componente auxiliar. No necesitas abrirlo para jugar.
+Desde +34, **InputLab no es obligatorio** para arrancar el motor ni para jugar. Es un receptor independiente utilizado en las pruebas de desarrollo.
 
 ## Conservar tus perfiles
 

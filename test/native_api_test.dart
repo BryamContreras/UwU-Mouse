@@ -459,6 +459,60 @@ void main() {
     expect(calls[1].arguments, {'id': 'profile-1'});
     expect(calls[2].arguments, {'id': 'profile-1'});
   });
+  test(
+    'local activation transfers pairing once and supports discovered reconnect',
+    () async {
+      const channel = MethodChannel('dev.mobimapper/control.v1');
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return call.method == 'activationStatus'
+                ? {
+                    'phase': 'discovering',
+                    'message': 'Emparejado',
+                    'busy': false,
+                    'paired': true,
+                    'pairingPort': 40321,
+                    'connectPort': 37001,
+                  }
+                : null;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      const api = NativeApi();
+      final status = await api.activationStatus();
+      expect(status.paired, isTrue);
+      expect(status.host, '127.0.0.1');
+      expect(status.pairingPort, 40321);
+      expect(status.connectPort, 37001);
+      await api.activationStartDiscovery();
+      await api.activationPair(
+        host: status.host,
+        port: status.pairingPort!,
+        code: '123456',
+      );
+      await api.activationConnect();
+      await api.wirelessDebuggingSettings();
+      await api.activationCancel();
+      expect(calls[2].arguments, {
+        'host': '127.0.0.1',
+        'port': 40321,
+        'code': '123456',
+      });
+      expect(calls[3].arguments, isEmpty);
+      expect(calls.map((c) => c.method), [
+        'activationStatus',
+        'activationStartDiscovery',
+        'activationPair',
+        'activationConnect',
+        'wirelessDebuggingSettings',
+        'activationCancel',
+      ]);
+    },
+  );
 }
 
 Map<Object?, Object?> macroWire(int index) => {
