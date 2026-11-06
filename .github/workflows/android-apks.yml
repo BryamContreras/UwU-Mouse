@@ -81,6 +81,14 @@ jobs:
             chmod 600 "$HOME/.android/debug.keystore"
             keytool -list -keystore "$HOME/.android/debug.keystore" \
               -storepass android -alias androiddebugkey > /dev/null
+            certificate_sha=$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey | sha256sum)
+            if [[ "${certificate_sha%% *}" != '940a68a15fb6e37f42b0efcc7d175ea79e31e13f7e9995a50e9d6117c02e5bc6' ]]; then
+              echo '::error::The restored development certificate does not match the configured installation.'
+              exit 1
+            fi
+            printf 'Development certificate SHA-256: %s\n' "${certificate_sha%% *}"
+            printf 'UWU_ANDROID_DEBUG_KEYSTORE=%s\n' "$HOME/.android/debug.keystore" >> "$GITHUB_ENV"
           elif [[ "$WORKFLOW_EVENT" != 'pull_request' ]]; then
             echo '::error::Configure the ANDROID_DEBUG_KEYSTORE_BASE64 repository secret before building installable updates.'
             exit 1
@@ -108,6 +116,16 @@ jobs:
           version = match.group(1)
           version_code = version.split('+')[1]
           aapt = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools' / '36.0.0' / 'aapt'
+          apksigner = aapt.with_name('apksigner')
+          keystore = os.environ.get('UWU_ANDROID_DEBUG_KEYSTORE')
+          expected_certificate = None
+          if keystore:
+              certificate = subprocess.check_output([
+                  'keytool', '-exportcert', '-keystore', keystore,
+                  '-storepass', 'android', '-alias', 'androiddebugkey'])
+              expected_certificate = hashlib.sha256(certificate).hexdigest()
+              if expected_certificate != '940a68a15fb6e37f42b0efcc7d175ea79e31e13f7e9995a50e9d6117c02e5bc6':
+                  raise SystemExit('Restored development certificate differs from the configured installation')
           output = pathlib.Path('release-apks')
           output.mkdir(exist_ok=True)
           checksums = []
@@ -116,6 +134,10 @@ jobs:
               badging = subprocess.check_output([str(aapt), 'dump', 'badging', str(source)], text=True)
               if f"versionCode='{version_code}'" not in badging.splitlines()[0]:
                   raise SystemExit(f'{source}: versionCode differs from local universal build')
+              signing = subprocess.check_output([str(apksigner), 'verify', '--print-certs', str(source)], text=True)
+              signer = re.search(r'^Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9]{64})\s*$', signing, re.M)
+              if signer is None or (expected_certificate and signer.group(1).lower() != expected_certificate):
+                  raise SystemExit(f'{source}: APK signing certificate differs from the restored key')
               with zipfile.ZipFile(source) as apk:
                   packaged = {name.split('/')[1] for name in apk.namelist()
                               if name.startswith('lib/') and name.endswith('.so')}

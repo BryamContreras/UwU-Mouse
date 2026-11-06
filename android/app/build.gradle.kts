@@ -30,6 +30,16 @@ android {
         versionName = flutter.versionName
     }
 
+    // CI restores the existing development certificate at an explicit path. Local builds
+    // keep Android's normal debug configuration when this environment variable is absent.
+    providers.environmentVariable("UWU_ANDROID_DEBUG_KEYSTORE").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { path ->
+            val restoredKeystore = file(path)
+            require(restoredKeystore.isFile) { "UWU_ANDROID_DEBUG_KEYSTORE must point to the restored development keystore" }
+            signingConfigs.getByName("debug").storeFile = restoredKeystore
+        }
+
     buildTypes {
         release {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
