@@ -14,7 +14,6 @@ import dev.mobimapper.mobimapper.backend.BackendRegistry
 import dev.mobimapper.mobimapper.game.GameCoordinator
 import dev.mobimapper.mobimapper.session.CaptureService
 import dev.mobimapper.mobimapper.session.SessionController
-import dev.mobimapper.mobimapper.session.SessionMode
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.util.concurrent.Executors
@@ -44,12 +43,17 @@ object LocalActivation {
     private var deadline:Runnable?=null
     val busy:Boolean @Synchronized get()=phase in setOf("pairing","connecting","starting")
     @Synchronized fun initialize(context:Context) { if(!::app.isInitialized) app=context.applicationContext }
-    @Synchronized fun status():Map<String,Any?> = mapOf("phase" to phase,"message" to message,"busy" to busy,
-        "paired" to app.getSharedPreferences("uwu_local_activation",Context.MODE_PRIVATE).getBoolean("paired",false),
-        "pairingPort" to pairPort,"connectPort" to connectPort,"host" to "127.0.0.1","failureType" to failureType,
-        "bootstrapOutput" to bootstrapOutput)
+    @Synchronized fun status():Map<String,Any?> {
+        if(phase=="ready" && BackendRegistry.injector?.asBinder()?.isBinderAlive!=true) {
+            phase="idle";message="Motor apagado · reactiva para jugar"
+        }
+        return mapOf("phase" to phase,"message" to message,"busy" to busy,
+            "paired" to app.getSharedPreferences("uwu_local_activation",Context.MODE_PRIVATE).getBoolean("paired",false),
+            "pairingPort" to pairPort,"connectPort" to connectPort,"host" to "127.0.0.1","failureType" to failureType,
+            "bootstrapOutput" to bootstrapOutput)
+    }
     private fun idle() {
-        ActivationPolicy.requireIdle(SessionController.mode==SessionMode.STOPPED,SessionController.active,
+        ActivationPolicy.requireIdle(SessionController.mode,SessionController.active,
             SessionController.isTransitioning(),SessionController.contacts,SessionController.releaseUnverified,
             GameCoordinator.sessionOpen,GameCoordinator.editorVisible,CaptureService.instance?.mouseCaptured==true)
         BackendRegistry.injector?.takeIf { it.asBinder().isBinderAlive }?.status()?.let { state ->

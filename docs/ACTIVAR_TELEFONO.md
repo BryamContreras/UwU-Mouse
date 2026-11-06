@@ -15,9 +15,9 @@ Si prefieres no usar la notificación, abre UwU Mouse y los ajustes de Android e
 
 ## Reactivar después
 
-Si el motor se apaga, por ejemplo tras reiniciar el teléfono, activa Depuración inalámbrica y vuelve al panel **Activar en este teléfono**. Pulsa **Reactivar sin código**. Se reutiliza la identidad guardada mientras Android conserve su autorización. Si Android la olvidó o revocaste el emparejamiento, genera un código nuevo y repite la primera activación.
+Después de emparejar una vez, **toca el juego en tu biblioteca**. Si el motor está apagado y Depuración inalámbrica está activa, UwU Mouse intenta reconectar y activarlo antes de abrir el juego con tu perfil. También puedes usar **Activar en este teléfono → Reactivar sin código**. Se reutiliza la identidad guardada mientras Android conserve su autorización. Si Android la olvidó o revocaste el emparejamiento, genera un código nuevo y repite la primera activación.
 
-El motor corre localmente. No necesitas reactivar cada vez que conectas el teclado o el ratón. Una reactivación no reproduce las teclas que estaban mantenidas ni abre el juego automáticamente.
+El motor corre localmente. No necesitas reactivar cada vez que conectas el teclado o el ratón. Una reactivación no reproduce las teclas que estaban mantenidas. El juego solo se abre si lo tocas; no se lanza por sí solo tras reiniciar ni al detectar los periféricos.
 
 La secuencia completa después de reiniciar físicamente el teléfono y después de revocar el emparejamiento sigue pendiente de prueba en esta entrega. La autorización guardada se comprobó al actualizar la app; no se presenta como una prueba de reinicio.
 

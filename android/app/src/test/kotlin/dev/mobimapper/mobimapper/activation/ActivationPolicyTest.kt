@@ -1,5 +1,6 @@
 package dev.mobimapper.mobimapper.activation
 
+import dev.mobimapper.mobimapper.session.SessionMode
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -12,12 +13,24 @@ class ActivationPolicyTest {
         assertEquals(65535,ActivationPolicy.port(65535))
     }
     @Test fun refusesActivationForEveryOwnedOrUnreleasedSessionState() {
-        fun allowed(stopped:Boolean=true,active:Boolean=false,transition:Boolean=false,contacts:Int=0,
+        fun allowed(mode:SessionMode,active:Boolean=false,transition:Boolean=false,contacts:Int=0,
                     release:Boolean=false,session:Boolean=false,editor:Boolean=false,captured:Boolean=false) =
-            ActivationPolicy.requireIdle(stopped,active,transition,contacts,release,session,editor,captured)
-        allowed()
-        val attempts=listOf<()->Unit>({allowed(stopped=false)},{allowed(active=true)},{allowed(transition=true)},
-            {allowed(contacts=1)},{allowed(release=true)},{allowed(session=true)},{allowed(editor=true)},{allowed(captured=true)})
-        attempts.forEach { attempt -> assertThrows(IllegalStateException::class.java) { attempt() } }
+            ActivationPolicy.requireIdle(mode,active,transition,contacts,release,session,editor,captured)
+        for(mode in listOf(SessionMode.STOPPED,SessionMode.PAUSED)) {
+            val attempts=listOf<()->Unit>({allowed(mode,active=true)},{allowed(mode,transition=true)},
+                {allowed(mode,contacts=1)},{allowed(mode,release=true)},{allowed(mode,session=true)},
+                {allowed(mode,editor=true)},{allowed(mode,captured=true)})
+            attempts.forEach { attempt -> assertThrows(IllegalStateException::class.java) { attempt() } }
+        }
+    }
+    @Test fun closedEmptySessionCanReactivateAfterBackendLossPausesIt() {
+        for(mode in listOf(SessionMode.STOPPED,SessionMode.PAUSED))
+            ActivationPolicy.requireIdle(mode,false,false,0,false,false,false,false)
+    }
+    @Test fun playingEditingRecoveryAndBlockedModesCannotActivateEvenWithoutContacts() {
+        for(mode in listOf(SessionMode.PLAYING,SessionMode.EDITING,SessionMode.RECOVERING,SessionMode.BLOCKED))
+            assertThrows(IllegalStateException::class.java) {
+                ActivationPolicy.requireIdle(mode,false,false,0,false,false,false,false)
+            }
     }
 }

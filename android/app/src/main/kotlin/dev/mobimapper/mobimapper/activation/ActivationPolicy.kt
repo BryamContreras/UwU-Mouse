@@ -1,14 +1,19 @@
 package dev.mobimapper.mobimapper.activation
 
+import dev.mobimapper.mobimapper.session.SessionMode
+
 /** Control-plane validation. This code is never called by the mapping engine. */
 object ActivationPolicy {
     fun pairingCode(value:String):String = value.trim().also {
         require(it.matches(Regex("[0-9]{6}"))) { "Escribe los seis dígitos del código de Android" }
     }
     fun port(value:Int):Int = value.also { require(it in 1..65535) { "Puerto no válido" } }
-    fun requireIdle(stopped:Boolean,active:Boolean,transition:Boolean,contacts:Int,releaseUnverified:Boolean,
+    fun requireIdle(mode:SessionMode,active:Boolean,transition:Boolean,contacts:Int,releaseUnverified:Boolean,
                     sessionOpen:Boolean,editor:Boolean,captured:Boolean) {
-        check(stopped && !active && !transition && contacts==0 && !releaseUnverified && !sessionOpen && !editor && !captured) {
+        // A dead backend pauses an already closed session. Its empty, released state
+        // may be activated again; an open paused game still belongs to that session.
+        val closedMode=mode==SessionMode.STOPPED || mode==SessionMode.PAUSED
+        check(closedMode && !active && !transition && contacts==0 && !releaseUnverified && !sessionOpen && !editor && !captured) {
             "Cierra la sesión y espera la liberación de los controles antes de activar"
         }
     }

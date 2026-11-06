@@ -10,6 +10,8 @@ La versión de desarrollo actual es **0.2.0+34**. Conserva la identidad Android 
 
 Después de reiniciar o perder el proceso puede hacer falta reactivar el motor. No se inicia el juego ni se recuperan acciones mantenidas automáticamente. **InputLab es opcional** para jugar. El [activador de PC](docs/ACTIVAR_PC.md) permanece como alternativa.
 
+Tras emparejar una vez, **toca tu juego para jugar**: si el motor está apagado y Depuración inalámbrica sigue activa, la app intenta reconectar y activarlo antes de abrir el juego. También puedes hacerlo desde **Activar en este teléfono → Reactivar sin código**. Ese inicio siempre parte de tu pulsación sobre el juego; no se abre por sí solo.
+
 1. Agrega un juego a la biblioteca y ábrelo desde su círculo.
 2. Coloca los controles con **Mapear** y guarda el perfil.
 3. Usa la burbuja para alternar Control/Teclado, editar, elegir un perfil o cerrar la sesión.
