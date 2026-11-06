@@ -20,6 +20,7 @@ class ProfileStore(context: Context) {
     fun selected(): GameProfile? = repository.selected()
     fun save(profile: GameProfile) = repository.save(profile)
     fun update(profile: GameProfile) = repository.update(profile)
+    fun importDocument(document: ProfileDocument, selectImported: Boolean = false) = repository.importDocument(document, selectImported)
     fun delete(id: String) = repository.delete(id)
     fun select(id: String?) = repository.select(id)
 

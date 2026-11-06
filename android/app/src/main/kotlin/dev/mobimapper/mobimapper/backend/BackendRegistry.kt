@@ -86,6 +86,25 @@ class BackendProvider : ContentProvider() {
                 }
             } finally { Binder.restoreCallingIdentity(identity) }
         }
+        if (method == "profilesImport") {
+            // Caller UID was checked above, before decoding or dropping its identity.
+            val document=dev.mobimapper.mobimapper.profile.ProfileCodec.decodeImportPayload(requireNotNull(arg) { "Documento Base64 requerido" })
+            val selectImported=if(extras?.containsKey("selectImported")==true)
+                extras.get("selectImported") as? Boolean ?: throw IllegalArgumentException("selectImported necesita verdadero o falso") else false
+            val identity=Binder.clearCallingIdentity()
+            return try {
+                val task=FutureTask<Map<String,Any?>> {
+                    dev.mobimapper.mobimapper.game.GameCoordinator.initialize(requireNotNull(context))
+                    dev.mobimapper.mobimapper.game.GameCoordinator.importProfileDocument(document,selectImported)
+                }
+                if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper()) task.run()
+                else check(android.os.Handler(android.os.Looper.getMainLooper()).post(task)) { "Main thread unavailable" }
+                val imported=try { task.get(5,TimeUnit.SECONDS) } catch(failure:Exception) {
+                    task.cancel(false);throw failure
+                }
+                Bundle().apply { putBoolean("accepted",true);putString("json",org.json.JSONObject(imported).toString()) }
+            } finally { Binder.restoreCallingIdentity(identity) }
+        }
         if(method in setOf("labProbe","labStop","labFault","labRecreateUi","labStale","labCursor","labMapped","labMacro","labActions","cameraTrial","profileCameraMode")) {
             val identity=Binder.clearCallingIdentity()
             return try {

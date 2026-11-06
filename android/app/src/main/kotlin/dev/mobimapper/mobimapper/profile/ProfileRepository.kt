@@ -7,6 +7,8 @@ interface ProfileStorage {
     fun write(document: String)
 }
 
+data class ProfileImportResult(val importedProfiles: List<GameProfile>, val selectedProfileId: String?, val profileCount: Int)
+
 /** One serialized writer and one cached, validated source of truth per application file. */
 class ProfileRepository(private val storage: ProfileStorage) {
     private var loaded = false
@@ -34,6 +36,20 @@ class ProfileRepository(private val storage: ProfileStorage) {
         val next = LinkedHashMap(profiles)
         next[profile.id] = profile
         commit(next, selectedId)
+    }
+
+    /** Merge a validated backup in one commit; existing IDs and mappings can never be replaced. */
+    @Synchronized fun importDocument(document: ProfileDocument, selectImported: Boolean = false): ProfileImportResult {
+        require(document.profiles.isNotEmpty()) { "El documento no contiene perfiles" }
+        ProfileCodec.encodeDocument(document) // Validate the complete incoming document before changing anything.
+        if (selectImported) require(document.selectedProfileId != null) { "La importación necesita un perfil seleccionado" }
+        load()
+        require(document.profiles.none { it.id in profiles }) { "Un perfil importado ya existe; no se reemplazó ninguno" }
+        val next = LinkedHashMap(profiles)
+        document.profiles.forEach { next[it.id] = it }
+        val selection = if (selectImported) document.selectedProfileId else selectedId
+        commit(next, selection) // Also validates combined limits and same-game shortcut conflicts before writing.
+        return ProfileImportResult(document.profiles.toList(), selection, next.size)
     }
 
     @Synchronized fun delete(id: String) {

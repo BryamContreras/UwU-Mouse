@@ -16,6 +16,8 @@ class GameSessionPage extends StatefulWidget {
 class _GameSessionPageState extends State<GameSessionPage>
     with WidgetsBindingObserver {
   final _api = const NativeApi();
+  final _connectionStatus = ValueNotifier<NativeStatus?>(null);
+  Future<NativeStatus>? _statusRead;
   NativeStatus? _status;
   List<LaunchableApp> _apps = const [];
   List<LocalProfile> _profiles = const [];
@@ -63,15 +65,36 @@ class _GameSessionPageState extends State<GameSessionPage>
   void dispose() {
     _timer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
+    _connectionStatus.dispose();
     super.dispose();
+  }
+
+  /// Settings and launch share one pending read; an older poll cannot replace it.
+  Future<NativeStatus> _readStatus() {
+    final pending = _statusRead;
+    if (pending != null) return pending;
+    late final Future<NativeStatus> request;
+    request = _api
+        .status()
+        .then((next) {
+          if (mounted) {
+            setState(() => _status = next);
+            _connectionStatus.value = next;
+          }
+          return next;
+        })
+        .whenComplete(() {
+          if (identical(_statusRead, request)) _statusRead = null;
+        });
+    _statusRead = request;
+    return request;
   }
 
   Future<void> _poll() async {
     if (_reading || !_foreground) return;
     _reading = true;
     try {
-      final next = await _api.status();
-      if (mounted) setState(() => _status = next);
+      await _readStatus();
     } catch (error) {
       if (mounted) setState(() => _failure = _errorText(error));
     } finally {
@@ -237,12 +260,14 @@ class _GameSessionPageState extends State<GameSessionPage>
         label: Text(label),
       );
 
-  bool get _safe =>
-      _status != null &&
-      !_status!.blocked &&
-      !_status!.recovering &&
-      !_status!.editing &&
-      _status!.contacts == 0;
+  bool _safeStatus(NativeStatus? status) =>
+      status != null &&
+      !status.blocked &&
+      !status.recovering &&
+      !status.editing &&
+      status.contacts == 0;
+
+  bool get _safe => _safeStatus(_status);
 
   String _labelFor(String packageName) =>
       _apps
@@ -253,38 +278,87 @@ class _GameSessionPageState extends State<GameSessionPage>
 
   Future<void> _launch(LocalProfile profile) async {
     if (!_safe || _busy) return;
-    if (_status?.accessibility != true || _status?.backend != true) {
-      _showSettings();
-      return;
-    }
-    await _run(
-      () => profile.calibrated
-          ? _api.startProfile(profile.id)
-          : _api.openEditor(profile.id),
-    );
+    var needsSetup = false;
+    await _run(() async {
+      var current = await _readStatus();
+      // requestAttach may still be recovering the Binder on a cold app launch.
+      for (
+        var attempt = 0;
+        attempt < 2 &&
+            current.accessibility &&
+            !current.backend &&
+            _safeStatus(current);
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+        current = await _readStatus();
+      }
+      if (!mounted || !_safeStatus(current)) return;
+      if (!current.accessibility || !current.backend) {
+        needsSetup = true;
+        return;
+      }
+      if (profile.calibrated) {
+        await _api.startProfile(profile.id);
+      } else {
+        await _api.openEditor(profile.id);
+      }
+    });
+    if (mounted && needsSetup) _showSettings();
   }
 
   void _showSettings() {
+    var checking = false;
+    String? checkError;
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      builder: (_) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * .8,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-          children: [
-            _sheetHeading(
-              Icons.tune_rounded,
-              'Ajustes',
-              'Conexión y controles',
+      builder: (_) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) =>
+            ValueListenableBuilder<NativeStatus?>(
+              valueListenable: _connectionStatus,
+              builder: (_, status, _) => SizedBox(
+                height: MediaQuery.sizeOf(context).height * .8,
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+                  children: [
+                    _sheetHeading(
+                      Icons.tune_rounded,
+                      'Ajustes',
+                      'Conexión y controles',
+                    ),
+                    const SizedBox(height: 16),
+                    _connectionDetails(
+                      status,
+                      checking: checking,
+                      error: checkError,
+                      onCheck: () async {
+                        if (checking) return;
+                        updateSheet(() {
+                          checking = true;
+                          checkError = null;
+                        });
+                        try {
+                          await _readStatus();
+                        } catch (error) {
+                          if (sheetContext.mounted) {
+                            updateSheet(() => checkError = _errorText(error));
+                          }
+                        } finally {
+                          if (sheetContext.mounted) {
+                            updateSheet(() => checking = false);
+                          }
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 10),
+                    _laboratory(status),
+                  ],
+                ),
+              ),
             ),
-            const SizedBox(height: 16),
-            _connectionDetails(_status),
-            const SizedBox(height: 10),
-            _laboratory(_status),
-          ],
-        ),
       ),
     );
   }
@@ -436,7 +510,11 @@ class _GameSessionPageState extends State<GameSessionPage>
                 child: ListTile(
                   leading: _roundIcon(Icons.cable_rounded),
                   title: const Text('Preparar conexión'),
-                  subtitle: const Text('Conecta tu teclado y ratón.'),
+                  subtitle: Text(
+                    status.accessibility
+                        ? 'Activa el motor de toques desde la PC.'
+                        : 'Activa UwU Mouse · entrada local.',
+                  ),
                   trailing: const MobiIcon(Icons.chevron_right),
                   onTap: _showSettings,
                 ),
@@ -900,28 +978,60 @@ class _GameSessionPageState extends State<GameSessionPage>
     ),
   );
 
-  Widget _connectionDetails(NativeStatus? status) => ExpansionTile(
+  Widget _connectionDetails(
+    NativeStatus? status, {
+    required VoidCallback onCheck,
+    bool checking = false,
+    String? error,
+  }) => ExpansionTile(
     leading: const MobiIcon(Icons.link_rounded, size: 27),
     trailing: const MobiIcon(Icons.expand_more_rounded, size: 26),
     title: const Text('Conexión'),
+    initiallyExpanded: true,
     childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
     expandedCrossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        'Accesibilidad: ${status?.accessibility == true ? 'activa' : 'inactiva'}',
+        'Accesibilidad: ${status == null
+            ? 'comprobando…'
+            : status.accessibility
+            ? 'activa'
+            : 'inactiva'}',
       ),
       const SizedBox(height: 8),
-      _command(
-        'Abrir ajustes de accesibilidad',
-        Icons.accessibility_new,
-        NativeCommand.accessibilitySettings,
-      ),
+      if (status != null && !status.accessibility)
+        _command(
+          'Abrir ajustes de accesibilidad',
+          Icons.accessibility_new,
+          NativeCommand.accessibilitySettings,
+        ),
       const SizedBox(height: 8),
       Text(
-        status?.backend == true
-            ? 'Conexión local activa'
-            : 'Sin conexión local. Actívala desde la PC.',
+        'Motor de toques: ${status == null
+            ? 'comprobando…'
+            : status.backend
+            ? 'activo'
+            : 'apagado'}',
       ),
+      if (status != null && !status.backend) ...[
+        const SizedBox(height: 8),
+        const Text(
+          'Activa el servicio desde la PC con Activar-UwU-Mouse.cmd. '
+          'Depuración inalámbrica y accesibilidad no lo arrancan.',
+        ),
+      ],
+      const SizedBox(height: 12),
+      OutlinedButton.icon(
+        onPressed: checking ? null : onCheck,
+        icon: const MobiIcon(Icons.refresh_rounded, size: 25),
+        label: Text(checking ? 'Comprobando…' : 'Comprobar servicio'),
+      ),
+      if (status?.accessibility == true &&
+          status?.backend == true &&
+          _safeStatus(status) &&
+          !status!.active)
+        const Text('Listo para abrir tu juego'),
+      if (error != null) Text(error),
       if (status?.backendError.isNotEmpty == true) Text(status!.backendError),
       const SizedBox(height: 12),
       Text(

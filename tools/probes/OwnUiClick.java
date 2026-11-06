@@ -56,6 +56,7 @@ public final class OwnUiClick {
             case "options" -> "Opciones del juego";
             case "freefire" -> "Free Fire";
             case "settings" -> "Ajustes";
+            case "check_service" -> "Comprobar servicio";
             case "keys" -> "Teclas de sesión";
             case "controls" -> "Editar controles";
             case "play" -> "Jugar";
@@ -66,7 +67,7 @@ public final class OwnUiClick {
         if (args.length < 1 || !Arrays.asList("Editar sobre el juego", "Colocar controles",
                 "Guardar", "Cancelar", "Iniciar en laboratorio", "Laboratorio y diagnóstico",
                 "Iniciar sesión", "Detener", "Actualizar", "MobiMapper · abrir opciones", "Mapear", "Cerrar",
-                "Ajustes", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
+                "Ajustes", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
                 "Teclas", "WASD", "Cámara", "Acción", "Área", "Opciones del juego", "Cerrar menú", "Cerrar panel", "Cerrar sesión", "Free Fire",
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
                 "Macro", "Agregar punto", "Ubicar", "Asignar", "Quitar tecla de suspensión",

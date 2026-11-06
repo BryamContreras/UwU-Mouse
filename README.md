@@ -2,9 +2,11 @@
 
 Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, desarrollado con Flutter y Kotlin. La interfaz gestiona juegos, perfiles y ajustes; la entrada y composición multitáctil se procesan en Kotlin dentro del teléfono.
 
-La versión de desarrollo actual es **0.2.0+32**. Conserva la identidad Android `dev.mobimapper.mobimapper` para mantener perfiles y autorizaciones al actualizar con el mismo certificado. El nombre visible pasa de MobiMapper a **UwU Mouse**.
+La versión de desarrollo actual es **0.2.0+33**. Conserva la identidad Android `dev.mobimapper.mobimapper` para mantener perfiles y autorizaciones al actualizar con el mismo certificado. El nombre visible pasa de MobiMapper a **UwU Mouse**.
 
 ## Uso
+
+**Activación necesaria en esta versión:** el motor de toques se inicia mediante ADB desde una PC. Accesibilidad y Depuración inalámbrica, por sí solas, no lo arrancan. En Windows usa **Activar-UwU-Mouse.cmd** antes de abrir el juego; cuando indique que el servicio está listo, toca el juego en la app. Si el servicio se detiene, vuelve a ejecutar el lanzador. La activación autónoma dentro del teléfono todavía no está implementada. [Pasos de activación](docs/ACTIVAR_PC.md).
 
 1. Agrega un juego a la biblioteca y ábrelo desde su círculo.
 2. Coloca los controles con **Mapear** y guarda el perfil.

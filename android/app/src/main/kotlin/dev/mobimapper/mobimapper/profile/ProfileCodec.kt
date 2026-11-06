@@ -3,6 +3,11 @@ package dev.mobimapper.mobimapper.profile
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import org.json.JSONTokener
+import java.nio.ByteBuffer
+import java.nio.charset.CharacterCodingException
+import java.nio.charset.CodingErrorAction
+import java.util.Base64
 
 data class ProfileDocument(val profiles: List<GameProfile>, val selectedProfileId: String?)
 
@@ -11,6 +16,24 @@ object ProfileCodec {
     const val MAX_DOCUMENT_CHARS = 1_048_576
     private const val MAX_PROFILE_CHARS = 65_536
     const val MAX_PROFILES = 128
+    const val MAX_IMPORT_BASE64_CHARS = ((MAX_DOCUMENT_CHARS + 2) / 3) * 4
+
+    /** Bounded shell transport only: strict UTF-8 and one complete JSON object, never a file path. */
+    fun decodeImportPayload(encoded: String): ProfileDocument {
+        require(encoded.length in 4..MAX_IMPORT_BASE64_CHARS && encoded.length % 4 == 0) { "Documento codificado demasiado grande o no válido" }
+        val bytes = try { Base64.getDecoder().decode(encoded) }
+            catch (failure: IllegalArgumentException) { throw IllegalArgumentException("Base64 de perfiles no válido", failure) }
+        require(bytes.size <= MAX_DOCUMENT_CHARS && Base64.getEncoder().encodeToString(bytes) == encoded) { "Documento codificado demasiado grande o no canónico" }
+        val text = try {
+            Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString().removePrefix("\uFEFF")
+        } catch (failure: CharacterCodingException) { throw IllegalArgumentException("Documento de perfiles no es UTF-8 válido", failure) }
+        jsonRead {
+            val tokens = JSONTokener(text)
+            require(tokens.nextValue() is JSONObject && tokens.nextClean() == '\u0000') { "Se necesita un único objeto JSON completo" }
+        }
+        return decodeDocument(text)
+    }
 
     fun encode(profile: GameProfile): String = toJson(ProfileValidator.requireValid(profile)).toString()
 
@@ -28,7 +51,11 @@ object ProfileCodec {
         document.profiles.forEach { rows.put(toJson(ProfileValidator.requireValid(it))) }
         return JSONObject().put("schemaVersion", GameProfile.SCHEMA_VERSION).put("profiles", rows)
             .put("selectedProfileId", document.selectedProfileId ?: JSONObject.NULL).toString()
-            .also { require(it.length <= MAX_DOCUMENT_CHARS) { "Almacén de perfiles demasiado grande" } }
+            .also {
+                require(it.length <= MAX_DOCUMENT_CHARS && it.toByteArray(Charsets.UTF_8).size <= MAX_DOCUMENT_CHARS) {
+                    "Almacén de perfiles demasiado grande"
+                }
+            }
     }
 
     fun decodeDocument(json: String): ProfileDocument {

@@ -138,6 +138,28 @@ object GameCoordinator {
     }
     fun profiles()=store().list().map { wire(ProfileCodec.toJson(it)) }
     fun selected():Any?=store().selected()?.let { wire(ProfileCodec.toJson(it)) }
+    /** Authorized shell recovery only, on the main control plane and while fully stopped. */
+    fun importProfileDocument(document:ProfileDocument,selectImported:Boolean=false):Map<String,Any?> {
+        check(Looper.myLooper()==Looper.getMainLooper()) { "La restauración necesita el hilo principal" }
+        check(SessionController.mode==SessionMode.STOPPED && !SessionController.active && !SessionController.isTransitioning() &&
+            SessionController.contacts==0 && !SessionController.releaseUnverified && !waiting && !startPending &&
+            !toolsRequested && !editorVisible && !bubbleVisible && CaptureService.instance?.mouseCaptured!=true) {
+            "Detén la sesión y cierra el editor antes de restaurar perfiles"
+        }
+        val backend=requireNotNull(dev.mobimapper.mobimapper.backend.BackendRegistry.injector) { "Activa el motor antes de restaurar perfiles" }
+        check(backend.asBinder().isBinderAlive) { "Motor desconectado" }
+        val state=backend.status()
+        check(state.getInt("possibleContacts",-1)==0 && state.getInt("confirmedContacts",-1)==0 &&
+            !state.getBoolean("releaseUnverified",true) && state.getString("recoveryState") in setOf("READY","PAUSED","RECOVERED")) {
+            "La secuencia anterior todavía no tiene liberación confirmada"
+        }
+        val result=store().importDocument(document,selectImported)
+        currentId=result.selectedProfileId
+        refreshProfileLibrary()
+        return mapOf("schemaVersion" to GameProfile.SCHEMA_VERSION,"profileCount" to result.profileCount,
+            "selectedProfileId" to result.selectedProfileId,
+            "imported" to result.importedProfiles.map { mapOf("id" to it.id,"name" to it.name) })
+    }
     /** Explicit control-plane change only; the next arm compiles the persisted mode. */
     fun setSelectedCameraMode(mode:String):Any? {
         require(CameraSpec.isSupportedMode(mode)) { "Modo de cámara no válido" }
