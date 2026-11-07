@@ -37,6 +37,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.*
 import dev.mobimapper.mobimapper.R
 import dev.mobimapper.mobimapper.profile.*
+import dev.mobimapper.mobimapper.session.CaptureService
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -61,21 +62,24 @@ private fun editorKeyLabel(code:Int):String=when(code) {
 }
 
 /** Main-thread editor. The session owner must finish touches and disable capture before show(). */
-class NativeEditor(private val service: AccessibilityService) {
-    private val windows = service.getSystemService(WindowManager::class.java)
+class NativeEditor(private val service: AccessibilityService, private val overlayContext: Context = service) {
+    private val windows = overlayContext.getSystemService(WindowManager::class.java)
     private var root: EditorRoot? = null
     val visible: Boolean get() = root != null
 
     fun show(profile: GameProfile, onSave: (GameProfile) -> Unit, onCancel: () -> Unit) {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Editor must be opened on the main thread" }
         close()
-        val display = requireNotNull(service.getSystemService(DisplayManager::class.java).getDisplay(0)) { "Pantalla principal no disponible" }
+        val display = requireNotNull(if(overlayContext===service)
+            service.getSystemService(DisplayManager::class.java).getDisplay(0) else overlayContext.display) { "Pantalla del juego no disponible" }
+        check(display.isValid) { "La pantalla del juego ya no está disponible" }
         val size = Point()
         @Suppress("DEPRECATION")
         display.getRealSize(size)
-        val hint = suggestedArea(profile.packageName, size.x, size.y)
-        val draft = EditorDraft(profile, size.x, size.y, display.rotation, hint)
-        val view = EditorRoot(service, draft, {
+        val hint = suggestedArea(profile.packageName, size.x, size.y, display.displayId)
+        val draft = EditorDraft(profile, size.x, size.y, display.rotation, hint.area,
+            displayScope=if(display.displayId==0) "phone" else "external",windowFrame=hint.windowFrame)
+        val view = EditorRoot(overlayContext, draft, {
             onSave(it)
             close()
         }, {
@@ -84,7 +88,7 @@ class NativeEditor(private val service: AccessibilityService) {
         })
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            OverlayWindows.type(overlayContext),
             WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_FULLSCREEN or
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM,
             PixelFormat.TRANSLUCENT,
@@ -95,35 +99,61 @@ class NativeEditor(private val service: AccessibilityService) {
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
             title = "MobiMapper · Editor"
         }
-        windows.addView(view, params)
+        // Keep root null if token/display admission fails; coordinator cleanup stays idempotent.
+        val capture=service as? CaptureService
+        check(capture?.beginEditorPresentation(profile.packageName,display.displayId)!=false) {
+            "No se pudo confirmar el juego antes de abrir el editor"
+        }
+        try { windows.addView(view, params) }
+        catch(failure:RuntimeException) { capture?.endEditorPresentation("window_admission_failed");throw failure }
         root = view
         view.requestFocus()
     }
 
     fun close() {
         check(Looper.myLooper() == Looper.getMainLooper()) { "Editor must be closed on the main thread" }
+        (service as? CaptureService)?.endEditorPresentation()
         val view = root ?: return
         root = null
-        windows.removeViewImmediate(view)
+        try { windows.removeViewImmediate(view) } catch (_: IllegalArgumentException) { /* Display removal may detach it first. */ }
     }
 
-    private fun suggestedArea(packageName: String, width: Int, height: Int): GameArea {
+    private data class SuggestedArea(val area: GameArea, val windowFrame: GameArea?)
+    private data class GameWindowBounds(val frame: Rect, val content: Rect, val focused: Boolean, val layer: Int) {
+        val area: Long get() = frame.width().toLong() * frame.height()
+    }
+
+    private fun suggestedArea(packageName: String, width: Int, height: Int, displayId: Int): SuggestedArea {
         val rect = Rect(0, 0, width, height)
-        // Window bounds are a suggestion, not a claim that a game's surface has no letterboxing.
-        val gameWindow = service.windows.firstOrNull {
-            it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root?.packageName?.toString() == packageName
-        }
-        if (gameWindow != null) {
-            val game = Rect()
-            gameWindow.getBoundsInScreen(game)
-            if (!game.isEmpty) rect.intersect(game)
+        // Resolve ownership and bounds only. No view text or descendants are traversed.
+        val gameWindow = service.windowsOnAllDisplays.get(displayId).orEmpty().mapNotNull { window ->
+            if(window.displayId!=displayId || window.type!=AccessibilityWindowInfo.TYPE_APPLICATION) return@mapNotNull null
+            runCatching {
+                val gameRoot=window.root ?: return@runCatching null
+                if(gameRoot.packageName?.toString()!=packageName) return@runCatching null
+                val frame=Rect().also { window.getBoundsInScreen(it) }
+                val content=Rect().also { gameRoot.getBoundsInScreen(it) }
+                if(frame.isEmpty) null else GameWindowBounds(frame,content,window.isFocused,window.layer)
+            }.getOrNull()
+        }.maxWithOrNull(compareBy<GameWindowBounds> { it.area }.thenBy { it.focused }.thenBy { it.layer })
+        check(displayId==0 || gameWindow!=null) { "No se pudo confirmar la ventana del juego en esta pantalla" }
+        if(gameWindow!=null) {
+            check(rect.contains(gameWindow.frame)) { "Coloca toda la ventana del juego dentro de la pantalla" }
+            check(rect.intersect(gameWindow.frame)) { "La ventana del juego está fuera de esta pantalla" }
+            // Some desktop roots omit the caption while the APP window includes its complete frame.
+            val content=Rect(rect)
+            if(content.intersect(gameWindow.content) && content.width()>=32 && content.height()>=32) rect.set(content)
         }
         val visibleInsets = windows.maximumWindowMetrics.windowInsets.getInsets(
-            WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+            WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout() or WindowInsets.Type.captionBar(),
         )
         val usable = Rect(visibleInsets.left, visibleInsets.top, width - visibleInsets.right, height - visibleInsets.bottom)
-        if (usable.width() >= 100 && usable.height() >= 100) rect.intersect(usable)
-        return GameArea(rect.left.toFloat(), rect.top.toFloat(), rect.right.toFloat(), rect.bottom.toFloat())
+        check(usable.width()>=32 && usable.height()>=32 && rect.intersect(usable) && rect.width()>=32 && rect.height()>=32) {
+            "No se pudo confirmar un área útil para el juego"
+        }
+        fun area(bounds:Rect)=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat())
+        // The useful area may exclude decoration. Calibration retains the complete APP frame.
+        return SuggestedArea(area(rect),gameWindow?.frame?.let(::area))
     }
 
     private class EditorRoot(
@@ -176,6 +206,8 @@ class NativeEditor(private val service: AccessibilityService) {
         }
 
         init {
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            contentDescription="UwU Mouse · editor"
             isFocusableInTouchMode = true
             setBackgroundColor(Color.argb(18, 4, 12, 30))
             addView(canvas, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
@@ -420,10 +452,9 @@ class NativeEditor(private val service: AccessibilityService) {
             waitFields.clear();intervalFields.clear()
             pendingBinding=null; pendingPlacement=null;pendingMacroPoint=null; refreshers.clear(); body.removeAllViews(); error.text=""
             when(selected) {
-                EditorDraft.Control.JOYSTICK -> { addGeometry(); addBindings() }
+                EditorDraft.Control.JOYSTICK -> { addGeometry(); addJoystickBindings() }
                 EditorDraft.Control.CAMERA -> addGeometry()
                 EditorDraft.Control.ACTION -> if(isFireAction()) addPrecisionAim() else {
-                    addBindings()
                     when(draft.action().behavior) {
                         "repeat" -> { label("Mantén para repetir");addRepeatInterval() }
                         "cursorToggle" -> label("Alterna cursor al pulsar")
@@ -434,7 +465,8 @@ class NativeEditor(private val service: AccessibilityService) {
             }
             macroPointsVisible=selected==EditorDraft.Control.MACRO
             if(recenter) { scroller.translationX=0f;scroller.translationY=0f }
-            scroller.visibility=View.VISIBLE; scroller.scrollTo(0,previousScroll); refresh()
+            scroller.visibility=if(body.childCount==0) View.GONE else View.VISIBLE
+            scroller.scrollTo(0,previousScroll); refresh()
         }
 
         private fun addGeometry() {
@@ -507,20 +539,6 @@ class NativeEditor(private val service: AccessibilityService) {
             fun current()=scroller.isAttachedToWindow && scroller.visibility==View.VISIBLE &&
                 selected==EditorDraft.Control.MACRO && draft.value.macros.getOrNull(draft.selectedMacro)?.id==owner
             label("Una vez por pulsación · hasta 30 s.")
-            val assignmentRow=assignmentRow("Activador")
-            val assignment=assignmentButton("Asignar activador de macro") {
-                if(current()) { pendingBinding="macro"; scroller.visibility=View.GONE; requestFocus(); refresh() }
-            }
-            refreshers += {
-                val m=draft.value.macros.getOrNull(draft.selectedMacro)
-                assignment.text=when {
-                    m==null || m.code==0 -> "Asignar"
-                    m.triggerKind=="key" -> keyName(m.code)
-                    else -> "M${when(m.code) { 1->1;2->2;4->3;8->4;else->5 }}"
-                }
-            }
-            assignmentRow.addView(assignment,LinearLayout.LayoutParams(dp(76),dp(34)))
-            body.addView(assignmentRow)
             label("Puntos · ${macro.steps.size}/${GameProfile.MAX_MACRO_STEPS}")
             for(index in macro.steps.indices) {
                 val row=LinearLayout(context).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL }
@@ -682,9 +700,7 @@ class NativeEditor(private val service: AccessibilityService) {
             val frequency=SeekBar(context).apply {
                 min=0; max=rates.lastIndex; progress=rates.indexOf(draft.value.camera.updateRateHz).coerceAtLeast(0)
                 contentDescription="Frecuencia de cámara"
-                progressTintList=ColorStateList.valueOf(Color.rgb(102,171,255))
-                progressBackgroundTintList=ColorStateList.valueOf(Color.rgb(45,67,103))
-                thumbTintList=ColorStateList.valueOf(Color.rgb(177,217,255))
+                EditorSeekBarStyle.apply(this)
                 tickMark=GradientDrawable().apply { shape=GradientDrawable.OVAL; setSize(dp(3),dp(3)); setColor(Color.rgb(91,125,170)) }
                 splitTrack=false
             }
@@ -752,8 +768,7 @@ class NativeEditor(private val service: AccessibilityService) {
             label("Reduce pequeños temblores al disparar.")
         }
 
-        private fun addBindings() {
-            if(selected == EditorDraft.Control.JOYSTICK) {
+        private fun addJoystickBindings() {
             label("Direcciones")
             for ((name, field) in listOf("Arriba" to "up", "Abajo" to "down", "Izquierda" to "left", "Derecha" to "right")) {
                 val row=assignmentRow(name)
@@ -762,57 +777,6 @@ class NativeEditor(private val service: AccessibilityService) {
                 row.addView(bind,LinearLayout.LayoutParams(dp(76),dp(34)))
                 body.addView(row)
             }
-            }
-            if(selected != EditorDraft.Control.ACTION) return
-            label("Asignación")
-            val actionRow=assignmentRow("Tecla")
-            val actionKey = assignmentButton("Asignar tecla de acción") { pendingBinding = "action"; requestFocus(); refresh() }
-            refreshers += {
-                actionKey.text = keyName(draft.action().code)
-                actionRow.visibility = if(draft.action().triggerKind=="key") View.VISIBLE else View.GONE
-            }
-            val choices = arrayOf("Teclado", "M1 · Izquierdo", "M2 · Derecho", "M3 · Central", "M4 · Atrás", "M5 · Adelante")
-            val codes = intArrayOf(0, 1, 2, 4, 8, 16)
-            val actionIndex=draft.selectedAction
-            val options=GridLayout(context).apply { columnCount=2; rowCount=3 }
-            var highlightedOption=-1
-            val optionViews=choices.mapIndexed { position,name ->
-                button(name) { view ->
-                    // A detached/closed panel must not change another circle after selection.
-                    if(!view.isAttachedToWindow || scroller.visibility!=View.VISIBLE || selected!=EditorDraft.Control.ACTION || draft.selectedAction!=actionIndex) return@button
-                    pendingBinding=null
-                    draft.replaceAction(draft.action().copy(
-                        triggerKind = if (position == 0) "key" else "mouse",
-                        code = if (position == 0) (if (draft.action().triggerKind == "key") draft.action().code else KeyEvent.KEYCODE_SPACE) else codes[position],
-                    ))
-                    if(isFireAction()) { showPanel(); return@button }
-                    refresh()
-                }.apply {
-                    options.addView(this,GridLayout.LayoutParams().apply {
-                        width=0; height=dp(42); columnSpec=GridLayout.spec(GridLayout.UNDEFINED,1f)
-                        setMargins(dp(2),dp(2),dp(2),dp(2))
-                    })
-                }
-            }
-            refreshers += {
-                val chosen=if(draft.action().triggerKind=="key") 0 else codes.indexOf(draft.action().code)
-                if(chosen!=highlightedOption) {
-                    highlightedOption=chosen
-                    optionViews.forEachIndexed { index,option ->
-                        val active=index==chosen
-                        option.isSelected=active
-                        option.background=gradient(
-                            if(active) Color.rgb(31,79,143) else Color.rgb(23,43,72),
-                            if(active) Color.rgb(17,43,85) else Color.rgb(14,28,48),10,
-                            if(active) Color.rgb(117,183,255) else Color.rgb(48,70,102),
-                        )
-                        option.setTextColor(if(active) Color.rgb(196,228,255) else Color.rgb(213,227,249))
-                    }
-                }
-            }
-            body.addView(options,LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT))
-            actionRow.addView(actionKey,LinearLayout.LayoutParams(dp(76),dp(34)))
-            body.addView(actionRow)
         }
 
         private fun addArea() {
@@ -961,9 +925,7 @@ class NativeEditor(private val service: AccessibilityService) {
             val text = TextView(context).apply { setTextColor(Color.WHITE); textSize = 12f }
             val slider = SeekBar(context).apply {
                 min=minimum; max=maximum; progress=read().coerceIn(minimum,maximum)
-                progressTintList=ColorStateList.valueOf(Color.rgb(102,171,255))
-                progressBackgroundTintList=ColorStateList.valueOf(Color.rgb(45,67,103))
-                thumbTintList=ColorStateList.valueOf(Color.rgb(177,217,255))
+                EditorSeekBarStyle.apply(this)
             }
             slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit

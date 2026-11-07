@@ -37,9 +37,10 @@ class SessionPolicyTest {
         assertFalse(SessionPolicy.authorizedContext(targetPackage,"other.app",false,true,after!=null))
     }
 
-    @Test fun externalCoverSelectorExcludesOwnTargetApplicationLowerAndOtherDisplayWindows() {
+    @Test fun externalCoverSelectorExcludesOwnTargetLowerAndOtherDisplayWindows() {
         val excluded=listOf(
-            external(owner=ownPackage),external(owner=targetPackage),external(type=1,owner="other.application"),
+            external(owner=ownPackage),external(owner=targetPackage),
+            external(type=1,owner=ownPackage),external(type=1,owner=targetPackage),
             external(frame=target.copy(layer=2)),external(frame=target.copy(layer=target.layer)),
             external(frame=target.copy(displayId=2,layer=8)),
         )
@@ -49,6 +50,44 @@ class SessionPolicyTest {
         }
         assertNull(SessionPolicy.coveringWindow(target,excluded,targetPackage,ownPackage))
         assertNull(SessionPolicy.coveringWindow(target.copy(displayId=2),listOf(external()),targetPackage,ownPackage))
+    }
+
+    @Test fun fullApplicationWindowFromAnotherPackageStillBlocksTheGame() {
+        val application=external(type=1,owner="other.application")
+        assertTrue(SessionPolicy.potentiallyBlockingWindow(target,application,targetPackage,ownPackage))
+        val cover=SessionPolicy.coveringWindow(target,listOf(application),targetPackage,ownPackage)
+        assertEquals(application,cover)
+        assertFalse(SessionPolicy.authorizedContext(targetPackage,targetPackage,false,true,cover!=null))
+    }
+
+    @Test fun dexApplicationTypeCaptionRejectsIts36PixelStripWithoutBlockingTheWholeGame() {
+        val game=ContextWindowFrame(2,0,0,0,1920,1080)
+        val caption=ContextWindowCandidate(1,"com.android.systemui",ContextWindowFrame(2,1,0,0,1920,36))
+        assertTrue(SessionPolicy.potentiallyBlockingWindow(game,caption,targetPackage,ownPackage))
+        val cover=SessionPolicy.coveringWindow(game,listOf(caption),targetPackage,ownPackage)
+        assertNull(cover)
+        assertTrue(SessionPolicy.authorizedContext(targetPackage,targetPackage,false,true,cover!=null))
+        val bounds=PointerBounds(0f,0f,1920f,1080f)
+        val blocked=listOf(PointerBounds(0f,0f,1920f,36f))
+        assertFalse(CursorPointPolicy.allowsFrame(0,floatArrayOf(100f),floatArrayOf(18f),bounds,blocked))
+        assertTrue(CursorPointPolicy.allowsFrame(0,floatArrayOf(100f),floatArrayOf(36f),bounds,blocked))
+        assertTrue(CursorPointPolicy.allowsFrame(0,floatArrayOf(960f),floatArrayOf(540f),bounds,blocked))
+    }
+
+    @Test fun externalGameIsBlockedOnlyByCoversOnItsOwnDisplay() {
+        val game=target.copy(displayId=2)
+        for(type in listOf(-1,3)) {
+            val desktopCover=external(type,frame=game.copy(layer=5,left=0))
+            val phoneCover=external(type,frame=desktopCover.frame.copy(displayId=0,layer=10))
+            assertTrue(SessionPolicy.potentiallyBlockingWindow(game,desktopCover,targetPackage,ownPackage))
+            assertFalse(SessionPolicy.potentiallyBlockingWindow(game,phoneCover,targetPackage,ownPackage))
+            assertNull(SessionPolicy.coveringWindow(game,listOf(phoneCover),targetPackage,ownPackage))
+            val cover=SessionPolicy.coveringWindow(game,listOf(phoneCover,desktopCover),targetPackage,ownPackage)
+            assertEquals(desktopCover,cover)
+            assertFalse(SessionPolicy.authorizedContext(targetPackage,targetPackage,false,true,cover!=null))
+            assertTrue(SessionPolicy.systemWindowCoversTarget(game,desktopCover.frame,true))
+            assertFalse(SessionPolicy.systemWindowCoversTarget(game,phoneCover.frame,true))
+        }
     }
 
     @Test fun unknownOwnerAndExternalPackagesHaveNoFullCoverExemption() {
@@ -120,10 +159,10 @@ class SessionPolicyTest {
         assertFalse(SessionPolicy.systemWindowCoversTarget(game,game.copy(layer=8),true,isOwnEditor=true))
         assertFalse(SessionPolicy.systemWindowCoversTarget(game,game.copy(layer=8),false))
     }
-    @Test fun emptyBoundsAndUnsupportedTargetDisplayDoNotProveACover() {
+    @Test fun emptyBoundsAndInvalidTargetDisplayDoNotProveACover() {
         val game=ContextWindowFrame(0,3,75,0,2316,1080)
         assertFalse(SessionPolicy.systemWindowCoversTarget(game.copy(right=75),game.copy(layer=8),true))
         assertFalse(SessionPolicy.systemWindowCoversTarget(game,game.copy(layer=8,bottom=0),true))
-        assertFalse(SessionPolicy.systemWindowCoversTarget(game.copy(displayId=2),game.copy(displayId=2,layer=8),true))
+        assertFalse(SessionPolicy.systemWindowCoversTarget(game.copy(displayId=-1),game.copy(displayId=-1,layer=8),true))
     }
 }

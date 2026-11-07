@@ -16,8 +16,8 @@ data class ApplicationWindowCandidate(
 object WindowSelectionPolicy {
     /** A missing active root may retain editing only through an actually focused own overlay. */
     fun ownsFocusedEditorOverlay(editorVisible:Boolean,type:Int,owner:String?,ownPackage:String,
-                                 frame:ContextWindowFrame,focused:Boolean):Boolean =
-        editorVisible && type==4 && owner==ownPackage && focused && frame.displayId==0 &&
+                                 frame:ContextWindowFrame,focused:Boolean,displayId:Int=0):Boolean =
+        editorVisible && type==4 && owner==ownPackage && focused && frame.displayId==displayId &&
             frame.right>frame.left && frame.bottom>frame.top
 
     /** An unresolved root can retain ownership only while the same ID remains continuously visible. */
@@ -29,8 +29,8 @@ object WindowSelectionPolicy {
      * application area, retaining the previous ID among equal-area candidates. Remaining ties
      * are deterministic and prefer focus/activity, then the higher visible layer and lower ID.
      */
-    fun selectTarget(windows:List<ApplicationWindowCandidate>,target:String,previousId:Int?):ApplicationWindowCandidate? =
-        windows.filter { it.packageName==target && it.frame.displayId==0 &&
+    fun selectTarget(windows:List<ApplicationWindowCandidate>,target:String,previousId:Int?,displayId:Int=0):ApplicationWindowCandidate? =
+        windows.filter { it.packageName==target && it.frame.displayId==displayId &&
             it.frame.right>it.frame.left && it.frame.bottom>it.frame.top }
             .maxWithOrNull(compareBy<ApplicationWindowCandidate> { it.area }
                 .thenBy { it.id==previousId }.thenBy { it.focused }.thenBy { it.active }

@@ -46,7 +46,7 @@ data class RecoverySnapshot(
  * All returned and stored frames own their arrays; callers cannot mutate the recovery record.
  */
 class RecoveryJournal(
-    private val displayId: Int = 0,
+    val displayId: Int = 0,
     private val source: Int = 0x1002, // InputDevice.SOURCE_TOUCHSCREEN without Android dependencies.
     private val deviceId: Int = 0,
 ) {

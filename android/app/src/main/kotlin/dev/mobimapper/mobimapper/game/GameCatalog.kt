@@ -27,6 +27,11 @@ object GameCatalog {
             .sortedBy { (it["label"] as String).lowercase() }
     }
     fun requireLaunchable(context:Context,packageName:String) {
-        require(list(context,false).any { it["packageName"]==packageName }) { "La aplicación no está visible o no tiene actividad de lanzamiento" }
+        val intent=Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(packageName)
+        require(packageName !in setOf(context.packageName,"dev.mobimapper.inputlab") &&
+            context.packageManager.queryIntentActivities(intent,PackageManager.ResolveInfoFlags.of(0)).any {
+                val activity=it.activityInfo
+                activity.packageName==packageName && activity.enabled && activity.exported && activity.applicationInfo.uid>=10000
+            }) { "La aplicación no está visible o no tiene actividad de lanzamiento" }
     }
 }

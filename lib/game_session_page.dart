@@ -27,9 +27,18 @@ class _GameSessionPageState extends State<GameSessionPage>
   bool _foreground = true;
   bool _busy = false, _reading = false, _loadingCatalog = false;
 
-  List<LocalProfile> get _gameProfiles => _profiles
-      .where((profile) => profile.packageName == _selectedPackage)
-      .toList(growable: false);
+  String get _uiDisplayScope => _status?.uiDisplayScope ?? 'phone';
+  List<LocalProfile> _profilesForGame(String? packageName) {
+    final all = _profiles
+        .where((profile) => profile.packageName == packageName)
+        .toList(growable: false);
+    final scoped = all
+        .where((profile) => profile.displayScope == _uiDisplayScope)
+        .toList(growable: false);
+    return scoped.isNotEmpty ? scoped : all;
+  }
+
+  List<LocalProfile> get _gameProfiles => _profilesForGame(_selectedPackage);
 
   String get _gameLabel {
     for (final app in _apps) {
@@ -139,6 +148,7 @@ class _GameSessionPageState extends State<GameSessionPage>
     bool profiles = false,
   }) async {
     if (_busy) return;
+    var needsOverlaySettings = false;
     setState(() {
       _busy = true;
       _failure = null;
@@ -149,12 +159,25 @@ class _GameSessionPageState extends State<GameSessionPage>
       await _poll();
     } catch (error) {
       if (!mounted) return;
-      final message = _errorText(error);
-      setState(() => _failure = message);
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      if (error is PlatformException &&
+          error.code == 'EXTERNAL_OVERLAY_PERMISSION_REQUIRED') {
+        needsOverlaySettings = true;
+      } else {
+        final message = _errorText(error);
+        setState(() => _failure = message);
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+    if (needsOverlaySettings && mounted) {
+      try {
+        await _readStatus();
+      } catch (_) {
+        // The connection panel keeps its normal status retry available.
+      }
+      if (mounted) _showSettings();
     }
   }
 
@@ -166,9 +189,7 @@ class _GameSessionPageState extends State<GameSessionPage>
       builder: (context) => _AppPicker(apps: _apps),
     );
     if (!mounted || picked == null) return;
-    final available = _profiles
-        .where((profile) => profile.packageName == picked.packageName)
-        .toList(growable: false);
+    final available = _profilesForGame(picked.packageName);
     setState(() {
       _selectedPackage = picked.packageName;
       _selectedId = null;
@@ -272,6 +293,9 @@ class _GameSessionPageState extends State<GameSessionPage>
 
   bool get _safe => _safeStatus(_status);
 
+  bool _needsDexWindows(NativeStatus status) =>
+      status.uiDisplayId != 0 && !status.drawOverlays;
+
   String _labelFor(String packageName) =>
       _apps
           .where((app) => app.packageName == packageName)
@@ -285,6 +309,10 @@ class _GameSessionPageState extends State<GameSessionPage>
     var needsSetup = false;
     await _run(() async {
       var current = await _readStatus();
+      if (_needsDexWindows(current)) {
+        needsSetup = true;
+        return;
+      }
       // requestAttach may still be recovering the Binder on a cold app launch.
       for (
         var attempt = 0;
@@ -304,7 +332,9 @@ class _GameSessionPageState extends State<GameSessionPage>
         if (!_launchCurrent(request)) return;
         if (reactivated != null) current = reactivated;
       }
-      if (!current.accessibility || !current.backend) {
+      if (!current.accessibility ||
+          !current.backend ||
+          _needsDexWindows(current)) {
         needsSetup = true;
         return;
       }
@@ -319,6 +349,20 @@ class _GameSessionPageState extends State<GameSessionPage>
 
   bool _launchCurrent(int request) =>
       mounted && _foreground && request == _launchEpoch;
+
+  Future<void> _editProfile(LocalProfile profile) async {
+    var needsSetup = false;
+    await _run(() async {
+      final current = await _readStatus();
+      if (!_safeStatus(current)) return;
+      if (_needsDexWindows(current)) {
+        needsSetup = true;
+        return;
+      }
+      await _api.openEditor(profile.id);
+    });
+    if (mounted && needsSetup) _showSettings();
+  }
 
   /// An explicit game tap may reuse an existing local ADB authorization.
   /// Backgrounding invalidates the tap, even if the user returns before ready.
@@ -410,9 +454,9 @@ class _GameSessionPageState extends State<GameSessionPage>
                   padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
                   children: [
                     _sheetHeading(
-                      Icons.tune_rounded,
-                      'Ajustes',
-                      'Conexión y controles',
+                      Icons.link_rounded,
+                      'Ajustes de conexión',
+                      'Permisos y servicio',
                     ),
                     const SizedBox(height: 16),
                     _connectionDetails(
@@ -465,25 +509,38 @@ class _GameSessionPageState extends State<GameSessionPage>
       context: context,
       showDragHandle: true,
       isScrollControlled: true,
-      builder: (_) => SizedBox(
-        height: MediaQuery.sizeOf(context).height * .8,
-        child: ListView(
-          padding: const EdgeInsets.all(20),
-          children: [
-            _sheetHeading(
-              Icons.sports_esports_rounded,
-              _labelFor(profile.packageName),
-              profile.name,
+      builder: (_) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          final profiles = _gameProfiles;
+          final selected =
+              profiles.where((item) => item.id == _selectedId).firstOrNull ??
+              profiles.firstOrNull;
+          return SizedBox(
+            height: MediaQuery.sizeOf(context).height * .8,
+            child: ListView(
+              padding: const EdgeInsets.all(20),
+              children: [
+                _sheetHeading(
+                  Icons.sports_esports_rounded,
+                  _labelFor(_selectedPackage ?? profile.packageName),
+                  selected?.name ?? 'Perfiles',
+                ),
+                const SizedBox(height: 16),
+                _controls(
+                  selected,
+                  _safe && !_busy && _status?.accessibility == true,
+                ),
+                const Divider(height: 32),
+                _profilePicker(
+                  selected,
+                  onChanged: () {
+                    if (sheetContext.mounted) updateSheet(() {});
+                  },
+                ),
+              ],
             ),
-            const SizedBox(height: 16),
-            _controls(
-              profile,
-              _safe && !_busy && _status?.accessibility == true,
-            ),
-            const Divider(height: 32),
-            _profilePicker(profile),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -492,12 +549,15 @@ class _GameSessionPageState extends State<GameSessionPage>
   Widget build(BuildContext context) {
     final status = _status;
     final library = <String, LocalProfile>{};
+    int preference(LocalProfile profile) =>
+        (profile.displayScope == _uiDisplayScope ? 2 : 0) +
+        (profile.id == _selectedId ? 1 : 0);
     for (final p in _profiles) {
-      if (!library.containsKey(p.packageName) || p.id == _selectedId) {
+      final previous = library[p.packageName];
+      if (previous == null || preference(p) > preference(previous)) {
         library[p.packageName] = p;
       }
     }
-    final needsSetup = status?.backend != true || status?.accessibility != true;
     return Scaffold(
       appBar: AppBar(
         toolbarHeight: 72,
@@ -547,13 +607,17 @@ class _GameSessionPageState extends State<GameSessionPage>
               ),
             ),
             const SizedBox(width: 10),
-            const Text(
-              'UwU Mouse',
-              style: TextStyle(
-                fontWeight: FontWeight.w800,
-                letterSpacing: -.7,
-                fontSize: 21,
-                color: Colors.white,
+            const Expanded(
+              child: Text(
+                'UwU Mouse',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -.7,
+                  fontSize: 21,
+                  color: Colors.white,
+                ),
               ),
             ),
           ],
@@ -580,6 +644,8 @@ class _GameSessionPageState extends State<GameSessionPage>
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
           children: [
+            _connectionSummary(status),
+            const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
@@ -599,20 +665,6 @@ class _GameSessionPageState extends State<GameSessionPage>
               const Padding(
                 padding: EdgeInsets.only(bottom: 14),
                 child: LinearProgressIndicator(minHeight: 2),
-              ),
-            if (needsSetup && status != null)
-              Card(
-                child: ListTile(
-                  leading: _roundIcon(Icons.cable_rounded),
-                  title: const Text('Preparar conexión'),
-                  subtitle: Text(
-                    status.accessibility
-                        ? 'Activa el motor en este teléfono.'
-                        : 'Activa UwU Mouse · entrada local.',
-                  ),
-                  trailing: const MobiIcon(Icons.chevron_right),
-                  onTap: _showSettings,
-                ),
               ),
             if (status?.blocked == true ||
                 status?.recovering == true ||
@@ -697,6 +749,102 @@ class _GameSessionPageState extends State<GameSessionPage>
     ),
     child: MobiIcon(icon, color: const Color(0xff1966ab), size: 27),
   );
+
+  String _connectionState(bool? enabled, {bool feminine = false}) =>
+      enabled == null
+      ? 'Comprobando'
+      : enabled
+      ? (feminine ? 'Activada' : 'Activado')
+      : (feminine ? 'Desactivada' : 'Desactivado');
+
+  Color _connectionColor(bool? enabled) => enabled == null
+      ? const Color(0xff62758a)
+      : enabled
+      ? const Color(0xff1f7a4f)
+      : const Color(0xffb83537);
+
+  Widget _connectionIcon(bool? enabled, {double size = 20}) => ExcludeSemantics(
+    child: Icon(
+      enabled == null
+          ? Icons.more_horiz_rounded
+          : enabled
+          ? Icons.check_circle_rounded
+          : Icons.cancel_rounded,
+      color: _connectionColor(enabled),
+      size: size,
+    ),
+  );
+
+  Widget _connectionSummary(NativeStatus? status) {
+    Widget stateLine(String label, bool? enabled, {bool feminine = false}) =>
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _connectionIcon(enabled, size: 18),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '$label: ${_connectionState(enabled, feminine: feminine)}',
+                style: TextStyle(
+                  color: _connectionColor(enabled),
+                  fontSize: 13,
+                  height: 1.3,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        );
+    return Container(
+      key: const ValueKey('connection-summary'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xfff0f8ff), Color(0xffe8f4ff)],
+        ),
+        border: Border.all(color: const Color(0xffbeddf5)),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                stateLine(
+                  'Accesibilidad',
+                  status?.accessibility,
+                  feminine: true,
+                ),
+                const SizedBox(height: 8),
+                stateLine('Motor de toques', status?.backend),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 96,
+            child: TextButton(
+              key: const ValueKey('connection-settings'),
+              style: TextButton.styleFrom(
+                minimumSize: const Size(44, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                textStyle: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              onPressed: _showSettings,
+              child: const Text(
+                'Ajustes de conexión',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _pill(String text, IconData icon) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
@@ -921,13 +1069,26 @@ class _GameSessionPageState extends State<GameSessionPage>
     );
   }
 
-  Widget _profilePicker(LocalProfile? profile) {
+  Widget _profilePicker(LocalProfile? profile, {VoidCallback? onChanged}) {
+    Future<void> updateAfter(Future<void> action) async {
+      await action;
+      onChanged?.call();
+    }
+
     final profiles = _gameProfiles;
+    final matching = profiles.where((item) => item.id == profile?.id);
+    final chosen = matching.isNotEmpty
+        ? matching.first
+        : profiles.isNotEmpty
+        ? profiles.first
+        : null;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         OutlinedButton.icon(
-          onPressed: _busy || _loadingCatalog ? null : _chooseGame,
+          onPressed: _busy || _loadingCatalog
+              ? null
+              : () => updateAfter(_chooseGame()),
           icon: const MobiIcon(Icons.sports_esports_outlined, size: 27),
           label: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
@@ -943,8 +1104,10 @@ class _GameSessionPageState extends State<GameSessionPage>
           const SizedBox(height: 14),
           if (profiles.isNotEmpty)
             DropdownButtonFormField<String>(
-              key: ValueKey('profiles-$_selectedPackage-$_selectedId'),
-              initialValue: profile?.id,
+              key: ValueKey(
+                'profiles-$_selectedPackage-$_uiDisplayScope-$_selectedId',
+              ),
+              initialValue: chosen?.id,
               isExpanded: true,
               icon: const MobiIcon(Icons.expand_more_rounded, size: 26),
               decoration: const InputDecoration(labelText: 'Perfil'),
@@ -959,7 +1122,9 @@ class _GameSessionPageState extends State<GameSessionPage>
               onChanged: _busy
                   ? null
                   : (id) {
-                      if (id != null) unawaited(_selectProfile(id));
+                      if (id != null) {
+                        unawaited(updateAfter(_selectProfile(id)));
+                      }
                     },
             )
           else
@@ -970,18 +1135,22 @@ class _GameSessionPageState extends State<GameSessionPage>
             runSpacing: 4,
             children: [
               TextButton.icon(
-                onPressed: _busy ? null : _createProfile,
+                onPressed: _busy ? null : () => updateAfter(_createProfile()),
                 icon: const MobiIcon(Icons.add, size: 26),
                 label: const Text('Nuevo perfil'),
               ),
-              if (profile != null)
+              if (chosen != null)
                 TextButton(
-                  onPressed: _busy ? null : () => _renameProfile(profile),
+                  onPressed: _busy
+                      ? null
+                      : () => updateAfter(_renameProfile(chosen)),
                   child: const Text('Renombrar'),
                 ),
-              if (profile != null)
+              if (chosen != null)
                 TextButton(
-                  onPressed: _busy ? null : () => _deleteProfile(profile),
+                  onPressed: _busy
+                      ? null
+                      : () => updateAfter(_deleteProfile(chosen)),
                   child: const Text('Eliminar'),
                 ),
             ],
@@ -1024,9 +1193,7 @@ class _GameSessionPageState extends State<GameSessionPage>
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: canEdit
-              ? () => _run(() => _api.openEditor(profile.id))
-              : null,
+          onPressed: canEdit ? () => _editProfile(profile) : null,
           icon: const MobiIcon(Icons.tune, size: 27),
           label: Text(
             profile.calibrated ? 'Editar sobre el juego' : 'Colocar controles',
@@ -1078,71 +1245,176 @@ class _GameSessionPageState extends State<GameSessionPage>
     required VoidCallback onCheck,
     bool checking = false,
     String? error,
-  }) => ExpansionTile(
-    leading: const MobiIcon(Icons.link_rounded, size: 27),
-    trailing: const MobiIcon(Icons.expand_more_rounded, size: 26),
-    title: const Text('Conexión'),
-    initiallyExpanded: true,
-    childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-    expandedCrossAxisAlignment: CrossAxisAlignment.start,
+  }) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      Text(
-        'Accesibilidad: ${status == null
-            ? 'comprobando…'
-            : status.accessibility
-            ? 'activa'
-            : 'inactiva'}',
+      _connectionBlock(
+        'Accesibilidad',
+        status?.accessibility,
+        feminine: true,
+        action: status != null && !status.accessibility
+            ? _command(
+                'Activar accesibilidad',
+                Icons.accessibility_new,
+                NativeCommand.accessibilitySettings,
+              )
+            : null,
       ),
-      const SizedBox(height: 8),
-      if (status != null && !status.accessibility)
-        _command(
-          'Abrir ajustes de accesibilidad',
-          Icons.accessibility_new,
-          NativeCommand.accessibilitySettings,
-        ),
-      const SizedBox(height: 8),
-      Text(
-        'Motor de toques: ${status == null
-            ? 'comprobando…'
-            : status.backend
-            ? 'activo'
-            : 'apagado'}',
+      const SizedBox(height: 10),
+      _connectionBlock(
+        'Motor de toques',
+        status?.backend,
+        action: status != null && !status.backend
+            ? FilledButton.icon(
+                onPressed: !_safeStatus(status) || status.active
+                    ? null
+                    : _activateOnPhone,
+                icon: const MobiIcon(Icons.cable_rounded, size: 23),
+                label: const Text('Activar motor'),
+              )
+            : null,
       ),
-      if (status != null && !status.backend) ...[
-        const SizedBox(height: 8),
-        const Text(
-          'Activa el motor con Depuración inalámbrica. '
-          'El emparejamiento se realiza en este teléfono.',
-        ),
-        const SizedBox(height: 8),
-        FilledButton.icon(
-          onPressed: !_safeStatus(status) || status.active
-              ? null
-              : _activateOnPhone,
-          icon: const MobiIcon(Icons.cable_rounded, size: 25),
-          label: const Text('Activar en este teléfono'),
-        ),
+      if (status != null && status.uiDisplayId != 0) ...[
+        const SizedBox(height: 10),
+        _dexWindowsPermission(status),
       ],
-      const SizedBox(height: 12),
-      OutlinedButton.icon(
-        onPressed: checking ? null : onCheck,
-        icon: const MobiIcon(Icons.refresh_rounded, size: 25),
-        label: Text(checking ? 'Comprobando…' : 'Comprobar servicio'),
+      const SizedBox(height: 14),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(fontSize: 13),
+          ),
+          onPressed: checking ? null : onCheck,
+          icon: const MobiIcon(Icons.refresh_rounded, size: 22),
+          label: Text(checking ? 'Comprobando…' : 'Comprobar servicio'),
+        ),
       ),
-      if (status?.accessibility == true &&
-          status?.backend == true &&
+      if (status != null &&
+          status.accessibility &&
+          status.backend &&
+          !_needsDexWindows(status) &&
           _safeStatus(status) &&
-          !status!.active)
-        const Text('Listo para abrir tu juego'),
+          !status.active)
+        const Text(
+          'Listo para abrir tu juego',
+          style: TextStyle(fontSize: 12, color: Color(0xff1f7a4f)),
+        ),
       if (error != null) Text(error),
       if (status?.backendError.isNotEmpty == true) Text(status!.backendError),
-      const SizedBox(height: 12),
+      const SizedBox(height: 8),
       Text(
         status == null || status.devices.isEmpty
             ? 'Conecta teclado y ratón por OTG o Bluetooth.'
-            : 'Dispositivos\n${status.devices.join('\n')}',
+            : 'Dispositivos · ${status.devices.join(' · ')}',
+        style: const TextStyle(fontSize: 12, color: Color(0xff527394)),
       ),
     ],
+  );
+
+  Widget _dexWindowsPermission(NativeStatus status) => Container(
+    key: const ValueKey('dex-windows-permission'),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      color: const Color(0xfff0f8ff),
+      border: Border.all(color: const Color(0xffc4e0f5)),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Row(
+      children: [
+        _connectionIcon(status.drawOverlays, size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Ventanas de DeX',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              Text(
+                status.drawOverlays ? 'Permitidas' : 'Sin permiso',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: _connectionColor(status.drawOverlays),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (!status.drawOverlays) ...[
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 112,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                minimumSize: const Size(44, 44),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                textStyle: const TextStyle(fontSize: 12),
+              ),
+              onPressed: _busy
+                  ? null
+                  : () => _run(
+                      () => _api.execute(NativeCommand.openOverlaySettings),
+                    ),
+              child: const Text(
+                'Permitir ventanas',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ),
+        ],
+      ],
+    ),
+  );
+
+  Widget _connectionBlock(
+    String label,
+    bool? enabled, {
+    bool feminine = false,
+    Widget? action,
+  }) => Container(
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: const Color(0xfff0f8ff),
+      border: Border.all(color: const Color(0xffc4e0f5)),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            _connectionIcon(enabled, size: 24),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w700,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    _connectionState(enabled, feminine: feminine),
+                    style: TextStyle(
+                      color: _connectionColor(enabled),
+                      fontSize: 13,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        if (action != null) ...[const SizedBox(height: 10), action],
+      ],
+    ),
   );
 
   Widget _laboratory(NativeStatus? status) {

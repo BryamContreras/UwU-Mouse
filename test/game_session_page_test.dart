@@ -1,9 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mobimapper/main.dart';
 
-import 'native_api_test.dart' show profileWire;
+import 'native_api_test.dart' show displayProfileWire, profileWire;
 
 void main() {
   const channel = MethodChannel('dev.mobimapper/control.v1');
@@ -12,6 +14,8 @@ void main() {
     bool blocked = false,
     bool backend = true,
     bool accessibility = true,
+    int uiDisplayId = 0,
+    bool drawOverlays = true,
   }) => {
     'protocol': 1,
     'mode': blocked ? 'blocked' : 'paused',
@@ -32,7 +36,252 @@ void main() {
     'queueMs': <Object?>[],
     'ipcMs': <Object?>[],
     'devices': <Object?>[],
+    'uiDisplayId': uiDisplayId,
+    'drawOverlays': drawOverlays,
   };
+
+  for (final displayId in [0, 2]) {
+    testWidgets(
+      'library prefers display $displayId before a globally selected foreign profile',
+      (tester) async {
+        final phone = displayProfileWire('phone', 'phone-profile');
+        final dex = displayProfileWire('external', 'dex-profile');
+        final rows = [phone, dex];
+        var selected = displayId == 0 ? dex : phone;
+        final expected = displayId == 0 ? phone : dex;
+        final starts = <Object?>[];
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            switch (call.method) {
+              case 'status':
+                return status(uiDisplayId: displayId);
+              case 'listApps':
+                return [
+                  {
+                    'packageName': 'com.dts.freefireth',
+                    'label': 'Free Fire',
+                    'gameHint': true,
+                  },
+                ];
+              case 'listProfiles':
+                return rows;
+              case 'selectedProfile':
+                return selected;
+              case 'selectProfile':
+                selected = rows.firstWhere(
+                  (row) => row['id'] == (call.arguments as Map)['id'],
+                );
+                return selected;
+              case 'startProfile':
+                starts.add((call.arguments as Map)['id']);
+                return null;
+              default:
+                return null;
+            }
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpAndSettle();
+        final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+        await tester.tap(game);
+        await tester.pumpAndSettle();
+        expect(starts, [expected['id']]);
+        await tester.longPress(game);
+        await tester.pumpAndSettle();
+        final picker = tester.widget<DropdownButtonFormField<String>>(
+          find.byType(DropdownButtonFormField<String>),
+        );
+        expect(picker.initialValue, expected['id']);
+        final dropdown = tester.widget<DropdownButton<String>>(
+          find.descendant(
+            of: find.byType(DropdownButtonFormField<String>),
+            matching: find.byType(DropdownButton<String>),
+          ),
+        );
+        expect(dropdown.items!.map((item) => item.value), [expected['id']]);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+
+    testWidgets(
+      'profile sheet actions follow the selected profile on display $displayId',
+      (tester) async {
+        final scope = displayId == 0 ? 'phone' : 'external';
+        final first = displayProfileWire(scope, 'profile-a')
+          ..['name'] = 'Perfil A';
+        final second = displayProfileWire(scope, 'profile-b')
+          ..['name'] = 'Perfil B';
+        final foreign = displayProfileWire(
+          displayId == 0 ? 'external' : 'phone',
+          'foreign-profile',
+        );
+        final rows = [foreign, first, second];
+        Map<Object?, Object?>? selected = first;
+        final edited = <Object?>[],
+            renamed = <Object?>[],
+            deleted = <Object?>[];
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            switch (call.method) {
+              case 'status':
+                return status(uiDisplayId: displayId);
+              case 'listApps':
+                return [
+                  {
+                    'packageName': 'com.dts.freefireth',
+                    'label': 'Free Fire',
+                    'gameHint': true,
+                  },
+                ];
+              case 'listProfiles':
+                return rows;
+              case 'selectedProfile':
+                return selected;
+              case 'selectProfile':
+                selected = rows.firstWhere(
+                  (row) => row['id'] == (call.arguments as Map)['id'],
+                );
+                return selected;
+              case 'openEditor':
+                edited.add((call.arguments as Map)['id']);
+                return null;
+              case 'renameProfile':
+                final args = call.arguments as Map;
+                renamed.add(args['id']);
+                final row = rows.firstWhere((row) => row['id'] == args['id']);
+                row['name'] = args['name'];
+                return row;
+              case 'deleteProfile':
+                final id = (call.arguments as Map)['id'];
+                deleted.add(id);
+                rows.removeWhere((row) => row['id'] == id);
+                if (selected?['id'] == id) selected = null;
+                return null;
+              default:
+                return null;
+            }
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpAndSettle();
+        await tester.longPress(
+          find.byKey(const ValueKey('game-com.dts.freefireth')),
+        );
+        await tester.pumpAndSettle();
+        final picker = find.byType(DropdownButtonFormField<String>);
+        await tester.ensureVisible(picker);
+        await tester.pumpAndSettle();
+        await tester.tap(picker);
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Perfil B').last);
+        await tester.pumpAndSettle();
+
+        final edit = find.text('Editar sobre el juego');
+        await tester.ensureVisible(edit);
+        await tester.pumpAndSettle();
+        await tester.tap(edit);
+        await tester.pumpAndSettle();
+        expect(edited, ['profile-b']);
+
+        await tester.ensureVisible(find.text('Renombrar'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Renombrar'));
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'Perfil B',
+        );
+        await tester.enterText(find.byType(TextField), 'Perfil B nuevo');
+        await tester.tap(find.text('Guardar'));
+        await tester.pumpAndSettle();
+        expect(renamed, ['profile-b']);
+        expect(find.text('Perfil B nuevo'), findsWidgets);
+
+        await tester.ensureVisible(find.text('Eliminar'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Eliminar'));
+        await tester.pumpAndSettle();
+        expect(
+          find.text('Se eliminará «Perfil B nuevo» de este teléfono.'),
+          findsOneWidget,
+        );
+        await tester.tap(find.text('Eliminar').last);
+        await tester.pumpAndSettle();
+        expect(deleted, ['profile-b']);
+        expect(rows.map((row) => row['id']), ['foreign-profile', 'profile-a']);
+        expect(
+          tester.widget<DropdownButtonFormField<String>>(picker).initialValue,
+          'profile-a',
+        );
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'first external launch keeps a phone fallback available for native calibration',
+    (tester) async {
+      final phone = displayProfileWire('phone', 'phone-profile');
+      Object? launched;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        return switch (call.method) {
+          'status' => status(uiDisplayId: 2),
+          'listApps' => [
+            {
+              'packageName': 'com.dts.freefireth',
+              'label': 'Free Fire',
+              'gameHint': true,
+            },
+          ],
+          'listProfiles' => [phone],
+          'selectedProfile' || 'selectProfile' => phone,
+          'startProfile' => (() {
+            launched = (call.arguments as Map)['id'];
+            return null;
+          })(),
+          _ => null,
+        };
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpAndSettle();
+      final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.tap(game);
+      await tester.pumpAndSettle();
+      expect(launched, 'phone-profile');
+      await tester.longPress(game);
+      await tester.pumpAndSettle();
+      final picker = tester.widget<DropdownButtonFormField<String>>(
+        find.byType(DropdownButtonFormField<String>),
+      );
+      expect(picker.initialValue, 'phone-profile');
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('returning from native editor reloads the persisted profile', (
     tester,
@@ -195,6 +444,271 @@ void main() {
   }
 
   testWidgets(
+    'DeX launch requests windows permission and refreshes after Android settings',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 740);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final calls = <String>[];
+      var allowed = false;
+      mockActivation(
+        calls,
+        () => status(uiDisplayId: 2, drawOverlays: allowed),
+      );
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpAndSettle();
+      final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.tap(game);
+      await tester.pumpAndSettle();
+      expect(find.text('Ventanas de DeX'), findsOneWidget);
+      expect(find.text('Listo para abrir tu juego'), findsNothing);
+      expect(calls, isNot(contains('startProfile')));
+      expect(calls, isNot(contains('openEditor')));
+      expect(calls, isNot(contains('activationStartDiscovery')));
+      final allow = find.text('Permitir ventanas');
+      await tester.ensureVisible(allow);
+      await tester.pumpAndSettle();
+      await tester.tap(allow);
+      await tester.pumpAndSettle();
+      expect(
+        calls.where((call) => call == 'openOverlaySettings'),
+        hasLength(1),
+      );
+      expect(tester.takeException(), isNull);
+
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      allowed = true;
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(find.text('Permitidas'), findsOneWidget);
+      expect(find.text('Permitir ventanas'), findsNothing);
+      expect(calls, isNot(contains('startProfile')));
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.tap(game);
+      await tester.pumpAndSettle();
+      expect(calls.where((call) => call == 'startProfile'), hasLength(1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('DeX editing asks permission before opening the native editor', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    mockActivation(calls, () => status(uiDisplayId: 2, drawOverlays: false));
+    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpAndSettle();
+    await tester.longPress(
+      find.byKey(const ValueKey('game-com.dts.freefireth')),
+    );
+    await tester.pumpAndSettle();
+    final edit = find.text('Editar sobre el juego');
+    await tester.ensureVisible(edit);
+    await tester.pumpAndSettle();
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    expect(find.text('Ventanas de DeX'), findsOneWidget);
+    expect(find.text('Permitir ventanas'), findsOneWidget);
+    expect(calls, isNot(contains('openEditor')));
+    expect(calls, isNot(contains('startProfile')));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final displayId in [0, 2]) {
+    testWidgets('overlay permission flow follows UI display $displayId', (
+      tester,
+    ) async {
+      final calls = <String>[];
+      mockActivation(
+        calls,
+        () => status(uiDisplayId: displayId, drawOverlays: displayId != 0),
+      );
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpAndSettle();
+      final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.tap(game);
+      await tester.pumpAndSettle();
+      expect(calls.where((call) => call == 'startProfile'), hasLength(1));
+      await tester.longPress(game);
+      await tester.pumpAndSettle();
+      final edit = find.text('Editar sobre el juego');
+      await tester.ensureVisible(edit);
+      await tester.pumpAndSettle();
+      await tester.tap(edit);
+      await tester.pumpAndSettle();
+      expect(calls.where((call) => call == 'openEditor'), hasLength(1));
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('connection-settings')));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Ventanas de DeX'),
+        displayId == 0 ? findsNothing : findsOneWidget,
+      );
+      expect(find.text('Permitir ventanas'), findsNothing);
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(find.text('Activar motor'), findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  testWidgets('revoked DeX permission routes a native rejection to settings', (
+    tester,
+  ) async {
+    var allowed = true;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      return switch (call.method) {
+        'status' => status(uiDisplayId: 2, drawOverlays: allowed),
+        'listApps' => [
+          {
+            'packageName': 'com.dts.freefireth',
+            'label': 'Free Fire',
+            'gameHint': true,
+          },
+        ],
+        'listProfiles' => [profileWire()],
+        'selectedProfile' => profileWire(),
+        'startProfile' => (() {
+          allowed = false;
+          throw PlatformException(code: 'EXTERNAL_OVERLAY_PERMISSION_REQUIRED');
+        })(),
+        _ => null,
+      };
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+    await tester.pumpAndSettle();
+    expect(find.text('Ventanas de DeX'), findsOneWidget);
+    expect(find.text('Permitir ventanas'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'connection summary waits for status before reporting inactive services',
+    (tester) async {
+      final pending = Completer<Map<String, Object?>>();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (call) async => switch (call.method) {
+          'status' => pending.future,
+          'listApps' => <Object?>[],
+          'listProfiles' => <Object?>[],
+          _ => null,
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pump();
+      expect(find.text('Accesibilidad: Comprobando'), findsOneWidget);
+      expect(find.text('Motor de toques: Comprobando'), findsOneWidget);
+      expect(find.textContaining('Desactivad'), findsNothing);
+      final settings = find.byKey(const ValueKey('connection-settings'));
+      expect(settings, findsOneWidget);
+      await tester.tap(settings);
+      await tester.pumpAndSettle();
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(find.text('Activar motor'), findsNothing);
+      pending.complete(status());
+      await tester.pumpAndSettle();
+      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(find.text('Activar motor'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'connection settings expose only missing services and update while open',
+    (tester) async {
+      final calls = <String>[];
+      var accessibility = false, backend = false;
+      mockActivation(
+        calls,
+        () => status(accessibility: accessibility, backend: backend),
+      );
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpAndSettle();
+      expect(find.text('Accesibilidad: Desactivada'), findsOneWidget);
+      expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
+      expect(find.text('Preparar conexión'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('connection-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('Ajustes de conexión'), findsWidgets);
+      expect(find.text('Activar accesibilidad'), findsOneWidget);
+      expect(find.text('Activar motor'), findsOneWidget);
+      expect(find.text('Iniciar en laboratorio'), findsNothing);
+      await tester.tap(find.text('Activar accesibilidad'));
+      await tester.pumpAndSettle();
+      expect(calls.where((c) => c == 'accessibilitySettings'), hasLength(1));
+      expect(calls, isNot(contains('activationStartDiscovery')));
+      accessibility = true;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(find.text('Activar motor'), findsOneWidget);
+      backend = true;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Activar motor'), findsNothing);
+      expect(find.text('Listo para abrir tu juego'), findsOneWidget);
+      expect(calls, isNot(contains('startProfile')));
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'connection controls remain usable on a narrow screen with large text',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 740);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final calls = <String>[];
+      mockActivation(calls, () => status(accessibility: false, backend: false));
+      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.byKey(const ValueKey('connection-settings')));
+      await tester.pumpAndSettle();
+      final accessibility = find.text('Activar accesibilidad');
+      await tester.ensureVisible(accessibility);
+      await tester.pumpAndSettle();
+      await tester.tap(accessibility);
+      await tester.pumpAndSettle();
+      expect(calls, contains('accessibilitySettings'));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
     'missing motor offers local activation and checks a live service',
     (tester) async {
       var backend = false;
@@ -207,15 +721,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
-      expect(find.text('Accesibilidad: activa'), findsOneWidget);
-      expect(find.text('Motor de toques: apagado'), findsOneWidget);
-      expect(
-        find.text(
-          'Activa el motor con Depuración inalámbrica. '
-          'El emparejamiento se realiza en este teléfono.',
-        ),
-        findsOneWidget,
-      );
+      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
+      expect(find.text('Activar motor'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
       expect(calls, isNot(contains('startProfile')));
       expect(calls, isNot(contains('openEditor')));
       expect(calls, isNot(contains('activationStartDiscovery')));
@@ -231,7 +740,8 @@ void main() {
         calls.where((method) => method == 'status').length,
         greaterThan(readsBefore),
       );
-      expect(find.text('Motor de toques: activo'), findsOneWidget);
+      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Activar motor'), findsNothing);
       expect(find.text('Listo para abrir tu juego'), findsOneWidget);
       expect(calls, isNot(contains('startProfile')));
       expect(calls, isNot(contains('openEditor')));
@@ -280,7 +790,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Ajustes'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Activar en este teléfono'));
+      await tester.tap(find.text('Activar motor'));
       await tester.pumpAndSettle();
       expect(
         calls.where((c) => c.method == 'activationStartDiscovery'),
@@ -330,7 +840,7 @@ void main() {
       await tester.tap(find.text('Listo'));
       await tester.pumpAndSettle();
       expect(calls.where((c) => c.method == 'activationCancel'), hasLength(1));
-      expect(find.text('Motor de toques: activo'), findsOneWidget);
+      expect(find.text('Motor de toques: Activado'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
@@ -367,7 +877,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Ajustes'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Activar en este teléfono'));
+      await tester.tap(find.text('Activar motor'));
       await tester.pumpAndSettle();
       final connect = find.byKey(const ValueKey('activation-connect'));
       final activationScroll = find
@@ -602,12 +1112,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
-    expect(find.text('Accesibilidad: inactiva'), findsOneWidget);
-    expect(find.text('Motor de toques: activo'), findsOneWidget);
+    expect(find.text('Accesibilidad: Desactivada'), findsOneWidget);
+    expect(find.text('Motor de toques: Activado'), findsOneWidget);
+    expect(find.text('Activar motor'), findsNothing);
     expect(find.textContaining('Activar-UwU-Mouse.cmd'), findsNothing);
     expect(calls, isNot(contains('accessibilitySettings')));
     expect(calls, isNot(contains('startProfile')));
-    final accessibility = find.text('Abrir ajustes de accesibilidad');
+    final accessibility = find.text('Activar accesibilidad');
     await tester.ensureVisible(accessibility);
     await tester.tap(accessibility);
     await tester.pumpAndSettle();

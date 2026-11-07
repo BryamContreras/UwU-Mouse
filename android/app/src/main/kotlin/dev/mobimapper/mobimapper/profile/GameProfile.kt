@@ -23,15 +23,16 @@ data class GameProfile(
     val orientation: String get() = if (calibration.screenWidth > calibration.screenHeight) "landscape" else "portrait"
 
     companion object {
-        const val SCHEMA_VERSION = 8
+        const val SCHEMA_VERSION = 9
         const val MAX_ACTIONS = 24 // Configured bindings; the live injector still has ten contacts.
         const val MAX_MACROS = 24
         const val MAX_MACRO_STEPS = 16
         const val MAX_MACRO_WAIT_MS = 5_000
         const val MAX_MACRO_DURATION_MS = 30_000
-        fun create(packageName: String, name: String, width: Int, height: Int, rotation: Int): GameProfile =
+        fun create(packageName: String, name: String, width: Int, height: Int, rotation: Int,
+                   displayScope: String = "phone"): GameProfile =
             GameProfile(UUID.randomUUID().toString(), name.trim(), packageName,
-                calibration = Calibration(width, height, rotation, GameArea(0f, 0f, width.toFloat(), height.toFloat())),
+                calibration = Calibration(width, height, rotation, GameArea(0f, 0f, width.toFloat(), height.toFloat()), displayScope=displayScope),
                 joystick = JoystickSpec(.15f, .73f, .09f),
                 camera = CameraSpec(.67f, .43f, .38f, .50f),
                 action = ActionSpec(.87f, .80f))
@@ -44,6 +45,8 @@ data class Calibration(
     val rotation: Int,
     val area: GameArea,
     val confirmed: Boolean = false,
+    val displayScope: String = "phone",
+    val windowFrame: GameArea? = null,
 )
 
 /** Logical display pixels; right/bottom are the exclusive edges of the calibrated game area. */
@@ -152,6 +155,17 @@ object ProfileValidator {
         val areaFinite = listOf(a.left, a.top, a.right, a.bottom).all { it.isFinite() }
         val areaValid = areaFinite && a.left >= 0 && a.top >= 0 && a.right <= c.screenWidth && a.bottom <= c.screenHeight && a.width >= 32 && a.height >= 32
         check(areaValid, "El área de juego debe quedar dentro de la pantalla")
+        check(c.displayScope in setOf("phone", "external"), "Pantalla de calibración no válida")
+        check(c.displayScope != "external" || !c.confirmed || c.windowFrame != null,
+            "Confirma la ventana de DeX antes de iniciar")
+        c.windowFrame?.let { frame ->
+            val frameValid=listOf(frame.left,frame.top,frame.right,frame.bottom).all { it.isFinite() } &&
+                frame.left>=0 && frame.top>=0 && frame.right<=c.screenWidth && frame.bottom<=c.screenHeight &&
+                frame.width>=32 && frame.height>=32
+            check(frameValid, "La ventana calibrada debe quedar dentro de la pantalla")
+            check(frameValid && areaValid && a.left>=frame.left && a.top>=frame.top &&
+                a.right<=frame.right && a.bottom<=frame.bottom, "El área de juego debe quedar dentro de la ventana calibrada")
+        }
         val j = profile.joystick
         val camera = profile.camera
         check(CameraSpec.isSupportedMode(camera.mode), "Modo de cámara no válido")

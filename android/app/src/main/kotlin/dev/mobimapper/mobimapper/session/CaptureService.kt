@@ -3,6 +3,8 @@ package dev.mobimapper.mobimapper.session
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.KeyguardManager
+import android.content.Context
+import android.hardware.display.DisplayManager
 import android.hardware.input.InputManager
 import android.os.Handler
 import android.os.Looper
@@ -12,11 +14,14 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.graphics.Rect
 import dev.mobimapper.mobimapper.game.GameCoordinator
 import dev.mobimapper.mobimapper.editor.GameCursorOverlay
+import dev.mobimapper.mobimapper.editor.OverlayOpacityBudget
+import dev.mobimapper.mobimapper.editor.OverlayWindows
 import dev.mobimapper.mobimapper.engine.TouchFrame
 
 /** Context uses only window package/type/display/layer/bounds, without view text traversal. */
@@ -25,9 +30,73 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
     private val consumedKeys = HashSet<Long>()
     private val nativeKeys=HashSet<Long>()
     private val profileSwitches=ProfileSwitchGate()
-    private val cursorDelegate=lazy { GameCursorOverlay(this) }
-    private val cursorOverlay by cursorDelegate
-    val cursorVisible:Boolean get()=cursorDelegate.isInitialized() && cursorOverlay.visible
+    private val inputInventory=HashMap<Int,InputDeviceSnapshot>()
+    private val inventoryKeyCodes=IntArray(KeyEvent.getMaxKeyCode()+1) { it }
+    @Volatile private var inputInventoryCount=0
+    @Volatile private var deviceChangeCount=0L
+    @Volatile private var ignoredDeviceChanges=0L
+    @Volatile private var materialDeviceChanges=0L
+    @Volatile private var addedDeviceCount=0L
+    @Volatile private var removedDeviceCount=0L
+    @Volatile private var lastDeviceChange:Map<String,Any?>?=null
+    @Volatile private var lastDeviceRemoval:Map<String,Any?>?=null
+    private val overlayContexts=HashMap<Int,Context>()
+    @Volatile private var lastOverlayContext:Map<String,Any?>?=null
+    private var cursorInstance:GameCursorOverlay?=null
+    private var cursorInstanceDisplay=-1
+    private val cursorOverlay:GameCursorOverlay get() {
+        val displayId=SessionController.targetDisplayId
+        if(cursorInstance==null || cursorInstanceDisplay!=displayId) {
+            cursorInstance?.hide()
+            cursorInstance=GameCursorOverlay(this,overlayContextFor(displayId));cursorInstanceDisplay=displayId
+        }
+        return requireNotNull(cursorInstance)
+    }
+    val cursorVisible:Boolean get()=cursorInstance?.visible==true
+    fun overlayContextFor(displayId:Int):Context {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        // Preserve the original phone service context. A Service is not necessarily visual,
+        // so createWindowContext(type, options) must never be called on this instance.
+        if(displayId==0) return this
+        val display=getSystemService(DisplayManager::class.java).getDisplay(displayId)
+            ?: throw WindowManager.InvalidDisplayException("Pantalla desconectada")
+        if(!display.isValid) throw WindowManager.InvalidDisplayException("Pantalla desconectada")
+        // Recheck the grant even when a previously admitted context is cached.
+        OverlayWindows.requirePermission(this,displayId)
+        return overlayContexts.getOrPut(displayId) {
+            // Standard external windows use the application Context, not AccessibilityContext's
+            // default accessibility token. Display 0 retains its original service WM above.
+            val windowContext=applicationContext.createWindowContext(display,WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,null)
+            val maximumOpacity=try { getSystemService(InputManager::class.java).maximumObscuringOpacityForTouch }
+                catch(_:RuntimeException) { Float.NaN }
+            val alpha=OverlayOpacityBudget.layerAlpha(maximumOpacity)
+            lastOverlayContext=mapOf("displayId" to displayId,"route" to "application_overlay_window_context",
+                "resourcesContextClass" to windowContext.javaClass.name,
+                "maximumObscuringOpacity" to maximumOpacity.takeIf { it.isFinite() },"nonTouchAlpha" to alpha)
+            OverlayWindows.externalContext(windowContext,alpha)
+        }
+    }
+    fun discardDisplayContext(displayId:Int) {
+        if(editingPresentation?.anchor?.frame?.displayId==displayId) endEditorPresentation("display_unavailable")
+        if(cursorInstanceDisplay==displayId) {
+            clearCursorInteraction();cursorInstance=null;cursorInstanceDisplay=-1
+        }
+        overlayContexts.remove(displayId)
+    }
+    @Volatile private var multipleDisplays=false
+    @Volatile private var displayRoutingCount=0L
+    @Volatile private var displayRoutingTotalNanos=0L
+    @Volatile private var displayRoutingMaxNanos=0L
+    @Volatile private var lastInputDisplayId=-1
+    @Volatile private var rawMotionCallbacks=0L
+    @Volatile private var lastRawMotionSource=0
+    @Volatile private var lastRawMotionAction=-1
+    @Volatile private var lastRawMotionDeviceId=-1
+    @Volatile private var lastRawMotionDeviceSources=0
+    @Volatile private var lastRawMotionDeviceKnown=false
+    @Volatile private var lastRawMotionExternal=false
+    @Volatile private var lastRawMotionVirtual=false
+    @Volatile private var lastRawMotionFilter="none"
     @Volatile var cursorX=0f;private set
     @Volatile var cursorY=0f;private set
     @Volatile var cursorSamples=0L;private set
@@ -41,12 +110,23 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         val focused:Boolean,val active:Boolean,val rootResolved:Boolean,
     )
     private data class CachedWindowContext(
+        val displayId:Int=0,val focusedDisplayId:Int=-1,val trustedFocus:Boolean=false,
         val targetPackage:String="",val selected:ApplicationWindowCandidate?=null,
         val rootPackage:String?=null,val foregroundPackage:String?=null,
         val targetBounds:PointerBounds?=null,val blockedBounds:List<PointerBounds> = emptyList(),
         val windows:List<WindowMetadata> = emptyList(),val blockedWindows:List<WindowMetadata> = emptyList(),
         val capturedUptime:Long=0L,
+        val brokerFocusAgeMs:Long=Long.MAX_VALUE,
+        val editorPresentationAllowed:Boolean=false,
+        val editorAnchor:EditingPresentation?=null,
     )
+    private data class EditingPresentation(
+        val anchor:EditorPresentationAnchor,val windowId:Int,val profileId:String?,val capturedUptime:Long,
+    )
+    private var nextEditorPresentationToken=0L
+    private var editorPresentationToken=0L
+    @Volatile private var editingPresentation:EditingPresentation?=null
+    @Volatile private var editorAnchorResetReason="not_started"
     @Volatile private var windowContext=CachedWindowContext()
     private var windowOwners:Map<Int,String> = emptyMap()
     private val cursorTarget:PointerBounds? get()=windowContext.targetBounds
@@ -93,7 +173,11 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
             flags = flags or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
             setMotionEventSources(0)
         }
-        getSystemService(InputManager::class.java).registerInputDeviceListener(this, Handler(Looper.getMainLooper()))
+        val inputManager=getSystemService(InputManager::class.java)
+        inputManager.registerInputDeviceListener(this, Handler(Looper.getMainLooper()))
+        inputInventory.clear()
+        for(id in inputManager.inputDeviceIds) readInputDevice(id).snapshot?.let { inputInventory[id]=it }
+        inputInventoryCount=inputInventory.size
         GameCoordinator.attach(this)
         refreshContext()
     }
@@ -108,11 +192,15 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         }
         requestedMouseCapture = enabled
         updateCursorPresentation()
-        if (!enabled && (!SessionController.targetConfirmed ||
-                !getSystemService(PowerManager::class.java).isInteractive ||
-                getSystemService(KeyguardManager::class.java).isKeyguardLocked)) {
-            forceMouseOff("context_lost")
-            return
+        if (!enabled) {
+            val targetId=SessionController.targetDisplayId
+            val targetInteractive=if(targetId==0) getSystemService(PowerManager::class.java).isInteractive
+                else getSystemService(DisplayManager::class.java).getDisplay(targetId)?.state==android.view.Display.STATE_ON
+            if(!SessionController.targetConfirmed || !targetInteractive ||
+                getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
+                forceMouseOff("context_lost")
+                return
+            }
         }
         scheduleSourceChange()
     }
@@ -176,16 +264,55 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
             Log.i("MobiMapperKeys", "control=$name action=${event.action} code=${event.keyCode} scan=${event.scanCode} device=${event.deviceId} handled=$handled owned=$owned active=${SessionController.active} mouse=$appliedMouseCapture requested=$requestedMouseCapture tail=${consumedKeys.size}")
         }
     }
+    /** Anchor only this editor admission to a real, currently authorized APP window. */
+    fun beginEditorPresentation(packageName:String,displayId:Int):Boolean {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        endEditorPresentation("replaced")
+        refreshContext()
+        val snapshot=windowContext
+        val selected=snapshot.selected
+        val now=SystemClock.uptimeMillis()
+        val realApplication=selected!=null && snapshot.windows.any {
+            it.id==selected.id && it.type==AccessibilityWindowInfo.TYPE_APPLICATION &&
+                it.rootResolved && it.packageName==packageName
+        }
+        if(SessionController.mode!=SessionMode.EDITING || !SessionPolicy.mayEdit(SessionController.contacts,
+                SessionController.releaseUnverified,SessionController.active) || SessionController.armed ||
+            SessionController.targetPackage!=packageName || SessionController.targetDisplayId!=displayId ||
+            !SessionController.targetConfirmed || snapshot.targetPackage!=packageName || snapshot.displayId!=displayId ||
+            !snapshot.trustedFocus || snapshot.focusedDisplayId!=displayId || snapshot.foregroundPackage!=packageName ||
+            snapshot.brokerFocusAgeMs !in 0L..500L || now-snapshot.capturedUptime !in 0L..500L || !realApplication) {
+            editorAnchorResetReason="admission_context_unconfirmed"
+            return false
+        }
+        // Editor mouse/keyboard operations must never overlap source capture, even while a
+        // previous key's deferred source-change callback is still pending.
+        forceMouseOff("editor_presentation")
+        editorPresentationToken=++nextEditorPresentationToken
+        val actualWindow=requireNotNull(selected)
+        editingPresentation=EditingPresentation(EditorPresentationAnchor(editorPresentationToken,packageName,
+            actualWindow.frame),actualWindow.id,SessionController.activeProfileId,snapshot.capturedUptime)
+        windowContext=snapshot.copy(editorAnchor=editingPresentation,editorPresentationAllowed=false)
+        editorAnchorResetReason=""
+        return true
+    }
+    fun endEditorPresentation(reason:String="editor_closed") {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        editingPresentation=null;editorPresentationToken=0L;editorAnchorResetReason=reason
+        val snapshot=windowContext
+        if(snapshot.editorAnchor!=null || snapshot.editorPresentationAllowed)
+            windowContext=snapshot.copy(editorAnchor=null,editorPresentationAllowed=false)
+    }
     fun boundsForPackage(packageName:String):Rect? {
         val snapshot=windowContext
-        if(snapshot.targetPackage!=packageName) return null
+        if(snapshot.targetPackage!=packageName || snapshot.displayId!=SessionController.targetDisplayId) return null
         val bounds=snapshot.selected?.frame ?: return null
         return Rect(bounds.left,bounds.top,bounds.right,bounds.bottom)
     }
     /** Launch deduplication only; an occluding window can still forbid mapping in this context. */
     fun isPackageForegroundForLaunch(packageName:String):Boolean {
         val snapshot=windowContext
-        return snapshot.targetPackage==packageName && snapshot.selected?.packageName==packageName &&
+        return snapshot.displayId==SessionController.targetDisplayId && snapshot.targetPackage==packageName && snapshot.selected?.packageName==packageName &&
             snapshot.foregroundPackage==packageName
     }
     /** Cold diagnostics of the same immutable snapshot used by input; no root/window IPC here. */
@@ -196,6 +323,29 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
             "type" to window.type,"layer" to window.frame.layer,"bounds" to bounds(window.frame),
             "focused" to window.focused,"active" to window.active,"rootResolved" to window.rootResolved)
         return mapOf("targetPackage" to snapshot.targetPackage,"selectedWindowId" to snapshot.selected?.id,
+            "displayId" to snapshot.displayId,"focusedDisplayId" to snapshot.focusedDisplayId,"trustedFocus" to snapshot.trustedFocus,
+            "brokerFocusAgeMs" to snapshot.brokerFocusAgeMs,
+            "editorPresentationAllowed" to snapshot.editorPresentationAllowed,
+            "editorAnchorResetReason" to editorAnchorResetReason,
+            "editorPresentationAnchor" to snapshot.editorAnchor?.let {
+                mapOf("token" to it.anchor.token,"packageName" to it.anchor.packageName,
+                    "displayId" to it.anchor.frame.displayId,"windowId" to it.windowId,"profileId" to it.profileId,
+                    "bounds" to bounds(it.anchor.frame),"capturedUptime" to it.capturedUptime)
+            },
+            "serviceMotionSources" to runCatching { serviceInfo.motionEventSources }.getOrNull(),
+            "displayRouting" to mapOf("count" to displayRoutingCount,"lastInputDisplayId" to lastInputDisplayId,
+                "meanMs" to if(displayRoutingCount==0L) 0.0 else displayRoutingTotalNanos/1e6/displayRoutingCount,
+                "maxMs" to displayRoutingMaxNanos/1e6),
+            "rawMotion" to mapOf("callbacks" to rawMotionCallbacks,"lastSource" to lastRawMotionSource,
+                "lastAction" to lastRawMotionAction,"lastDeviceId" to lastRawMotionDeviceId,
+                "deviceSources" to lastRawMotionDeviceSources,
+                "deviceKnown" to lastRawMotionDeviceKnown,"external" to lastRawMotionExternal,
+                "virtual" to lastRawMotionVirtual,"filterReason" to lastRawMotionFilter),
+            "overlayContext" to lastOverlayContext,
+            "deviceInventory" to mapOf("knownCount" to inputInventoryCount,"changedCount" to deviceChangeCount,
+                "ignoredCount" to ignoredDeviceChanges,"materialCount" to materialDeviceChanges,
+                "addedCount" to addedDeviceCount,"removedCount" to removedDeviceCount,
+                "lastChange" to lastDeviceChange,"lastRemoval" to lastDeviceRemoval),
             "selectedBounds" to snapshot.selected?.frame?.let(::bounds),"targetWindowPresent" to (snapshot.selected!=null),
             "foregroundPackage" to snapshot.foregroundPackage,"rootPackage" to snapshot.rootPackage,
             "windowCount" to snapshot.windows.size,"capturedUptime" to snapshot.capturedUptime,
@@ -209,10 +359,16 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
     /** Window metadata is refreshed on window events, never by each mouse sample. */
     fun refreshContext() {
         val target=SessionController.targetPackage
+        val displayId=SessionController.targetDisplayId
+        multipleDisplays=getSystemService(DisplayManager::class.java).displays.count { it.isValid }>1
         val currentRoot=runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+        val focusQueryStarted=SystemClock.uptimeMillis()
+        val focused=runCatching { dev.mobimapper.mobimapper.backend.BackendRegistry.injector?.focusedApplication() }.getOrNull()
+        val trustedFocus=focused?.getBoolean("valid")==true
+        val focusedDisplay=if(trustedFocus) focused?.getInt("displayId",-1) ?: -1 else if(!multipleDisplays && displayId==0) 0 else -1
         // Resolve each root once. Retain known ownership for a continuously visible window ID,
         // but never retain bounds/a window after it disappears from this snapshot.
-        val rawWindows=windows.filter { it.displayId==0 }.mapNotNull { window -> runCatching {
+        val rawWindows=(windowsOnAllDisplays[displayId] ?: emptyList()).filter { it.displayId==displayId }.mapNotNull { window -> runCatching {
             val owner=runCatching { window.root?.packageName?.toString() }.getOrNull()
             WindowMetadata(window.id,window.type,owner,frame(window),window.isFocused,window.isActive,owner!=null)
         }.getOrNull() }
@@ -220,17 +376,20 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         val contextWindows=rawWindows.map { it.copy(packageName=windowOwners[it.id]) }
         val appWindows=contextWindows.filter { it.type==AccessibilityWindowInfo.TYPE_APPLICATION }
         val focusedApp=appWindows.firstOrNull { it.focused }?.packageName ?: appWindows.firstOrNull { it.active }?.packageName
-        val ownEditor=(GameCoordinator.ownOverlayVisible && currentRoot==packageName) ||
+        val ownEditor=focusedDisplay==displayId && ((GameCoordinator.ownOverlayVisible && currentRoot==packageName) ||
             (currentRoot==null && contextWindows.any {
                 WindowSelectionPolicy.ownsFocusedEditorOverlay(GameCoordinator.editorVisible,it.type,
-                    it.packageName,packageName,it.frame,it.focused)
-            })
-        val foreground=if(ownEditor) focusedApp else if(currentRoot==target && focusedApp!=null && focusedApp!=target)
-            null else currentRoot ?: focusedApp
-        val previous=windowContext.takeIf { it.targetPackage==target }?.selected?.id
+                    it.packageName,packageName,it.frame,it.focused,displayId)
+            }))
+        val foreground=if(trustedFocus) {
+            if(focusedDisplay==displayId) focused?.getString("packageName") else null
+        } else if(focusedDisplay!=displayId) null
+            else if(ownEditor) focusedApp else if(currentRoot==target && focusedApp!=null && focusedApp!=target)
+                null else currentRoot ?: focusedApp
+        val previous=windowContext.takeIf { it.targetPackage==target && it.displayId==displayId }?.selected?.id
         val targetWindow=WindowSelectionPolicy.selectTarget(appWindows.map {
             ApplicationWindowCandidate(it.id,it.packageName,it.frame,it.focused,it.active)
-        },target,previous)
+        },target,previous,displayId)
         val targetFrame=targetWindow?.frame
         val targetBounds=targetFrame?.let { PointerBounds(it.left.toFloat(),it.top.toFloat(),it.right.toFloat(),it.bottom.toFloat()) }
         val candidates=contextWindows.map { ContextWindowCandidate(it.type,it.packageName,it.frame) }
@@ -241,12 +400,12 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
             PointerBounds(it.left.toFloat(),it.top.toFloat(),it.right.toFloat(),it.bottom.toFloat())
         } }
         val systemWindows=contextWindows.filter { it.type==AccessibilityWindowInfo.TYPE_SYSTEM }
-        val coveringWindow=targetFrame?.let { SessionPolicy.coveringWindow(it,candidates,target,packageName) }
+        val focusedForeign=contextWindows.firstOrNull { it.focused && it.packageName!=target && it.packageName!=packageName }
+        val coveringWindow=focusedForeign?.let { ContextWindowCandidate(it.type,it.packageName,it.frame) }
+            ?: targetFrame?.let { SessionPolicy.coveringWindow(it,candidates,target,packageName) }
         val blocked=coveringWindow!=null
         val coveringPackage=coveringWindow?.packageName
         val capturedUptime=SystemClock.uptimeMillis()
-        windowContext=CachedWindowContext(target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
-            contextWindows,blockedWindows,capturedUptime)
         if(blocked!=contextBlockedBySystemWindow || coveringPackage!=contextCoveringSystemPackage) {
             Log.i("MobiMapperContext","system_cover blocked=$blocked package=$coveringPackage type=${coveringWindow?.type} layer=${coveringWindow?.frame?.layer} target=$target uptime=$capturedUptime")
         }
@@ -257,12 +416,44 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         contextCheckedUptime=capturedUptime
         // This cached property also gates awaitTarget/armProfile. Focus alone must not arm a
         // session while an external window, even of unknown type, covers the application.
-        val confirmed=SessionPolicy.authorizedContext(target,foreground,ownEditor,targetWindow!=null,blocked)
+        val displayReady=getSystemService(DisplayManager::class.java).getDisplay(displayId)?.state==android.view.Display.STATE_ON
+        val locked=getSystemService(KeyguardManager::class.java).isKeyguardLocked
+        val confirmed=displayReady && !locked && SessionPolicy.authorizedContext(target,foreground,ownEditor,targetWindow!=null,blocked)
+        val brokerFocusAgeMs=SystemClock.uptimeMillis()-focusQueryStarted
+        val presentation=editingPresentation
+        val focusedOwnWindow=contextWindows.firstOrNull {
+            it.focused && it.rootResolved && it.packageName==packageName &&
+                (it.type==AccessibilityWindowInfo.TYPE_SYSTEM || it.type==AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY)
+        }?.let { ContextWindowCandidate(it.type,it.packageName,it.frame,it.focused,it.rootResolved) }
+        val presentationIdentity=GameCoordinator.editorVisible && presentation!=null &&
+            presentation.profileId==SessionController.activeProfileId && SessionController.mode==SessionMode.EDITING &&
+            SessionPolicy.mayEdit(SessionController.contacts,SessionController.releaseUnverified,SessionController.active) && !SessionController.armed &&
+            presentation.anchor.packageName==target && presentation.anchor.frame.displayId==displayId
+        val brokerMatches=trustedFocus && foreground==target && focusedDisplay==displayId && brokerFocusAgeMs in 0L..500L
+        val foreignRoot=currentRoot!=null && currentRoot!=target && currentRoot!=packageName
+        // An anchor can guard presentation only. It is never substituted for selected,
+        // targetBounds, targetFrame, targetConfirmed or any engine/injection metadata.
+        val presentationCovered=presentation?.let {
+            SessionPolicy.coveringWindow(it.anchor.frame,candidates,target,packageName)!=null
+        } ?: false
+        val editorPresentationAllowed=displayReady && !locked && !foreignRoot && focusedForeign==null &&
+            !presentationCovered && presentationIdentity && SessionPolicy.mayRetainEditorPresentation(
+                SessionController.mode,SessionController.active,SessionController.contacts,SessionController.releaseUnverified,
+                target,displayId,packageName,editorPresentationToken,presentation?.anchor,
+                focused?.getString("packageName"),focusedDisplay,trustedFocus,brokerFocusAgeMs,focusedOwnWindow)
+        // The APP may still be visible during the initial editor focus handoff. Preserve the
+        // anchor only while that actual APP remains authorized; a foreign/unknown focus ends it.
+        if(presentation!=null && !(presentationIdentity && displayReady && !locked && !foreignRoot &&
+                focusedForeign==null && !presentationCovered && brokerMatches &&
+                (editorPresentationAllowed || (confirmed && targetWindow!=null))))
+            endEditorPresentation("context_or_identity_lost")
+        windowContext=CachedWindowContext(displayId,focusedDisplay,trustedFocus,target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
+            contextWindows,blockedWindows,capturedUptime,brokerFocusAgeMs,editorPresentationAllowed,editingPresentation)
         currentApplicationPackage=if(confirmed) target else if(blocked || foreground==target) null else foreground
         if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
         SessionController.targetChanged(confirmed)
         if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
-        GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) })
+        GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed)
     }
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || event?.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
@@ -321,10 +512,37 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         return bound
     }
     override fun onMotionEvent(event: MotionEvent) {
-        if (!SessionController.active) return
-        if (!SessionController.targetConfirmed) { SessionController.pause("Destino no confirmado"); forceMouseOff("focus_lost"); return }
-        val device = event.device ?: return
-        if (!device.isExternal || device.isVirtual || event.isFromSource(InputDevice.SOURCE_TOUCHSCREEN)) return
+        rawMotionCallbacks++;lastRawMotionSource=event.source;lastRawMotionAction=event.actionMasked
+        lastRawMotionDeviceId=event.deviceId;lastRawMotionDeviceSources=0;lastRawMotionDeviceKnown=false
+        lastRawMotionExternal=false;lastRawMotionVirtual=false
+        if (!SessionController.active) { lastRawMotionFilter="inactive";return }
+        if (!SessionController.targetConfirmed) {
+            lastRawMotionFilter="context"
+            SessionController.pause("Destino no confirmado"); forceMouseOff("focus_lost"); return
+        }
+        val device = event.device
+        if(device==null) { lastRawMotionFilter="null_device";return }
+        lastRawMotionDeviceKnown=true;lastRawMotionExternal=device.isExternal;lastRawMotionVirtual=device.isVirtual
+        lastRawMotionDeviceSources=device.sources
+        val rejected=PhysicalMouseInputPolicy.rejectionReason(event.source,lastRawMotionDeviceSources,
+            lastRawMotionExternal,lastRawMotionVirtual)
+        if(rejected!=null) { lastRawMotionFilter=rejected;return }
+        lastRawMotionFilter="accepted"
+        // Accessibility captures mouse sources globally. Resolve the event's actual display in
+        // the already authorized shell process; never infer it from device, coordinates or focus.
+        if(multipleDisplays || SessionController.targetDisplayId!=0) {
+            val started=SystemClock.elapsedRealtimeNanos()
+            val eventDisplay=runCatching {
+                dev.mobimapper.mobimapper.backend.BackendRegistry.injector?.motionDisplayId(event)
+            }.getOrNull()
+            val elapsed=SystemClock.elapsedRealtimeNanos()-started
+            displayRoutingCount++;displayRoutingTotalNanos+=elapsed
+            displayRoutingMaxNanos=maxOf(displayRoutingMaxNanos,elapsed);lastInputDisplayId=eventDisplay ?: -1
+            if(eventDisplay!=SessionController.targetDisplayId) {
+                SessionController.pause(if(eventDisplay==null) "No se pudo confirmar la pantalla del ratón" else "Ratón en otra pantalla; reanuda manualmente")
+                forceMouseOff("input_display_changed");return
+            }
+        }
         val released=if(physicalButtonsKnown) physicalButtons and event.buttonState.inv() else 0
         physicalButtons=event.buttonState;physicalButtonsKnown=true
         // A mode handoff suppresses held buttons for game actions, but their real UP must still
@@ -367,7 +585,20 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
                 cursorPresentationActive=true
             }
             // Position is initialized before addView: neither (0,0) nor a previous session can flash.
-            cursorOverlay.moveTo(cursorX,cursorY);cursorOverlay.show()
+            try {
+                val overlay=cursorOverlay
+                overlay.moveTo(cursorX,cursorY);overlay.show()
+            } catch (failure:WindowManager.BadTokenException) {
+                GameCoordinator.presentationUnavailable(failure,"cursor")
+                forceMouseOff("cursor_bad_token")
+            } catch (failure:WindowManager.InvalidDisplayException) {
+                // The display can disappear in WindowManager before its listener reaches us.
+                GameCoordinator.presentationUnavailable(failure,"cursor")
+                forceMouseOff("cursor_display_removed")
+            } catch (_:IllegalArgumentException) {
+                // A context can reject a display removed during cursor publication.
+                GameCoordinator.displayUnavailable(SessionController.targetDisplayId)
+            }
         } else clearCursorInteraction()
     }
     private fun clearCursorInteraction() {
@@ -375,7 +606,7 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         cursorUiOwned=false;cursorGameDown=false;cursorBlockedClick=false
         cursorSystemGesture=false;cursorOpenNotifications=false
         cursorPresentationActive=false
-        if(cursorDelegate.isInitialized()) cursorOverlay.hide()
+        cursorInstance?.hide()
     }
     /** Main-thread presentation barrier for a mapped cursor toggle's one-shot touch. */
     fun hideCursorForTransition() { clearCursorInteraction() }
@@ -415,7 +646,7 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         if(primaryChanged && down) {
             // A deliberate top-edge drag opens Android through accessibility after release,
             // never as a touch targeted at the game's UID.
-            if(cursorY<=8*resources.displayMetrics.density) {
+            if(SessionController.targetDisplayId==0 && cursorY<=8*resources.displayMetrics.density) {
                 cursorSystemGesture=true;cursorSystemStartY=cursorY;cursorOpenNotifications=false
                 return
             }
@@ -441,21 +672,77 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
     }
     fun allowsInjection(frame:TouchFrame,virtualCameraAdmitted:Boolean=false):Boolean {
         val snapshot=windowContext
+        if(snapshot.displayId!=SessionController.targetDisplayId) return false
         return CursorPointPolicy.allowsFrame(frame.action,frame.xs,frame.ys,snapshot.targetBounds,snapshot.blockedBounds,frame.ids,virtualCameraAdmitted)
     }
-    override fun onInputDeviceAdded(deviceId: Int) = Unit
-    override fun onInputDeviceChanged(deviceId: Int) {
-        if (SessionController.active) SessionController.pause("Cambió un dispositivo; reanuda manualmente")
+    private data class InputDeviceRead(val snapshot:InputDeviceSnapshot?,val error:String?=null)
+    /** Cold callback work only. Absolute X/Y ranges may follow DeX viewports; mapping uses relative axes. */
+    private fun readInputDevice(deviceId:Int):InputDeviceRead = try {
+        val device=getSystemService(InputManager::class.java).getInputDevice(deviceId)
+        if(device==null) InputDeviceRead(null,"not_found") else {
+            val supported=if(device.isExternal && !device.isVirtual && device.supportsSource(InputDevice.SOURCE_KEYBOARD)) {
+                val present=device.hasKeys(*inventoryKeyCodes)
+                check(present.size==inventoryKeyCodes.size)
+                inventoryKeyCodes.filterIndexed { index,_ -> present[index] }.toSet()
+            } else emptySet()
+            val ranges=device.motionRanges.filter {
+                it.axis==MotionEvent.AXIS_RELATIVE_X || it.axis==MotionEvent.AXIS_RELATIVE_Y || it.axis==MotionEvent.AXIS_VSCROLL
+            }.map { InputDeviceMotionRange(it.axis,it.source,it.min,it.max,it.flat,it.fuzz,it.resolution) }.toSet()
+            InputDeviceRead(InputDeviceSnapshot(device.descriptor,device.vendorId,device.productId,device.sources,
+                device.keyboardType,device.isExternal,device.isVirtual,device.isEnabled,ranges,supported,device.name))
+        }
+    } catch(failure:Exception) { InputDeviceRead(null,failure.javaClass.simpleName) }
+    private fun inputDeviceDiagnostic(value:InputDeviceSnapshot?):Map<String,Any?>?=value?.let {
+        mapOf("name" to it.name,"descriptor" to it.descriptor,"vendorId" to it.vendorId,"productId" to it.productId,
+            "sources" to it.sources,"keyboardType" to it.keyboardType,"external" to it.external,
+            "virtual" to it.virtual,"enabled" to it.enabled,"supportedKeys" to it.supportedKeys.sorted(),
+            "motionRanges" to it.motionRanges.sortedWith(compareBy<InputDeviceMotionRange> { range -> range.axis }.thenBy { range -> range.source }).map { range ->
+                mapOf("axis" to range.axis,"source" to range.source,"min" to range.min,"max" to range.max,
+                    "flat" to range.flat,"fuzz" to range.fuzz,"resolution" to range.resolution)
+            })
     }
-    override fun onInputDeviceRemoved(deviceId: Int) {
-        consumedKeys.removeAll { (it shr 32).toInt() == deviceId }
+    private fun forgetDevicePresses(deviceId:Int) {
+        consumedKeys.removeAll { (it shr 32).toInt()==deviceId }
         nativeKeys.removeAll { (it shr 32).toInt()==deviceId }
         profileSwitches.removeDevice(deviceId)
-        if (SessionController.active) SessionController.pause("Periférico desconectado")
-        scheduleSourceChange()
     }
-    override fun onInterrupt() { SessionController.pause("Accesibilidad interrumpida"); forceMouseOff("service_interrupted") }
+    override fun onInputDeviceAdded(deviceId: Int) {
+        val current=readInputDevice(deviceId).snapshot
+        if(current!=null) inputInventory[deviceId]=current else inputInventory.remove(deviceId)
+        inputInventoryCount=inputInventory.size;addedDeviceCount++
+        // Reconnecting a peripheral never arms a session or recreates held actions.
+    }
+    override fun onInputDeviceChanged(deviceId: Int) {
+        val before=inputInventory[deviceId]
+        val read=readInputDevice(deviceId);val after=read.snapshot
+        if(after!=null) inputInventory[deviceId]=after else inputInventory.remove(deviceId)
+        inputInventoryCount=inputInventory.size;deviceChangeCount++
+        val decision=InputDeviceChangePolicy.evaluate(before,after)
+        if(decision.pause) materialDeviceChanges++ else ignoredDeviceChanges++
+        val pausing=decision.pause && (SessionController.active || SessionController.armed)
+        lastDeviceChange=mapOf("uptimeMs" to SystemClock.uptimeMillis(),"deviceId" to deviceId,
+            "reason" to decision.reason,"changedFields" to decision.changedFields,"pauseRequired" to decision.pause,
+            "pausedActiveSession" to pausing,"snapshotError" to read.error,
+            "before" to inputDeviceDiagnostic(before),"after" to inputDeviceDiagnostic(after))
+        Log.i("MobiMapperDevice","changed id=$deviceId reason=${decision.reason} fields=${decision.changedFields.joinToString()} pause=$pausing")
+        if(decision.pause) {
+            forgetDevicePresses(deviceId)
+            if(pausing) SessionController.pause("Cambió un periférico; reanuda manualmente")
+            forceMouseOff("device_changed")
+        }
+    }
+    override fun onInputDeviceRemoved(deviceId: Int) {
+        val previous=inputInventory.remove(deviceId)
+        inputInventoryCount=inputInventory.size;removedDeviceCount++
+        lastDeviceRemoval=mapOf("uptimeMs" to SystemClock.uptimeMillis(),"deviceId" to deviceId,
+            "reason" to "device_removed","previous" to inputDeviceDiagnostic(previous))
+        forgetDevicePresses(deviceId)
+        if(SessionController.active || SessionController.armed) SessionController.pause("Periférico desconectado")
+        forceMouseOff("device_removed")
+    }
+    override fun onInterrupt() { endEditorPresentation("service_interrupted");SessionController.pause("Accesibilidad interrumpida"); forceMouseOff("service_interrupted") }
     override fun onDestroy() {
+        endEditorPresentation("service_destroyed")
         GameCoordinator.detach(this)
         SessionController.pause("Servicio de accesibilidad desconectado")
         forceMouseOff("service_destroyed")
@@ -463,6 +750,8 @@ class CaptureService : AccessibilityService(), InputManager.InputDeviceListener 
         consumedKeys.clear()
         nativeKeys.clear()
         profileSwitches.clear()
+        inputInventory.clear();inputInventoryCount=0
+        cursorInstance=null;overlayContexts.clear()
         main.removeCallbacks(applySources); main.removeCallbacks(sourceTailTimeout)
         getSystemService(InputManager::class.java).unregisterInputDeviceListener(this)
         super.onDestroy()

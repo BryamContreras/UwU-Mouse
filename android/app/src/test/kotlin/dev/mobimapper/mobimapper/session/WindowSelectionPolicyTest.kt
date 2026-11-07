@@ -22,6 +22,13 @@ class WindowSelectionPolicyTest {
         assertFalse(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,editorFrame.copy(displayId=1),true))
         assertFalse(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,editorFrame.copy(right=0),true))
     }
+    @Test fun externalEditorFocusEvidenceMustBelongToTheSelectedDisplay() {
+        val externalEditor=editorFrame.copy(displayId=2)
+        assertTrue(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,externalEditor,true,displayId=2))
+        assertFalse(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,editorFrame,true,displayId=2))
+        assertFalse(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,externalEditor.copy(displayId=3),true,displayId=2))
+        assertFalse(WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,externalEditor,true))
+    }
     @Test fun editorFocusNeverAuthorizesOwnActivityOtherApplicationMissingTargetOrSystemCover() {
         val ownEditor=WindowSelectionPolicy.ownsFocusedEditorOverlay(true,4,ownPackage,ownPackage,editorFrame,true)
         assertFalse(SessionPolicy.authorizedContext("game",ownPackage,ownEditor,true))
@@ -37,6 +44,17 @@ class WindowSelectionPolicyTest {
         val main=window(1);val popup=window(2,500,300,5,focused=true,active=true)
         assertEquals(main,WindowSelectionPolicy.selectTarget(listOf(popup,main),"game",null))
         assertEquals(main,WindowSelectionPolicy.selectTarget(listOf(main,popup),"game",2))
+    }
+    @Test fun selectedExternalDisplayIgnoresLargerPhoneWindowsAndKeepsTheMainSurface() {
+        val phone=window(1,3840,2160,layer=8,focused=true,active=true)
+        val externalMain=window(2,1920,1080,display=2)
+        val externalPopup=window(3,600,400,layer=5,focused=true,active=true,display=2)
+        val anotherDisplay=window(4,3840,2160,layer=9,display=3)
+        val candidates=listOf(phone,externalPopup,anotherDisplay,externalMain)
+        assertEquals(externalMain,WindowSelectionPolicy.selectTarget(candidates,"game",phone.id,displayId=2))
+        assertEquals(externalMain,WindowSelectionPolicy.selectTarget(candidates.reversed(),"game",externalPopup.id,displayId=2))
+        assertNull(WindowSelectionPolicy.selectTarget(listOf(phone,anotherDisplay),"game",externalMain.id,displayId=2))
+        assertEquals(phone,WindowSelectionPolicy.selectTarget(candidates,"game",externalMain.id))
     }
     @Test fun equalAreaRetainsPreviousWindowAcrossFocusAndLayerChanges() {
         val main=window(1);val duplicate=window(2,layer=5,focused=true,active=true)

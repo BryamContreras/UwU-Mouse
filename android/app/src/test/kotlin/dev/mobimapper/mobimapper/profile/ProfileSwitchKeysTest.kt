@@ -28,7 +28,7 @@ class ProfileSwitchKeysTest {
         assertEquals(original,repository.selected());assertEquals(0,repository.selected()!!.switchKey)
         assertEquals(bytes,storage.text);assertEquals(0,storage.writes)
         repository.save(requireNotNull(repository.selected()))
-        assertEquals(8,JSONObject(storage.text!!).getInt("schemaVersion"));assertEquals(original,ProfileRepository(storage).selected())
+        assertEquals(GameProfile.SCHEMA_VERSION,JSONObject(storage.text!!).getInt("schemaVersion"));assertEquals(original,ProfileRepository(storage).selected())
     }
 
     @Test fun multipleMappingsAndProfileShortcutsRoundTripIndependently() {

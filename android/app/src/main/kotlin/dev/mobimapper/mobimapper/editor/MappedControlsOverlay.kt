@@ -1,6 +1,7 @@
 package dev.mobimapper.mobimapper.editor
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
@@ -14,8 +15,8 @@ import dev.mobimapper.mobimapper.profile.GameProfile
 import kotlin.math.min
 
 /** Static presentation only: no touch/focus, no entry into the input stream or per-mouse work. */
-class MappedControlsOverlay(private val service:AccessibilityService) {
-    private val windows=service.getSystemService(WindowManager::class.java)
+class MappedControlsOverlay(private val service:AccessibilityService,private val overlayContext:Context=service) {
+    private val windows=overlayContext.getSystemService(WindowManager::class.java)
     private var view:ControlsView?=null
     private var profile:GameProfile?=null
     val visible:Boolean get()=view!=null
@@ -27,24 +28,29 @@ class MappedControlsOverlay(private val service:AccessibilityService) {
             if(current.alpha!=opacity) current.alpha=opacity
             return
         }
-        val controls=ControlsView(service).apply {
+        val controls=ControlsView(overlayContext).apply {
             contentDescription="MobiMapper · controles visibles"
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
             alpha=opacity;prepare(profile)
         }
-        val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        val p=WindowManager.LayoutParams(-1,-1,OverlayWindows.type(overlayContext),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT).apply {
             gravity=Gravity.TOP or Gravity.START;title="MobiMapper · Controles"
+            alpha=OverlayWindows.nonTouchAlpha(overlayContext)
             layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;setFitInsetsTypes(0)
         }
+        // Commit presentation ownership only after the token/display is admitted.
         windows.addView(controls,p);view=controls;this.profile=profile
     }
-    fun hide() { val old=view ?: return;view=null;profile=null;windows.removeViewImmediate(old) }
+    fun hide() {
+        val old=view ?: return;view=null;profile=null
+        try { windows.removeViewImmediate(old) } catch (_:IllegalArgumentException) { /* Display removal may detach it first. */ }
+    }
     fun avoid(bounds:Rect?) { view?.avoid(bounds) }
 
-    private class ControlsView(service:AccessibilityService):View(service) {
+    private class ControlsView(context:Context):View(context) {
         private data class Marker(val x:Float,val y:Float,val radius:Float,val label:String,val detail:String="")
         private var markers:List<Marker> = emptyList()
         private val density=resources.displayMetrics.density

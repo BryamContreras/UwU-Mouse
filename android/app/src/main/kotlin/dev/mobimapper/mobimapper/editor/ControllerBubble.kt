@@ -22,8 +22,8 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Separate small bubble/menu windows; neither takes the game's keyboard focus. */
-class ControllerBubble(private val service: AccessibilityService) {
-    private val windows = service.getSystemService(WindowManager::class.java)
+class ControllerBubble(private val service: AccessibilityService, private val overlayContext: android.content.Context = service) {
+    private val windows = overlayContext.getSystemService(WindowManager::class.java)
     private val settings = BubbleSettingsStore(service)
     @Volatile private var style = settings.value
     private var bubble: ImageView? = null
@@ -31,6 +31,8 @@ class ControllerBubble(private val service: AccessibilityService) {
     private var menu: ScrollView? = null
     private var menuParams:WindowManager.LayoutParams?=null
     private var menuPanel:View?=null
+    private var menuStatus:TextView?=null
+    private var bubblePlayingStyle:Boolean?=null
     private var label = "Pausada"
     private var profileName = "Perfil local"
     private var editEnabled = true
@@ -51,7 +53,9 @@ class ControllerBubble(private val service: AccessibilityService) {
     private var onCreateProfile:(String)->Unit = {}
     private var onActivateProfile:(String)->Unit = {}
     private var onProfileKey:(String,Int)->Unit = { _,_ -> }
+    private var onDeleteProfile:(String)->Unit = {}
     private var pendingProfileKeyId:String?=null
+    private var pendingProfileDeleteId:String?=null
     private var profileError:String?=null
     private var renderProfiles:(()->Unit)?=null
     val settingsSnapshot:BubbleSettings get()=style
@@ -70,7 +74,8 @@ class ControllerBubble(private val service: AccessibilityService) {
              editEnabled: Boolean, playEnabled: Boolean, interactionEnabled: Boolean, cursorHint: String,
              pointerIntercepted:Boolean=false,onCursorReturn:()->Unit={},onVisualSettingsChanged:()->Unit={},
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
-             onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->}) {
+             onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
+             onDeleteProfile:(String)->Unit={}) {
         check(Looper.myLooper() == Looper.getMainLooper())
         this.label = label; this.profileName = profileName; this.onMenu = onMenu
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
@@ -80,13 +85,17 @@ class ControllerBubble(private val service: AccessibilityService) {
         this.onVisualSettingsChanged=onVisualSettingsChanged
         this.profileItems=profileItems;this.onCreateProfile=onCreateProfile
         this.onActivateProfile=onActivateProfile;this.onProfileKey=onProfileKey
+        this.onDeleteProfile=onDeleteProfile
+        menuStatus?.let { if(it.text.toString()!=label) it.text=label }
         if (bubble == null) createBubble()
         applyBubble()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createBubble() {
-        val view = ImageView(service).apply {
+        val view = ImageView(overlayContext).apply {
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            contentDescription="UwU Mouse · abrir opciones"
             setImageResource(R.drawable.mm_brand); scaleType=ImageView.ScaleType.FIT_CENTER
             imageTintList=null
             setPadding(dp(4),dp(4),dp(4),dp(4)); isClickable = true
@@ -128,32 +137,42 @@ class ControllerBubble(private val service: AccessibilityService) {
         val params = params("MobiMapper · Burbuja")
         val side=dp(style.sizeDp);val size=screen();val position=BubblePlacement.position(style,size.x,size.y,side)
         params.width=side;params.height=side;params.x=position.x;params.y=position.y
-        params.flags=params.flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-        bubble = view; bubbleParams = params
+        params.flags=bubbleFlags()
+        params.alpha=if(params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE!=0)
+            OverlayWindows.nonTouchAlpha(overlayContext) else 1f
+        // Publish ownership only after WindowManager admits the window. A rejected token
+        // leaves hide()/coordinator cleanup with no phantom attached bubble to remove.
         windows.addView(view, params)
+        bubble = view; bubbleParams = params
     }
 
     private fun applyBubble() {
         val view = bubble ?: return
         val p = requireNotNull(bubbleParams); val side = dp(style.sizeDp); val size = screen()
-        p.width = side; p.height = side
         val position=BubblePlacement.position(style,size.x,size.y,side)
-        p.x=position.x;p.y=position.y
         // F8 releases camera input using the existing source/UP transition, without per-sample UI work.
-        p.flags = baseFlags() or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-            if (interactionEnabled && !pointerIntercepted) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-        view.alpha = style.opacity
-        view.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
-            if(playing) intArrayOf(Color.rgb(76,150,248),Color.rgb(25,77,168))
-            else intArrayOf(Color.rgb(49,111,203),Color.rgb(22,58,124)),
-        ).apply {
-            shape = GradientDrawable.OVAL
-            setStroke(dp(2), if (playing) Color.rgb(177,220,255) else Color.rgb(116,170,239))
+        val flags=bubbleFlags()
+        val alpha=if(flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE!=0)
+            OverlayWindows.nonTouchAlpha(overlayContext) else 1f
+        val layoutChanged=p.width!=side || p.height!=side || p.x!=position.x || p.y!=position.y || p.flags!=flags || p.alpha!=alpha
+        p.width=side;p.height=side;p.x=position.x;p.y=position.y;p.flags=flags;p.alpha=alpha
+        if(view.alpha!=style.opacity) view.alpha=style.opacity
+        if(bubblePlayingStyle!=playing) {
+            view.background = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                if(playing) intArrayOf(Color.rgb(76,150,248),Color.rgb(25,77,168))
+                else intArrayOf(Color.rgb(49,111,203),Color.rgb(22,58,124)),
+            ).apply {
+                shape = GradientDrawable.OVAL
+                setStroke(dp(2), if (playing) Color.rgb(177,220,255) else Color.rgb(116,170,239))
+            }
+            bubblePlayingStyle=playing
         }
-        view.contentDescription = if (interactionEnabled) "UwU Mouse · abrir opciones"
+        val description = if (interactionEnabled) "UwU Mouse · abrir opciones"
             else if(cursorHint.isBlank()) "UwU Mouse · abre la app para pausar" else "UwU Mouse · $cursorHint para abrir opciones"
-        view.tooltipText = if(cursorHint.isBlank()) label else "$label · $cursorHint cursor"
-        windows.updateViewLayout(view, p)
+        val tooltip = if(cursorHint.isBlank()) label else "$label · $cursorHint cursor"
+        if(view.contentDescription!=description) view.contentDescription=description
+        if(view.tooltipText!=tooltip) view.tooltipText=tooltip
+        if(layoutChanged) windows.updateViewLayout(view, p)
     }
 
     /** The coordinator completes its mapping release barrier before opening this menu. */
@@ -161,31 +180,35 @@ class ControllerBubble(private val service: AccessibilityService) {
         check(Looper.myLooper() == Looper.getMainLooper())
         if (bubble == null) return
         closeMenu()
-        val panel = LinearLayout(service).apply {
+        val panel = LinearLayout(overlayContext).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8))
             background = gradient(Color.rgb(30,65,119),Color.rgb(10,27,60),14,Color.rgb(100,158,237))
         }
-        val header=LinearLayout(service).apply { orientation=LinearLayout.HORIZONTAL }
-        val menuGrip=ImageView(service).apply { setImageResource(R.drawable.mm_drag);imageTintList=null;contentDescription="Arrastrar menú" }
-        header.addView(menuGrip,LinearLayout.LayoutParams(dp(24),dp(40)))
-        val status=text(label,11f).apply { gravity=Gravity.CENTER_VERTICAL; typeface=android.graphics.Typeface.DEFAULT_BOLD }
+        val header=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+        val menuGrip=ImageView(overlayContext).apply {
+            setImageResource(R.drawable.mm_drag);imageTintList=null;contentDescription="Arrastrar menú"
+            setPadding(dp(8),dp(8),dp(8),dp(8))
+        }
+        header.addView(menuGrip,LinearLayout.LayoutParams(dp(40),dp(40)))
+        val status=text(label,11f).apply { gravity=Gravity.CENTER; typeface=android.graphics.Typeface.DEFAULT_BOLD }
+        menuStatus=status
         header.addView(status,LinearLayout.LayoutParams(0,dp(40),1f))
-        header.addView(button("×",true) { dismissMenu() }.apply { contentDescription="Cerrar menú" },LinearLayout.LayoutParams(dp(40),dp(40)))
+        header.addView(closeMenuButton(),LinearLayout.LayoutParams(dp(40),dp(40)))
         panel.addView(header)
-        val row=LinearLayout(service).apply { orientation=LinearLayout.HORIZONTAL }
-        val detail=LinearLayout(service).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(10),dp(4),dp(4)) }
+        val row=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+        val detail=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(10),dp(4),dp(4)) }
         fun appearancePanel() {
-            pendingProfileKeyId=null;renderProfiles=null;profileError=null
+            pendingProfileKeyId=null;pendingProfileDeleteId=null;renderProfiles=null;profileError=null
             detail.removeAllViews()
             slider(detail,"Tama\u00f1o de burbuja",32,72,style.sizeDp,{ "$it dp" }) { style=style.copy(sizeDp=it); applyBubble() }
             slider(detail,"Opacidad",30,100,(style.opacity*100).roundToInt(),{ "$it%" }) { style=style.copy(opacity=it/100f); applyBubble() }
-            val show=Switch(service).apply {
+            val show=Switch(overlayContext).apply {
                 text="Mostrar controles";textSize=12f;setTextColor(Color.WHITE)
                 thumbTintList=ColorStateList.valueOf(Color.rgb(186,224,255))
                 isChecked=style.showControls;contentDescription="Mostrar controles en pantalla"
             }
             detail.addView(show,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
-            val opacity=LinearLayout(service).apply { orientation=LinearLayout.VERTICAL }
+            val opacity=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL }
             detail.addView(opacity)
             slider(opacity,"Opacidad de controles",10,100,(style.controlsOpacity*100).roundToInt(),{ "$it%" }) {
                 style=style.copy(controlsOpacity=it/100f);onVisualSettingsChanged()
@@ -205,8 +228,34 @@ class ControllerBubble(private val service: AccessibilityService) {
             fun render() {
                 detail.removeAllViews()
                 detail.addView(text("Perfiles",12f).apply { typeface=android.graphics.Typeface.DEFAULT_BOLD })
+                val deleting=profileItems.firstOrNull { it.id==pendingProfileDeleteId }
+                if(deleting!=null) {
+                    detail.addView(text("¿Eliminar ${deleting.name}?",12f).apply { typeface=android.graphics.Typeface.DEFAULT_BOLD })
+                    detail.addView(text("Se borrará su mapeo.",11f))
+                    val confirmation=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+                    fun confirmationButton(name:String,danger:Boolean,action:(View)->Unit)=text(name,12f).apply {
+                        gravity=Gravity.CENTER;isClickable=true;contentDescription=name
+                        typeface=android.graphics.Typeface.DEFAULT_BOLD
+                        background=if(danger) gradient(Color.rgb(164,55,83),Color.rgb(104,35,59),8)
+                            else gradient(Color.rgb(46,87,145),Color.rgb(26,53,102),8)
+                        setOnClickListener(action)
+                    }
+                    confirmation.addView(confirmationButton("Cancelar",false) {
+                        pendingProfileDeleteId=null;profileError=null;render()
+                    },LinearLayout.LayoutParams(0,dp(38),1f).apply { marginEnd=dp(4) })
+                    confirmation.addView(confirmationButton("Eliminar",true) { clicked ->
+                        clicked.isEnabled=false
+                        try { onDeleteProfile(deleting.id);pendingProfileDeleteId=null;profileError=null }
+                        catch(e:Exception) { profileError=e.message ?: "No se pudo eliminar" }
+                        if(menuVisible) render()
+                    },LinearLayout.LayoutParams(0,dp(38),1f).apply { marginStart=dp(4) })
+                    detail.addView(confirmation,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
+                    profileError?.let { message -> detail.addView(text(message,11f).apply { setTextColor(Color.rgb(255,179,190)) }) }
+                    centerMenu();return
+                }
+                pendingProfileDeleteId=null
                 for(item in profileItems) {
-                    val row=LinearLayout(service).apply {
+                    val row=LinearLayout(overlayContext).apply {
                         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
                         setPadding(dp(7),dp(3),dp(5),dp(3))
                         background=gradient(if(item.selected) Color.rgb(41,103,187) else Color.rgb(24,57,107),Color.rgb(14,35,73),8)
@@ -233,7 +282,7 @@ class ControllerBubble(private val service: AccessibilityService) {
                         }
                     }
                     row.addView(key,LinearLayout.LayoutParams(dp(76),dp(32)).apply { marginStart=dp(6) })
-                    row.addView(ImageButton(service).apply {
+                    row.addView(ImageButton(overlayContext).apply {
                         setImageResource(R.drawable.mm_close);imageTintList=null
                         scaleType=ImageView.ScaleType.FIT_CENTER;setPadding(dp(6),dp(6),dp(6),dp(6))
                         minimumWidth=0;minimumHeight=0;background=gradient(Color.rgb(35,69,119),Color.rgb(19,41,80),7)
@@ -246,6 +295,15 @@ class ControllerBubble(private val service: AccessibilityService) {
                             render()
                         }
                     },LinearLayout.LayoutParams(dp(28),dp(28)).apply { marginStart=dp(5) })
+                    row.addView(text("Eliminar",10f).apply {
+                        gravity=Gravity.CENTER;isClickable=true
+                        setTextColor(Color.rgb(255,190,204));typeface=android.graphics.Typeface.DEFAULT_BOLD
+                        background=gradient(Color.rgb(93,48,79),Color.rgb(61,34,62),7)
+                        contentDescription="Eliminar perfil ${item.name}"
+                        setOnClickListener {
+                            pendingProfileKeyId=null;pendingProfileDeleteId=item.id;profileError=null;render()
+                        }
+                    },LinearLayout.LayoutParams(dp(52),dp(30)).apply { marginStart=dp(5) })
                     detail.addView(row,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(46)).apply { bottomMargin=dp(4) })
                 }
                 profileError?.let { message -> detail.addView(text(message,11f).apply { setTextColor(Color.rgb(255,179,190)) }) }
@@ -266,12 +324,11 @@ class ControllerBubble(private val service: AccessibilityService) {
                 },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(5) })
                 centerMenu()
             }
-            pendingProfileKeyId=null;profileError=null;renderProfiles={ render() };render()
+            pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles={ render() };render()
         }
         val mode=if(playing) "Control" else "Teclado"
-        val entries=listOf("Mapear" to R.drawable.mm_map,
+        val entries=listOf("Perfiles" to R.drawable.mm_profiles,"Mapear" to R.drawable.mm_map,
             mode to if(playing) R.drawable.mm_controller else R.drawable.mm_keyboard,
-            "Perfiles" to R.drawable.mm_profiles,
             "Ajustes" to R.drawable.mm_settings,"Cerrar sesi\u00f3n" to R.drawable.mm_close)
         for((name,icon) in entries) {
             val enabled=when(name) { "Mapear"->editEnabled;mode->playing || playEnabled;else->true }
@@ -287,11 +344,18 @@ class ControllerBubble(private val service: AccessibilityService) {
                 LinearLayout.LayoutParams(0,dp(76),1f).apply { setMargins(dp(3),dp(4),dp(3),0) })
         }
         panel.addView(row); panel.addView(detail)
-        val scroll = ScrollView(service).apply { addView(panel); isVerticalScrollBarEnabled=false }
+        val scroll = ScrollView(overlayContext).apply {
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
+            contentDescription="UwU Mouse · opciones"
+            addView(panel); isVerticalScrollBarEnabled=false
+        }
         val p = params("MobiMapper · Opciones")
         centerMenuGeometry(panel,p)
         installMenuDrag(menuGrip,scroll,p);installMenuDrag(status,scroll,p)
-        windows.addView(scroll, p); menu = scroll;menuParams=p;menuPanel=panel
+        try { windows.addView(scroll,p) }
+        catch(failure:WindowManager.BadTokenException) { closeMenu();throw failure }
+        catch(failure:WindowManager.InvalidDisplayException) { closeMenu();throw failure }
+        menu = scroll;menuParams=p;menuPanel=panel
         onVisualSettingsChanged()
     }
 
@@ -303,8 +367,11 @@ class ControllerBubble(private val service: AccessibilityService) {
     }
     private fun centerMenu() {
         val view=menu ?: return;val p=menuParams ?: return;val panel=menuPanel ?: return
-        centerMenuGeometry(panel,p);windows.updateViewLayout(view,p)
-        onVisualSettingsChanged()
+        val x=p.x;val y=p.y;val width=p.width;val height=p.height
+        centerMenuGeometry(panel,p)
+        if(x!=p.x || y!=p.y || width!=p.width || height!=p.height) {
+            windows.updateViewLayout(view,p);onVisualSettingsChanged()
+        }
     }
     @SuppressLint("ClickableViewAccessibility")
     private fun installMenuDrag(handle:View,view:View,p:WindowManager.LayoutParams) {
@@ -332,12 +399,10 @@ class ControllerBubble(private val service: AccessibilityService) {
                        format: (Int) -> String, change: (Int) -> Unit) {
         val caption = text("$name: ${format(initial)}", 11f)
         panel.addView(caption)
-        panel.addView(SeekBar(service).apply {
+        panel.addView(SeekBar(overlayContext).apply {
             this.min = min; this.max = max; progress = initial
             contentDescription = name
-            progressTintList=ColorStateList.valueOf(Color.rgb(108,182,255))
-            progressBackgroundTintList=ColorStateList.valueOf(Color.rgb(43,73,121))
-            thumbTintList=ColorStateList.valueOf(Color.rgb(186,224,255))
+            EditorSeekBarStyle.apply(this)
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar?) { saveStyle() }
@@ -350,7 +415,7 @@ class ControllerBubble(private val service: AccessibilityService) {
     private fun saveStyle() {
         if (!settings.save(style)) {
             style = settings.value; applyBubble()
-            Toast.makeText(service, "No se pudieron guardar los ajustes de burbuja", Toast.LENGTH_SHORT).show()
+            Toast.makeText(overlayContext, "No se pudieron guardar los ajustes de burbuja", Toast.LENGTH_SHORT).show()
         }
         onVisualSettingsChanged()
     }
@@ -369,10 +434,13 @@ class ControllerBubble(private val service: AccessibilityService) {
         }
         return try { view.dispatchTouchEvent(event) } finally { event.recycle() }
     }
-    /** Only an explicit profile-key picker owns this key; the service pairs its physical UP. */
+    /** Explicit key picking/confirmation only; the service pairs the physical UP. */
     fun captureProfileKey(code:Int):Boolean {
-        val id=pendingProfileKeyId ?: return false
         if(!menuVisible || !interactionEnabled) return false
+        if(pendingProfileDeleteId!=null && code==KeyEvent.KEYCODE_ESCAPE) {
+            pendingProfileDeleteId=null;profileError=null;renderProfiles?.invoke();return true
+        }
+        val id=pendingProfileKeyId ?: return false
         if(code==KeyEvent.KEYCODE_ESCAPE) {
             pendingProfileKeyId=null;profileError=null;renderProfiles?.invoke();return true
         }
@@ -390,34 +458,39 @@ class ControllerBubble(private val service: AccessibilityService) {
         else -> KeyEvent.keyCodeToString(code).removePrefix("KEYCODE_")
     }
     fun closeMenu() {
-        pendingProfileKeyId=null;profileError=null;renderProfiles=null
-        val view = menu ?: return; menu = null;menuParams=null;menuPanel=null; windows.removeViewImmediate(view);onVisualSettingsChanged()
+        pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles=null;menuStatus=null
+        val view = menu ?: return; menu = null;menuParams=null;menuPanel=null
+        try { windows.removeViewImmediate(view) } catch (_: IllegalArgumentException) { /* Display removal may detach it first. */ }
+        onVisualSettingsChanged()
     }
     fun hide() {
         check(Looper.myLooper() == Looper.getMainLooper())
-        closeMenu(); val view = bubble ?: return; bubble = null; bubbleParams = null; windows.removeViewImmediate(view)
+        closeMenu(); val view = bubble ?: return; bubble = null; bubbleParams = null;bubblePlayingStyle=null
+        try { windows.removeViewImmediate(view) } catch (_: IllegalArgumentException) { /* Display removal may detach it first. */ }
     }
     fun close() = hide()
     private fun gradient(top:Int,bottom:Int,radius:Int,stroke:Int?=null) = GradientDrawable(
         GradientDrawable.Orientation.TL_BR,intArrayOf(top,bottom),
     ).apply { cornerRadius=dp(radius).toFloat(); if(stroke!=null) setStroke(dp(1),stroke) }
-    private fun text(value: String, size: Float) = TextView(service).apply { text = value; textSize = size; setTextColor(Color.rgb(224,239,255)); setPadding(0, dp(2), 0, dp(2)) }
-    private fun button(value: String, enabled: Boolean, action: () -> Unit) = ImageButton(service).apply {
-        setImageResource(R.drawable.mm_close); scaleType=ImageView.ScaleType.FIT_CENTER
-        imageTintList=null
-        contentDescription=value; isEnabled = enabled
-        background=gradient(Color.rgb(42,82,145),Color.rgb(20,48,97),10,Color.rgb(76,126,195))
-        setPadding(dp(4),dp(4),dp(4),dp(4)); minimumHeight = dp(36)
-        setOnClickListener { action() }
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(36))
+    private fun text(value: String, size: Float) = TextView(overlayContext).apply { text = value; textSize = size; setTextColor(Color.rgb(224,239,255)); setPadding(0, dp(2), 0, dp(2)) }
+    private fun closeMenuButton() = FrameLayout(overlayContext).apply {
+        isClickable=true;contentDescription="Cerrar menú"
+        setOnClickListener { dismissMenu() }
+        addView(ImageView(overlayContext).apply {
+            setImageResource(R.drawable.mm_close);scaleType=ImageView.ScaleType.FIT_CENTER;imageTintList=null
+            setPadding(dp(6),dp(6),dp(6),dp(6));importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            background=GradientDrawable(GradientDrawable.Orientation.TL_BR,intArrayOf(Color.rgb(53,102,171),Color.rgb(26,59,116))).apply {
+                shape=GradientDrawable.OVAL;setStroke(dp(1),Color.rgb(99,156,230))
+            }
+        },FrameLayout.LayoutParams(dp(28),dp(28),Gravity.CENTER))
     }
-    private fun tile(name:String,icon:Int,action:()->Unit):View = LinearLayout(service).apply {
+    private fun tile(name:String,icon:Int,action:()->Unit):View = LinearLayout(overlayContext).apply {
         orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; isClickable=true; contentDescription=name
         val active=name.contains('\n')
         background=gradient(if(active) Color.rgb(68,139,237) else Color.rgb(42,91,166),
             if(active) Color.rgb(31,86,183) else Color.rgb(20,50,105),12,
             if(active) Color.rgb(148,204,255) else Color.rgb(67,111,176))
-        addView(ImageView(service).apply { setImageResource(icon); imageTintList=null; scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(32),dp(32)))
+        addView(ImageView(overlayContext).apply { setImageResource(icon); imageTintList=null; scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(32),dp(32)))
         addView(text(name.substringBefore('\n'),10.5f).apply {
             gravity=Gravity.CENTER; typeface=android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE); importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -432,14 +505,17 @@ class ControllerBubble(private val service: AccessibilityService) {
     }
     private fun screen(): Point = Point().also {
         @Suppress("DEPRECATION")
-        service.getSystemService(DisplayManager::class.java).getDisplay(0).getRealSize(it)
+        requireNotNull(if(overlayContext===service)
+            service.getSystemService(DisplayManager::class.java).getDisplay(0) else overlayContext.display) { "Pantalla de controles no disponible" }.getRealSize(it)
     }
     private fun baseFlags() = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+    private fun bubbleFlags() = baseFlags() or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+        if(interactionEnabled && !pointerIntercepted) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
     private fun params(title: String) = WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY, baseFlags(), PixelFormat.TRANSLUCENT).apply {
+        OverlayWindows.type(overlayContext), baseFlags(), PixelFormat.TRANSLUCENT).apply {
         gravity = Gravity.TOP or Gravity.START; this.title = title
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         setFitInsetsTypes(0)
     }
-    private fun dp(value: Int) = (value * service.resources.displayMetrics.density + .5f).toInt()
+    private fun dp(value: Int) = (value * overlayContext.resources.displayMetrics.density + .5f).toInt()
 }

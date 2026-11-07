@@ -11,6 +11,8 @@ class EditorDraft(
     screenHeight: Int,
     rotation: Int,
     suggestedArea: GameArea? = null,
+    displayScope: String = original.calibration.displayScope,
+    windowFrame: GameArea? = original.calibration.windowFrame,
 ) {
     enum class Control { JOYSTICK, CAMERA, ACTION, MACRO, AREA }
 
@@ -117,17 +119,20 @@ class EditorDraft(
 
     init {
         require(screenWidth >= 100 && screenHeight >= 100 && rotation in 0..3)
+        require(displayScope in setOf("phone","external"))
         val sameGeometry = original.calibration.screenWidth == screenWidth &&
-            original.calibration.screenHeight == screenHeight && original.calibration.rotation == rotation
-        val area = if (sameGeometry && original.calibration.confirmed) original.calibration.area else suggestedArea ?: GameArea(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat())
-        value = original.copy(calibration = Calibration(screenWidth, screenHeight, rotation, boundedArea(area, screenWidth, screenHeight), false))
+            original.calibration.screenHeight == screenHeight && original.calibration.rotation == rotation &&
+            original.calibration.displayScope==displayScope && original.calibration.windowFrame==windowFrame
+        val area = if (sameGeometry && original.calibration.confirmed) original.calibration.area else suggestedArea ?: windowFrame ?: GameArea(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat())
+        value = original.copy(calibration = Calibration(screenWidth, screenHeight, rotation, boundedArea(area, screenWidth, screenHeight), false,displayScope,windowFrame))
         value = boundedControls(value)
     }
 
     fun replace(profile: GameProfile) {
         require(profile.id == original.id && profile.packageName == original.packageName)
         require(profile.calibration.screenWidth == value.calibration.screenWidth &&
-            profile.calibration.screenHeight == value.calibration.screenHeight && profile.calibration.rotation == value.calibration.rotation)
+            profile.calibration.screenHeight == value.calibration.screenHeight && profile.calibration.rotation == value.calibration.rotation &&
+            profile.calibration.displayScope==value.calibration.displayScope && profile.calibration.windowFrame==value.calibration.windowFrame)
         value = boundedControls(profile)
     }
 

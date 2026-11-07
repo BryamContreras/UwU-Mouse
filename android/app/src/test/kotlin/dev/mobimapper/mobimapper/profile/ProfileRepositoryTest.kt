@@ -187,6 +187,99 @@ class ProfileRepositoryTest {
         rejects { restarted.select("absent") }
     }
 
+    @Test fun deletingUnselectedProfilePreservesSelectionAndEveryOtherGame() {
+        val storage = Storage(); val store = ProfileRepository(storage)
+        val selected = profile("selected")
+        val removed = profile("removed")
+        val replacement = profile("replacement")
+        val otherGame = profile("pool").copy(packageName = "com.miniclip.eightballpool", name = "Pool")
+        for (p in listOf(selected, removed, replacement, otherGame)) store.save(p)
+        store.select(selected.id)
+        val writesBefore = storage.writes
+
+        store.delete(removed.id, replacement.id)
+
+        assertEquals(writesBefore + 1, storage.writes)
+        assertEquals(selected, store.selected())
+        assertEquals(listOf(selected, replacement, otherGame), store.list())
+        val reopened = ProfileRepository(storage)
+        assertEquals(selected, reopened.selected())
+        assertEquals(listOf(selected, replacement, otherGame), reopened.list())
+    }
+
+    @Test fun deletingSelectedProfileCommitsItsSameGameReplacementInOneWrite() {
+        val storage = Storage(); val store = ProfileRepository(storage)
+        val removed = profile("removed")
+        val replacement = profile("replacement").copy(name = "Segundo mapeo")
+        val otherGame = profile("pool").copy(packageName = "com.miniclip.eightballpool", name = "Pool")
+        for (p in listOf(removed, replacement, otherGame)) store.save(p)
+        store.select(removed.id)
+        val writesBefore = storage.writes
+
+        store.delete(removed.id, replacement.id)
+
+        assertEquals(writesBefore + 1, storage.writes)
+        assertNull(store.get(removed.id))
+        assertEquals(replacement, store.selected())
+        val reopened = ProfileRepository(storage)
+        assertEquals(replacement, reopened.selected())
+        assertEquals(listOf(replacement, otherGame), reopened.list())
+    }
+
+    @Test fun failedDeleteRetainsBothTheMappingAndSelectionInMemoryAndOnDisk() {
+        val storage = Storage(); val store = ProfileRepository(storage)
+        val selected = profile("selected"); val replacement = profile("replacement")
+        store.save(replacement); store.save(selected)
+        val profilesBefore = store.list(); val documentBefore = storage.document; val writesBefore = storage.writes
+        storage.failWrite = true
+
+        try { store.delete(selected.id, replacement.id); fail("Expected failed atomic commit") } catch (_: IOException) { }
+
+        assertEquals(writesBefore, storage.writes)
+        assertEquals(documentBefore, storage.document)
+        assertEquals(profilesBefore, store.list())
+        assertEquals(selected, store.selected())
+        val reopened = ProfileRepository(storage)
+        assertEquals(profilesBefore, reopened.list())
+        assertEquals(selected, reopened.selected())
+    }
+
+    @Test fun deletingTheLastProfilePersistsAnEmptyLibraryAndNoSelection() {
+        val storage = Storage(); val store = ProfileRepository(storage)
+        val last = profile(); store.save(last)
+        val writesBefore = storage.writes
+
+        store.delete(last.id)
+
+        assertEquals(writesBefore + 1, storage.writes)
+        assertTrue(store.list().isEmpty())
+        assertNull(store.selected())
+        val reopened = ProfileRepository(storage)
+        assertTrue(reopened.list().isEmpty())
+        assertNull(reopened.selected())
+        reopened.delete(last.id)
+        assertEquals(writesBefore + 1, storage.writes)
+    }
+
+    @Test fun invalidDeleteReplacementsCannotWriteOrChangeTheSelectedProfile() {
+        val storage = Storage(); val store = ProfileRepository(storage)
+        val selected = profile("selected"); val another = profile("another")
+        val otherGame = profile("pool").copy(packageName = "com.miniclip.eightballpool", name = "Pool")
+        for (p in listOf(another, otherGame, selected)) store.save(p)
+        val profilesBefore = store.list(); val documentBefore = storage.document; val writesBefore = storage.writes
+
+        for ((removedId, replacementId) in listOf(selected.id to selected.id,
+            selected.id to "absent", selected.id to otherGame.id, another.id to otherGame.id)) {
+            rejects { store.delete(removedId, replacementId) }
+            assertEquals(writesBefore, storage.writes)
+            assertEquals(documentBefore, storage.document)
+            assertEquals(profilesBefore, store.list())
+            assertEquals(selected, store.selected())
+        }
+        assertEquals(profilesBefore, ProfileRepository(storage).list())
+        assertEquals(selected, ProfileRepository(storage).selected())
+    }
+
     @Test fun repeatedCachedQueriesDoNotReadStorageOrWriteDuringSessionPreparation() {
         val storage = Storage()
         val repository = ProfileRepository(storage)

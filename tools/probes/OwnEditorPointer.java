@@ -16,6 +16,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
@@ -26,11 +29,13 @@ import org.json.JSONObject;
  * app_process ... OwnEditorPointer drag x1 y1 x2 y2 [durationMs]
  * app_process ... OwnEditorPointer overlayclick x y
  * app_process ... OwnEditorPointer overlaydrag x1 y1 x2 y2 [durationMs]
+ * Prefix any command with --display N to scope it to that display (default 0).
  * UiAutomation observes mapper accessibility overlays without suppressing services.
  * Mouse events use InputManager's fixed target-UID overload, never unscoped automation injection.
  */
 public final class OwnEditorPointer {
     private static final String OWN = "dev.mobimapper.mobimapper";
+    private static final String EDITOR_TITLE = "MobiMapper \u00b7 Editor";
     private static final String BUBBLE_TITLE = "MobiMapper \u00b7 Burbuja";
     private static final String MENU_TITLE = "MobiMapper \u00b7 Opciones";
     private static final int MAX_DIAGNOSTIC_BYTES = 1_048_576;
@@ -38,6 +43,7 @@ public final class OwnEditorPointer {
     private final Object input;
     private final Method inject, setDisplay, setActionButton;
     private final int ownUid;
+    private final int displayId;
     private final boolean overlayClick;
     private final boolean overlayDrag;
     private final Point displaySize = new Point();
@@ -48,17 +54,16 @@ public final class OwnEditorPointer {
     private boolean possiblyDown;
     private int attempted;
 
-    private OwnEditorPointer(UiAutomation automation, Context context, boolean overlayClick, boolean overlayDrag) throws Exception {
+    private OwnEditorPointer(UiAutomation automation, Context context, boolean overlayClick, boolean overlayDrag, int displayId) throws Exception {
         this.automation = automation;
         this.overlayClick = overlayClick;
         this.overlayDrag = overlayDrag;
-        if (overlayDrag) {
-            Display display = context.getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
-            if (display == null) throw new SecurityException("Display 0 unavailable");
-            display.getRealSize(displaySize);
-            if (displaySize.x <= 0 || displaySize.y <= 0)
-                throw new SecurityException("Display 0 real dimensions unavailable");
-        }
+        this.displayId = displayId;
+        Display display = context.getSystemService(DisplayManager.class).getDisplay(displayId);
+        if (display == null || !display.isValid()) throw new SecurityException("Display " + displayId + " unavailable");
+        display.getRealSize(displaySize);
+        if (displaySize.x <= 0 || displaySize.y <= 0)
+            throw new SecurityException("Display " + displayId + " real dimensions unavailable");
         ownUid = context.getPackageManager().getPackageUid(OWN, 0);
         if (ownUid < 10_000) throw new SecurityException("Installed mapper application UID required");
         input = context.getSystemService(Context.INPUT_SERVICE);
@@ -100,7 +105,7 @@ public final class OwnEditorPointer {
         }
     }
 
-    private static void requireIdleEditor() throws Exception {
+    private static void requireIdleEditor(int displayId) throws Exception {
         JSONObject state = diagnostics();
         String mode = state.getString("mode");
         long age = SystemClock.uptimeMillis() - state.getLong("uptimeMs");
@@ -108,11 +113,12 @@ public final class OwnEditorPointer {
                 !state.getBoolean("editorVisible") || state.getInt("contacts") != 0 ||
                 state.getInt("backendPossibleContacts") != 0 || state.getBoolean("releaseUnverified") ||
                 state.getBoolean("mouseCaptured") || state.getBoolean("contextBlockedBySystemWindow") ||
+                state.optInt("targetDisplayId", 0) != displayId ||
                 age < 0 || age > 2000)
             throw new SecurityException("Inactive, empty, confirmed own editor required; no mouse event sent");
     }
 
-    private static JSONObject requireIdleOverlay() throws Exception {
+    private static JSONObject requireIdleOverlay(int displayId) throws Exception {
         JSONObject state = diagnostics();
         String mode = state.getString("mode");
         long age = SystemClock.uptimeMillis() - state.getLong("uptimeMs");
@@ -120,21 +126,55 @@ public final class OwnEditorPointer {
                 state.getBoolean("editorVisible") || state.getInt("contacts") != 0 ||
                 state.getInt("backendPossibleContacts") != 0 || state.getBoolean("releaseUnverified") ||
                 state.getBoolean("mouseCaptured") || state.getBoolean("contextBlockedBySystemWindow") ||
+                state.optInt("targetDisplayId", 0) != displayId ||
                 !(state.getBoolean("bubbleVisible") || state.getBoolean("bubbleMenuVisible")) ||
                 age < 0 || age > 2000)
             throw new SecurityException("Inactive, empty own bubble/menu required; no mouse event sent");
         return state;
     }
 
+    private List<AccessibilityWindowInfo> windowsOnDisplay() {
+        List<AccessibilityWindowInfo> selected = automation.getWindowsOnAllDisplays().get(displayId);
+        return selected == null ? Collections.emptyList() : selected;
+    }
+
+    private boolean overlayTypeAllowed(AccessibilityWindowInfo window) {
+        return window.getType() == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
+                (displayId != 0 && window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM);
+    }
+
+    /** Samsung may omit SYSTEM titles. Only a resolved own root can supply its exact role. */
+    private String canonicalOverlayTitle(AccessibilityWindowInfo window) {
+        CharSequence title = window.getTitle();
+        if (window.getType() != AccessibilityWindowInfo.TYPE_SYSTEM)
+            return title == null ? null : title.toString();
+        if (displayId == 0 || window.getDisplayId() != displayId) return null;
+        AccessibilityNodeInfo root = window.getRoot();
+        if (root == null) return null;
+        try {
+            if (root.getWindowId() != window.getId() || !OWN.contentEquals(root.getPackageName())) return null;
+            if (EDITOR_TITLE.contentEquals(title == null ? "" : title)) return EDITOR_TITLE;
+            if (BUBBLE_TITLE.contentEquals(title == null ? "" : title)) return BUBBLE_TITLE;
+            if (MENU_TITLE.contentEquals(title == null ? "" : title)) return MENU_TITLE;
+            if (title != null) return null;
+            CharSequence role = root.getContentDescription();
+            if ("UwU Mouse \u00b7 editor".contentEquals(role == null ? "" : role)) return EDITOR_TITLE;
+            if ("UwU Mouse \u00b7 opciones".contentEquals(role == null ? "" : role)) return MENU_TITLE;
+            if ("UwU Mouse \u00b7 abrir opciones".contentEquals(role == null ? "" : role)) return BUBBLE_TITLE;
+            return null;
+        } finally { root.recycle(); }
+    }
+
     private void requireOwnOverlayWindow(float x, float y) throws Exception {
-        JSONObject state = requireIdleOverlay();
+        JSONObject state = requireIdleOverlay(displayId);
         if (!Float.isFinite(x) || !Float.isFinite(y)) throw new SecurityException("Finite own overlay coordinates required");
         AccessibilityWindowInfo selected = null;
         Rect selectedBounds = null;
         boolean selectedRootResolved = false;
-        for (AccessibilityWindowInfo window : automation.getWindows()) {
-            if (window.getDisplayId() != 0 || window.getType() != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue;
-            String title = window.getTitle() == null ? "" : window.getTitle().toString();
+        String selectedTitle = null;
+        for (AccessibilityWindowInfo window : windowsOnDisplay()) {
+            if (window.getDisplayId() != displayId || !overlayTypeAllowed(window)) continue;
+            String title = canonicalOverlayTitle(window);
             if (!((BUBBLE_TITLE.equals(title) && state.getBoolean("bubbleVisible")) ||
                     (MENU_TITLE.equals(title) && state.getBoolean("bubbleMenuVisible")))) continue;
             Rect bounds = new Rect();
@@ -142,16 +182,17 @@ public final class OwnEditorPointer {
             if (bounds.isEmpty() || x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom) continue;
             AccessibilityNodeInfo root = window.getRoot();
             boolean rootResolved = root != null;
+            if (root == null && window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM) continue;
             if (root != null) {
                 boolean own;
-                try { own = OWN.contentEquals(root.getPackageName()); }
+                try { own = root.getWindowId() == window.getId() && OWN.contentEquals(root.getPackageName()); }
                 finally { root.recycle(); }
                 if (!own) continue; // Resolved foreign/unknown ownership cannot use the title fallback.
             }
             // The bubble/menu deliberately never focuses. A null root is accepted only after the
             // exact current title/visibility/type/display/bounds checks; injection still forces ownUid.
             if (selected == null || window.getLayer() > selected.getLayer()) {
-                selected = window; selectedBounds = bounds; selectedRootResolved = rootResolved;
+                selected = window; selectedBounds = bounds; selectedRootResolved = rootResolved; selectedTitle = title;
             } else if (window.getLayer() == selected.getLayer()) {
                 throw new SecurityException("Ambiguous own overlay at pointer coordinates");
             }
@@ -159,8 +200,8 @@ public final class OwnEditorPointer {
         if (selected == null) throw new SecurityException("Exact own bubble/menu title and bounds required");
         if (windowId == -1) {
             windowId = selected.getId(); originalBounds = new Rect(selectedBounds);
-            System.out.println("OWN_OVERLAY uid=" + ownUid + " window=" + windowId + " display=0 title=" +
-                    selected.getTitle() + " rootResolved=" + selectedRootResolved + " bounds=" + selectedBounds);
+            System.out.println("OWN_OVERLAY uid=" + ownUid + " window=" + windowId + " display=" + displayId + " title=" +
+                    selectedTitle + " rootResolved=" + selectedRootResolved + " bounds=" + selectedBounds);
         } else if (selected.getId() != windowId || !originalBounds.equals(selectedBounds)) {
             throw new SecurityException("Own overlay window changed during click");
         }
@@ -168,25 +209,27 @@ public final class OwnEditorPointer {
 
     /** Bubble drag only: pointer capture owns MOVE/UP even after the bubble bounds move. */
     private void requireOwnBubbleDragWindow(float x, float y) throws Exception {
-        JSONObject state = requireIdleOverlay();
+        JSONObject state = requireIdleOverlay(displayId);
         if (!"paused".equals(state.getString("mode")) || !state.getBoolean("bubbleVisible"))
             throw new SecurityException("Paused own bubble required for drag");
         requireDisplayPoint(x, y);
         AccessibilityWindowInfo selected = null;
         Rect selectedBounds = null;
         boolean selectedRootResolved = false;
-        for (AccessibilityWindowInfo window : automation.getWindows()) {
-            if (window.getDisplayId() != 0 ||
-                    window.getType() != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY ||
-                    !BUBBLE_TITLE.contentEquals(window.getTitle() == null ? "" : window.getTitle())) continue;
+        for (AccessibilityWindowInfo window : windowsOnDisplay()) {
+            if (window.getDisplayId() != displayId ||
+                    !overlayTypeAllowed(window) ||
+                    !BUBBLE_TITLE.equals(canonicalOverlayTitle(window))) continue;
             Rect bounds = new Rect();
             window.getBoundsInScreen(bounds);
             if (bounds.isEmpty()) continue;
             AccessibilityNodeInfo root = window.getRoot();
             boolean rootResolved = root != null;
+            if (root == null && window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM)
+                throw new SecurityException("Resolved own standard bubble root required");
             if (root != null) {
                 boolean own;
-                try { own = OWN.contentEquals(root.getPackageName()); }
+                try { own = root.getWindowId() == window.getId() && OWN.contentEquals(root.getPackageName()); }
                 finally { root.recycle(); }
                 if (!own) throw new SecurityException("Bubble ownership changed during drag");
             }
@@ -200,7 +243,7 @@ public final class OwnEditorPointer {
         if (windowId == -1) {
             windowId = selected.getId(); originalBounds = new Rect(selectedBounds);
             System.out.println("OWN_BUBBLE_DRAG uid=" + ownUid + " window=" + windowId +
-                    " display=0 title=" + BUBBLE_TITLE + " rootResolved=" + selectedRootResolved +
+                    " display=" + displayId + " title=" + BUBBLE_TITLE + " rootResolved=" + selectedRootResolved +
                     " bounds=" + selectedBounds + " realSize=" + displaySize.x + "x" + displaySize.y);
         } else if (selected.getId() != windowId) {
             throw new SecurityException("Bubble window changed during drag");
@@ -216,22 +259,24 @@ public final class OwnEditorPointer {
     private void requireDisplayPoint(float x, float y) {
         if (!Float.isFinite(x) || !Float.isFinite(y) ||
                 x < 0 || x >= displaySize.x || y < 0 || y >= displaySize.y)
-            throw new SecurityException("Pointer point inside real display 0 required");
+            throw new SecurityException("Pointer point inside real display " + displayId + " required");
     }
 
     private void requireOwnWindow(float x, float y) throws Exception {
+        requireDisplayPoint(x, y);
         if (overlayDrag) { requireOwnBubbleDragWindow(x, y); return; }
         if (overlayClick) { requireOwnOverlayWindow(x, y); return; }
-        requireIdleEditor();
+        requireIdleEditor(displayId);
         AccessibilityWindowInfo selected = null;
         Rect bounds = new Rect();
-        for (AccessibilityWindowInfo window : automation.getWindows()) {
-            if (window.getDisplayId() != 0 || !window.isFocused() ||
-                    window.getType() != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) continue;
+        for (AccessibilityWindowInfo window : windowsOnDisplay()) {
+            if (window.getDisplayId() != displayId || !window.isFocused() ||
+                    !overlayTypeAllowed(window) ||
+                    !EDITOR_TITLE.equals(canonicalOverlayTitle(window))) continue;
             AccessibilityNodeInfo root = window.getRoot();
             if (root == null) continue;
             boolean own;
-            try { own = OWN.contentEquals(root.getPackageName()); }
+            try { own = root.getWindowId() == window.getId() && OWN.contentEquals(root.getPackageName()); }
             finally { root.recycle(); }
             if (!own) continue;
             if (selected != null) throw new SecurityException("Ambiguous focused own overlay");
@@ -240,11 +285,11 @@ public final class OwnEditorPointer {
         }
         if (selected == null || bounds.isEmpty() || !Float.isFinite(x) || !Float.isFinite(y) ||
                 x < bounds.left || x >= bounds.right || y < bounds.top || y >= bounds.bottom)
-            throw new SecurityException("Resolved focused own editor bounds on display 0 required");
+            throw new SecurityException("Resolved focused own editor bounds on display " + displayId + " required");
         if (windowId == -1) {
             windowId = selected.getId();
             originalBounds = new Rect(bounds);
-            System.out.println("OWN_EDITOR uid=" + ownUid + " window=" + windowId + " display=0 bounds=" + bounds);
+            System.out.println("OWN_EDITOR uid=" + ownUid + " window=" + windowId + " display=" + displayId + " bounds=" + bounds);
         } else if (selected.getId() != windowId || !originalBounds.equals(bounds)) {
             throw new SecurityException("Editor window changed during gesture");
         }
@@ -263,7 +308,7 @@ public final class OwnEditorPointer {
                 new MotionEvent.PointerCoords[]{coordinate}, 0, buttons, 1, 1, 0, 0,
                 InputDevice.SOURCE_MOUSE, 0);
         try {
-            setDisplay.invoke(event, 0);
+            setDisplay.invoke(event, displayId);
             if (actionButton != 0) setActionButton.invoke(event, actionButton);
             return (Boolean) inject.invoke(input, event, 2, ownUid); // WAIT_FOR_FINISHED, fixed mapper UID.
         } finally { event.recycle(); }
@@ -279,7 +324,7 @@ public final class OwnEditorPointer {
         lastX = x; lastY = y;
         boolean admitted = injectMouse(action, buttons, actionButton, x, y);
         System.out.println("OWN_MOUSE sequence=" + (++attempted) + " action=" + action + " buttons=" + buttons +
-                " actionButton=" + actionButton + " x=" + x + " y=" + y + " admitted=" + admitted);
+                " actionButton=" + actionButton + " x=" + x + " y=" + y + " admitted=" + admitted + " display=" + displayId);
         if (!admitted) throw new IllegalStateException("Own mouse event not admitted");
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) possiblyDown = false;
     }
@@ -361,23 +406,30 @@ public final class OwnEditorPointer {
 
     private static void run(String[] args) throws Exception {
         if (android.os.Process.myUid() != 2000) throw new SecurityException("ADB shell UID 2000 required");
+        int displayId = Display.DEFAULT_DISPLAY;
+        if (args.length > 0 && "--display".equals(args[0])) {
+            if (args.length < 3) throw new IllegalArgumentException("--display requires a nonnegative display ID and an own UI command");
+            displayId = Integer.parseInt(args[1]);
+            if (displayId < 0) throw new IllegalArgumentException("Display ID must be nonnegative");
+            args = Arrays.copyOfRange(args, 2, args.length);
+        }
         boolean right = args.length == 3 && "rightclick".equals(args[0]);
         boolean left = args.length == 3 && "click".equals(args[0]);
         boolean drag = (args.length == 5 || args.length == 6) && "drag".equals(args[0]);
         boolean overlay = args.length == 3 && "overlayclick".equals(args[0]);
         boolean overlayDrag = (args.length == 5 || args.length == 6) && "overlaydrag".equals(args[0]);
         if (!right && !left && !drag && !overlay && !overlayDrag)
-            throw new IllegalArgumentException("click/rightclick x y | drag x1 y1 x2 y2 [durationMs] | overlayclick x y | overlaydrag x1 y1 x2 y2 [durationMs]");
+            throw new IllegalArgumentException("[--display N] click/rightclick x y | drag x1 y1 x2 y2 [durationMs] | overlayclick x y | overlaydrag x1 y1 x2 y2 [durationMs]");
         float x1 = Float.parseFloat(args[1]), y1 = Float.parseFloat(args[2]);
         float x2 = (drag || overlayDrag) ? Float.parseFloat(args[3]) : x1,
                 y2 = (drag || overlayDrag) ? Float.parseFloat(args[4]) : y1;
         int duration = args.length == 6 ? Integer.parseInt(args[5]) : 300;
         if (duration < 150 || duration > 2000) throw new IllegalArgumentException("Drag nominal duration must be 150..2000 ms");
         if (overlay || overlayDrag) {
-            JSONObject state = requireIdleOverlay();
+            JSONObject state = requireIdleOverlay(displayId);
             if (overlayDrag && (!"paused".equals(state.getString("mode")) || !state.getBoolean("bubbleVisible")))
                 throw new SecurityException("Paused own bubble required for drag; no mouse event sent");
-        } else requireIdleEditor();
+        } else requireIdleEditor(displayId);
         Looper.prepareMainLooper();
         Class<?> activityThread = Class.forName("android.app.ActivityThread");
         Object thread = activityThread.getMethod("systemMain").invoke(null);
@@ -394,7 +446,7 @@ public final class OwnEditorPointer {
             info.flags |= AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS;
             automation.setServiceInfo(info);
             SystemClock.sleep(150);
-            pointer = new OwnEditorPointer(automation, context, overlay, overlayDrag);
+            pointer = new OwnEditorPointer(automation, context, overlay, overlayDrag, displayId);
             if (overlayDrag) pointer.dragOverlay(x1, y1, x2, y2, duration);
             else if (overlay) pointer.clickOverlay(x1, y1);
             else if (left) pointer.clickOverlay(x1,y1);

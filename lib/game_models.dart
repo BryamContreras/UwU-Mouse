@@ -31,6 +31,9 @@ class LocalProfile {
           ? _integer(wire, 'switchKey')
           : 0,
       orientation = _text(wire, 'orientation'),
+      displayScope = _integer(wire, 'schemaVersion') >= 9
+          ? _text(_map(wire, 'calibration'), 'displayScope')
+          : 'phone',
       calibrated = _map(wire, 'calibration')['confirmed'] == true,
       screenWidth = _integer(_map(wire, 'calibration'), 'screenWidth'),
       screenHeight = _integer(_map(wire, 'calibration'), 'screenHeight'),
@@ -74,9 +77,10 @@ class LocalProfile {
       cameraToggle = _integer(_map(wire, 'shortcuts'), 'cameraToggle'),
       stopKey = _integer(_map(wire, 'shortcuts'), 'stop'),
       editKey = _integer(_map(wire, 'shortcuts'), 'edit') {
-    if (schemaVersion < 1 || schemaVersion > 8) {
+    if (schemaVersion < 1 || schemaVersion > 9) {
       throw const FormatException('Versión de perfil incompatible');
     }
+    if (schemaVersion >= 9) _validateDisplayCalibration(wire, displayScope);
     if (orientation != 'landscape' && orientation != 'portrait') {
       throw const FormatException('Orientación de perfil no válida');
     }
@@ -110,6 +114,7 @@ class LocalProfile {
       name,
       packageName,
       orientation,
+      displayScope,
       actionKind,
       cameraMode,
       actionBehavior;
@@ -149,6 +154,56 @@ class LocalProfile {
       '${keyLabel(downKey)} / ${keyLabel(rightKey)}';
   String get actionLabel =>
       actionKind == 'key' ? keyLabel(actionCode) : mouseButtonLabel(actionCode);
+}
+
+void _validateDisplayCalibration(
+  Map<Object?, Object?> wire,
+  String displayScope,
+) {
+  if (!const ['phone', 'external'].contains(displayScope)) {
+    throw const FormatException('Pantalla de calibración incompatible');
+  }
+  final calibration = _map(wire, 'calibration');
+  if (!calibration.containsKey('windowFrame')) {
+    throw const FormatException('Falta la ventana de calibración');
+  }
+  final frame = calibration['windowFrame'];
+  if (frame == null) {
+    if (displayScope == 'external' && _boolean(calibration, 'confirmed')) {
+      throw const FormatException('Falta confirmar la ventana externa');
+    }
+    return;
+  }
+  if (frame is! Map) {
+    throw const FormatException('Ventana de calibración incompatible');
+  }
+  final bounds = Map<Object?, Object?>.from(frame);
+  final left = _number(bounds, 'left'), top = _number(bounds, 'top');
+  final right = _number(bounds, 'right'), bottom = _number(bounds, 'bottom');
+  final width = _integer(calibration, 'screenWidth');
+  final height = _integer(calibration, 'screenHeight');
+  final area = _map(calibration, 'area');
+  final areaLeft = _number(area, 'left'), areaTop = _number(area, 'top');
+  final areaRight = _number(area, 'right'),
+      areaBottom = _number(area, 'bottom');
+  if (width < 100 ||
+      width > 8192 ||
+      height < 100 ||
+      height > 8192 ||
+      left < 0 ||
+      top < 0 ||
+      right > width ||
+      bottom > height ||
+      right - left < 32 ||
+      bottom - top < 32 ||
+      areaRight - areaLeft < 32 ||
+      areaBottom - areaTop < 32 ||
+      areaLeft < left ||
+      areaTop < top ||
+      areaRight > right ||
+      areaBottom > bottom) {
+    throw const FormatException('Área fuera de la ventana calibrada');
+  }
 }
 
 bool _controlEnabled(Map<Object?, Object?> wire, String section) =>

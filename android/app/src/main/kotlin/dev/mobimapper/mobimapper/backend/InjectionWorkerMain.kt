@@ -14,7 +14,7 @@ object InjectionWorkerMain {
     const val MAGIC = 0x4d4d5732
     @JvmStatic fun main(args: Array<String>) {
         check(Process.myUid() == 2000 || Process.myUid() == 0)
-        require(args.size in 2..3)
+        require(args.size in 2..4)
         val generation = args[0].toLong().also { require(it > 0) }
         Looper.prepareMainLooper()
         val at = Class.forName("android.app.ActivityThread")
@@ -27,6 +27,7 @@ object InjectionWorkerMain {
             "1" -> TouchCoordinatePolicy.CONTINUOUS_CAMERA_9
             else -> error("Unknown coordinate policy")
         }
+        val displayId=args.getOrNull(3)?.toInt()?.also { require(it >= 0) } ?: 0
         val manager = context.getSystemService(Context.INPUT_SERVICE)
         val inject = manager.javaClass.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType)
         val setDisplay = InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
@@ -40,7 +41,7 @@ object InjectionWorkerMain {
         fun send(frame: dev.mobimapper.mobimapper.engine.TouchFrame, mode: Int): Boolean {
             for(i in frame.ids.indices) { props[i].id=frame.ids[i]; coords[i].x=frame.xs[i]; coords[i].y=frame.ys[i] }
             val event=MotionEvent.obtain(frame.downTime,frame.eventTime,frame.action,frame.ids.size,props,coords,0,0,1f,1f,0,0,InputDevice.SOURCE_TOUCHSCREEN,if(frame.action and 255 == 3) 32 else 0)
-            return try { setDisplay.invoke(event,0); inject.invoke(manager,event,mode,targetUid) as Boolean }
+            return try { setDisplay.invoke(event,displayId); inject.invoke(manager,event,mode,targetUid) as Boolean }
             finally { event.recycle() }
         }
         output.writeInt(MAGIC); output.writeLong(generation); output.writeInt(Process.myPid()); output.flush()
@@ -81,7 +82,7 @@ object InjectionWorkerMain {
                     else -> frame.copy(action=2)
                 }
                 if(accepted) { admitted=active; admittedSession=if(active==null) 0L else session }
-                if(action and 255 != 2 || !accepted) Log.i("MobiInjectWorker","pid=${Process.myPid()} worker=$generation sid=$session action=$action ids=${ids.joinToString()} down=$down event=$time target=$targetUid display=0 source=4098 device=0 effectiveDevice=-1 start=$before end=${SystemClock.uptimeMillis()} admitted=$accepted mode=$mode")
+                if(action and 255 != 2 || !accepted) Log.i("MobiInjectWorker","pid=${Process.myPid()} worker=$generation sid=$session action=$action ids=${ids.joinToString()} down=$down event=$time target=$targetUid display=$displayId source=4098 device=0 effectiveDevice=-1 start=$before end=${SystemClock.uptimeMillis()} admitted=$accepted mode=$mode")
                 if(fault==2) { Log.w("MobiInjectWorker","test_crash_after sid=$session action=$action admitted=$accepted uptime=${SystemClock.uptimeMillis()}"); Process.killProcess(Process.myPid()) }
                 output.writeInt(MAGIC); output.writeLong(generation); output.writeLong(session); output.writeBoolean(accepted); output.writeLong(SystemClock.uptimeMillis()); output.flush()
             }
@@ -90,7 +91,7 @@ object InjectionWorkerMain {
         active?.let { frame ->
             val cancel=frame.copy(action=3,eventTime=SystemClock.uptimeMillis())
             val result=runCatching { send(cancel,2) }.getOrDefault(false)
-            Log.i("MobiInjectWorker","guardian EOF cancel worker=$generation down=${cancel.downTime} ids=${cancel.ids.joinToString()} admitted=$result uptime=${SystemClock.uptimeMillis()}")
+            Log.i("MobiInjectWorker","guardian EOF cancel worker=$generation display=$displayId down=${cancel.downTime} ids=${cancel.ids.joinToString()} admitted=$result uptime=${SystemClock.uptimeMillis()}")
         }
     }
 }

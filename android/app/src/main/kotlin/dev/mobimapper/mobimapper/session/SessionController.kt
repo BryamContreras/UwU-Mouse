@@ -16,12 +16,14 @@ import dev.mobimapper.mobimapper.game.GameCoordinator
 object SessionController {
     const val TARGET = "dev.mobimapper.inputlab"
     @Volatile var targetPackage=TARGET; private set
+    @Volatile var targetDisplayId=0; private set
     @Volatile var mode=SessionMode.STOPPED; private set
     @Volatile var activeProfileId:String?=null; private set
     @Volatile var profileName:String?=null; private set
     @Volatile private var runtimeProfile:PreparedProfile?=null
     @Volatile private var explicitlyStopped=false
     private var originalTargetPackage=TARGET
+    private var originalTargetDisplayId=0
     @Volatile private var originalContinuousCamera=false
     @Volatile private var cameraContactAdmitted=false
     private val main = Handler(Looper.getMainLooper())
@@ -245,30 +247,40 @@ object SessionController {
             }
         } }
     }
-    @Synchronized fun arm(width: Int, height: Int) {
-        useLaboratory()
+    @Synchronized fun arm(width: Int, height: Int,displayId:Int=0) {
+        useLaboratory(displayId)
         armInternal(width,height)
+        targetChanged(capturedTargetConfirmed())
     }
-    @Synchronized fun useLaboratory() {
+    @Synchronized fun useLaboratory(displayId:Int=0) {
         check(SessionPolicy.mayInstallConfiguration(mode,contacts,releaseUnverified) && !active && !armed && !testRunning && !starting && !stopping) { "Espera a que termine el gesto anterior" }
-        runtimeProfile=null; startInCursor=false;activeProfileId=null; profileName=null; targetPackage=TARGET
+        require(displayId>=0) { "Pantalla de destino no válida" }
+        runtimeProfile=null; startInCursor=false;activeProfileId=null; profileName=null; targetPackage=TARGET;targetDisplayId=displayId
         lastAttemptedFrame=null;lastMotorError=null;firstRejectedInput=null
-        targetChanged(CaptureService.instance?.currentApplicationPackage==TARGET)
+        if(Looper.myLooper()==Looper.getMainLooper()) CaptureService.instance?.refreshContext()
+        targetChanged(capturedTargetConfirmed())
     }
-    @Synchronized fun selectEditingTarget(profile:GameProfile) {
+    /** A same-package cache from another display must never authorize a new session. */
+    private fun capturedTargetConfirmed():Boolean {
+        val capture=CaptureService.instance ?: return false
+        return capture.currentApplicationPackage==targetPackage && capture.boundsForPackage(targetPackage)!=null
+    }
+    @Synchronized fun selectEditingTarget(profile:GameProfile,displayId:Int=0) {
         check(SessionPolicy.mayEdit(contacts,releaseUnverified,active) && !stopping)
-        runtimeProfile=null; activeProfileId=profile.id; profileName=profile.name; targetPackage=profile.packageName
+        require(displayId>=0) { "Pantalla de destino no válida" }
+        runtimeProfile=null; activeProfileId=profile.id; profileName=profile.name; targetPackage=profile.packageName;targetDisplayId=displayId
         explicitlyStopped=false; mode=SessionMode.EDITING; state="Edición"; error="Mapeo pausado; guardar no reanuda acciones mantenidas"
     }
-    @Synchronized fun armProfile(prepared:PreparedProfile,cursor:Boolean=false) {
+    @Synchronized fun armProfile(prepared:PreparedProfile,cursor:Boolean=false,displayId:Int=targetDisplayId) {
         check(SessionPolicy.mayInstallConfiguration(mode,contacts,releaseUnverified) && !active && !stopping) { "Termina o recupera la sesión anterior" }
+        require(displayId>=0) { "Pantalla de destino no válida" }
         // Closed diagnostic choice is RAM-only and applies only at this empty transition.
         // The saved profile and the classic laboratory configuration are unchanged.
         runtimeProfile=if(prepared.profile.packageName==TARGET || prepared.bindings.continuousCamera) prepared else prepared.copy(bindings=prepared.bindings.copy(
             overlapCameraHandoff=cameraTrial=="overlap",distinctCameraContacts=cameraTrial!="same-id",cameraLast=true))
-        startInCursor=cursor; activeProfileId=prepared.profile.id; profileName=prepared.profile.name; targetPackage=prepared.profile.packageName
+        startInCursor=cursor; activeProfileId=prepared.profile.id; profileName=prepared.profile.name; targetPackage=prepared.profile.packageName;targetDisplayId=displayId
         armInternal(prepared.profile.calibration.screenWidth,prepared.profile.calibration.screenHeight)
-        targetChanged(CaptureService.instance?.currentApplicationPackage==targetPackage)
+        targetChanged(capturedTargetConfirmed())
     }
     private fun armInternal(width:Int,height:Int) {
         pointerTransition.invalidate()
@@ -325,14 +337,22 @@ object SessionController {
                 "La sesión anterior conserva contactos o una liberación no verificada"
             }
             val continuousCamera=runtimeProfile?.bindings?.continuousCamera==true
-            val sid=if(continuousCamera) backend.beginContinuousTarget(client,width,height,targetPackage)
-                else if(targetPackage==TARGET) backend.begin(client,width,height) else backend.beginTarget(client,width,height,targetPackage)
+            val packageName=targetPackage
+            val displayId=targetDisplayId
+            if(displayId!=0) check(backend.status().getBoolean("multiDisplaySupported")) { "Reactiva el motor para usar esta pantalla" }
+            val sid=if(displayId!=0) backend.beginTargetOnDisplay(client,width,height,packageName,displayId,continuousCamera)
+                else if(continuousCamera) backend.beginContinuousTarget(client,width,height,packageName)
+                else if(packageName==TARGET) backend.begin(client,width,height) else backend.beginTarget(client,width,height,packageName)
             check(sid>0) { "Backend no listo o liberación no verificada" }
-            originalTargetUid=backend.status().getInt("targetUid",-1)
-            originalTargetPackage=targetPackage
-            originalContinuousCamera=continuousCamera;cameraContactAdmitted=false
+            // Own the newly opened empty session before another status RPC can fail.
             previousBackendSessionId=backendSessionId
-            backendSessionId=sid; check(noticeGate.begin(sid))
+            backendSessionId=sid;sessionBackend=backend;check(noticeGate.begin(sid))
+            val backendState=backend.status()
+            check(backendState.getInt("displayId",-1)==displayId) { "El motor no confirmó la pantalla de destino" }
+            originalTargetUid=backendState.getInt("targetUid",-1)
+            originalTargetPackage=packageName
+            originalTargetDisplayId=displayId
+            originalContinuousCamera=continuousCamera;cameraContactAdmitted=false
             lastAttemptedFrame=null;lastMotorError=null;firstRejectedInput=null
             synchronized(metricsLock) { queueCount=0;ipcCount=0;cameraDeliveryCount=0;metricsSessionId=sid }
             // A callback already admitted before pause may have offered after its clear.
@@ -345,7 +365,6 @@ object SessionController {
                 mergeGeometry.cameraRadiusY.toDouble()/mergeGeometry.sensitivityY,
                 preserveSamples=runtimeProfile?.profile?.camera?.precisionAim==true)
             else queue.disableCameraMerge()
-            sessionBackend = backend
             if (run != generation) { releaseOnWorker(); return false }
             composer = TouchComposer(SystemClock::uptimeMillis, { frame ->
                 if (run != generation || stopping || !(active || (testRunning && probeStarted))) false else {
@@ -546,6 +565,12 @@ object SessionController {
     }
     fun editorClosed() { if(!active) { mode=if(releaseUnverified) SessionMode.BLOCKED else SessionMode.PAUSED; state=if(releaseUnverified) "Bloqueada" else "Pausada" } }
     fun stopSession() { explicitlyStopped=true; pause("Detenida por usuario") }
+    @Synchronized fun sessionServiceDestroyed() {
+        // A prior pause owns its release and diagnostic reason. Service cleanup must
+        // not replace either, including an inactive blocked/recovering sequence.
+        if(stopping || (!active && !armed && !starting && !testRunning)) return
+        pause("Servicio de sesión detenido")
+    }
     @Synchronized fun pause(reason: String = "Detenida por usuario") {
         if(active || probeStarted) {
             val frame=lastAttemptedFrame
@@ -594,8 +619,8 @@ object SessionController {
     private fun probeTargetFocused(): Boolean = if (CaptureService.instance != null) targetConfirmed else
         runCatching { BackendRegistry.injector?.status()?.getBoolean("targetFocused") == true }.getOrDefault(false)
     /** Deterministic injection only. Never counts as a physical keyboard/mouse test. */
-    @Synchronized fun probe(width: Int, height: Int) {
-        useLaboratory()
+    @Synchronized fun probe(width: Int, height: Int,displayId:Int=0) {
+        useLaboratory(displayId)
         check(!active && !armed && !starting && !stopping && !testRunning) { "Detén primero la sesión y espera su liberación" }
         check(!releaseUnverified) { "Liberación pendiente de verificar" }
         this.width = width; this.height = height
@@ -774,7 +799,9 @@ object SessionController {
         display.getRealSize(size)
         val mirrored=saved.copy(packageName=TARGET,name="Perfil en InputLab",
             camera=if(precision) saved.camera.copy(precisionAim=true) else saved.camera,
-            calibration=Calibration(size.x,size.y,display.rotation,GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat()),true),
+            calibration=saved.calibration.copy(screenWidth=size.x,screenHeight=size.y,rotation=display.rotation,
+                area=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat()),
+                confirmed=true,displayScope="phone",windowFrame=null),
             shortcuts=SessionShortcuts(138,139,0))
         val precisionMarkerKey=mirrored.actions.firstOrNull { it.triggerKind=="key" }?.code
         require(!precision || precisionMarkerKey!=null) { "El perfil de prueba necesita una acción de teclado" }
@@ -831,16 +858,20 @@ object SessionController {
                 state="Recuperando gesto anterior"; mode=SessionMode.RECOVERING
                 main.post { GameCoordinator.refreshControls() }
                 try {
-                    val sid=if(originalContinuousCamera) backend.recoverContinuousTargetOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid,originalTargetPackage)
+                    if(originalTargetDisplayId!=0) check(backend.status().getBoolean("multiDisplaySupported")) { "El motor no puede recuperar la pantalla original" }
+                    val sid=if(originalTargetDisplayId!=0) backend.recoverTargetOrphanOnDisplay(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,
+                            originalTargetUid,originalTargetPackage,originalTargetDisplayId,originalContinuousCamera)
+                        else if(originalContinuousCamera) backend.recoverContinuousTargetOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid,originalTargetPackage)
                         else if(originalTargetPackage==TARGET) backend.recoverOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid)
                         else backend.recoverTargetOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid,originalTargetPackage)
                     if(sid>0) {
+                        val recoveredStatus=backend.status()
+                        check(recoveredStatus.getInt("displayId",-1)==originalTargetDisplayId) { "La recuperación no confirmó la pantalla original" }
                         backendSessionId=sid; noticeGate.begin(sid); sessionBackend=backend; composer?.acknowledgeBackendReset()
-                        val recoveredStatus=runCatching { backend.status() }.getOrNull()
                         releaseUnverified=false; contacts=0;cameraContactAdmitted=false
                         mode=if(explicitlyStopped) SessionMode.STOPPED else SessionMode.PAUSED
                         state=if(explicitlyStopped) "Detenida · secuencia recuperada" else "Pausada · secuencia recuperada"
-                        error=if(explicitlyStopped) "Secuencia anterior cerrada; sesión detenida" else if(recoveredStatus?.getBoolean("cancelAdmitted")==true) "Inicia manualmente; cancelación admitida por Android" else "Inicia una sesión nueva manualmente"
+                        error=if(explicitlyStopped) "Secuencia anterior cerrada; sesión detenida" else if(recoveredStatus.getBoolean("cancelAdmitted")) "Inicia manualmente; cancelación admitida por Android" else "Inicia una sesión nueva manualmente"
                     } else { state="Bloqueada"; mode=SessionMode.BLOCKED; error="Cancelación anterior no admitida" }
                 } catch(e:Exception) { state="Bloqueada"; mode=SessionMode.BLOCKED; error=e.message ?: "No se pudo recuperar" }
                 main.post { GameCoordinator.refreshControls() }
@@ -897,13 +928,14 @@ object SessionController {
         val queueDiagnostic = queue.diagnostics()
         return mapOf("protocol" to 1, "state" to state, "active" to active,
             "mode" to mode.wire,"activeProfileId" to activeProfileId,"profileName" to profileName,
-            "activePackage" to targetPackage,"editorVisible" to GameCoordinator.editorVisible,
+            "activePackage" to targetPackage,"targetDisplayId" to targetDisplayId,"originalTargetDisplayId" to originalTargetDisplayId,
+            "editorVisible" to GameCoordinator.editorVisible,
             "editorLastClose" to GameCoordinator.lastEditorClose,"contextError" to error,
             "bubbleVisible" to GameCoordinator.bubbleVisible,"bubbleMenuVisible" to GameCoordinator.bubbleMenuVisible,
             "controlsVisible" to GameCoordinator.controlsVisible,
             "bubbleAppearance" to GameCoordinator.bubbleAppearance,
             "mouseCaptured" to CaptureService.instance?.mouseCaptured,
-            "pointerMode" to if(!active) "none" else if(cursorMode) "cursor" else "camera",
+            "pointerMode" to if(!active) "none" else if(camera) "camera" else if(runtimeProfile==null) "native" else "cursor",
             "cursorVisible" to CaptureService.instance?.cursorVisible,
             "cursorX" to CaptureService.instance?.cursorX,"cursorY" to CaptureService.instance?.cursorY,
             "cursorSamples" to CaptureService.instance?.cursorSamples,
@@ -913,8 +945,10 @@ object SessionController {
             "contextCoveringSystemPackage" to CaptureService.instance?.contextCoveringSystemPackage,
             "contextCheckedUptime" to CaptureService.instance?.contextCheckedUptime,
             "windowContext" to CaptureService.instance?.contextWindowDiagnostics(),
+            "targetPreparation" to GameCoordinator.lastTargetPreparation,
             "error" to error, "accessibility" to (CaptureService.instance != null), "backend" to (backend != null),
-            "backendUid" to backend?.getInt("uid"), "injectPermission" to backend?.getBoolean("injectPermission"),
+            "backendUid" to backend?.getInt("uid"),"backendDisplayId" to backend?.getInt("displayId"),
+            "multiDisplaySupported" to backend?.getBoolean("multiDisplaySupported"),"injectPermission" to backend?.getBoolean("injectPermission"),
             "backendError" to backend?.getString("error"), "targetUid" to backend?.getInt("targetUid"),
             "targetFocused" to backend?.getBoolean("targetFocused"), "focusError" to backend?.getString("focusError"),
             "supervisorPid" to backend?.getInt("supervisorPid"), "workerPid" to backend?.getInt("workerPid"),

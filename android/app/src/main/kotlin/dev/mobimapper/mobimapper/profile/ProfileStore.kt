@@ -21,7 +21,7 @@ class ProfileStore(context: Context) {
     fun save(profile: GameProfile) = repository.save(profile)
     fun update(profile: GameProfile) = repository.update(profile)
     fun importDocument(document: ProfileDocument, selectImported: Boolean = false) = repository.importDocument(document, selectImported)
-    fun delete(id: String) = repository.delete(id)
+    fun delete(id: String, replacementId: String? = null) = repository.delete(id, replacementId)
     fun select(id: String?) = repository.select(id)
 
     companion object { private val repositories = mutableMapOf<String, ProfileRepository>() }

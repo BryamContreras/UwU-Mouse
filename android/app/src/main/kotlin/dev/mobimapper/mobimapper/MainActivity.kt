@@ -1,11 +1,16 @@
 package dev.mobimapper.mobimapper
 
 import android.Manifest
+import android.app.ActivityOptions
+import android.hardware.display.DisplayManager
+import android.graphics.Point
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import android.net.Uri
 import android.provider.Settings
+import dev.mobimapper.mobimapper.editor.ExternalOverlayPermissionRequiredException
 import dev.mobimapper.mobimapper.activation.LocalActivation
 import dev.mobimapper.mobimapper.session.SessionController
 import dev.mobimapper.mobimapper.session.SessionService
@@ -40,7 +45,8 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.mobimapper/control.v1").setMethodCallHandler { call, result ->
             try {
                 when(call.method) {
-                    "status" -> result.success(SessionController.status(this))
+                    "status" -> result.success(SessionController.status(this)+mapOf("uiDisplayId" to (display?.displayId ?: 0),
+                        "drawOverlays" to Settings.canDrawOverlays(this)))
                     "activationStatus" -> result.success(LocalActivation.status())
                     "activationStartDiscovery" -> {
                         if(checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
@@ -60,32 +66,42 @@ class MainActivity : FlutterActivity() {
                     }
                     "listApps" -> result.success(GameCatalog.list(this))
                     "listProfiles" -> result.success(GameCoordinator.profiles())
-                    "selectedProfile" -> result.success(GameCoordinator.selected())
-                    "createProfile" -> result.success(GameCoordinator.create(requireNotNull(call.argument<String>("packageName")),requireNotNull(call.argument<String>("name"))))
+                    "selectedProfile" -> result.success(GameCoordinator.selectedForDisplay(display?.displayId ?: 0))
+                    "createProfile" -> result.success(GameCoordinator.create(requireNotNull(call.argument<String>("packageName")),requireNotNull(call.argument<String>("name")),display?.displayId ?: 0))
                     "selectProfile" -> result.success(GameCoordinator.select(requireNotNull(call.argument<String>("id"))))
                     "renameProfile" -> result.success(GameCoordinator.rename(requireNotNull(call.argument<String>("id")),requireNotNull(call.argument<String>("name"))))
                     "deleteProfile" -> { GameCoordinator.delete(requireNotNull(call.argument<String>("id"))); result.success(null) }
-                    "openEditor" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.openEditor(requireNotNull(call.argument<String>("id"))); result.success(null) }
-                    "startProfile" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.startProfile(requireNotNull(call.argument<String>("id"))); result.success(null) }
+                    "openEditor" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.openEditor(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
+                    "startProfile" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.startProfile(requireNotNull(call.argument<String>("id")),displayId=display?.displayId ?: 0); result.success(null) }
                     "pause" -> { SessionController.pause("Pausada por usuario"); result.success(null) }
                     "accessibilitySettings" -> { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(null) }
+                    "openOverlaySettings" -> {
+                        try { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))) }
+                        catch(_:android.content.ActivityNotFoundException) { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)) }
+                        result.success(null)
+                    }
                     "openLab" -> { launchLab(); result.success(null) }
                     "startLab", "probe" -> {
                         check(!LocalActivation.busy) { "Espera a que termine la activación" }
                         GameCoordinator.clearTools()
-                        val bounds = windowManager.maximumWindowMetrics.bounds
-                        if (call.method == "startLab") SessionController.arm(bounds.width(), bounds.height())
+                        val displayId=display?.displayId ?: 0
+                        val labDisplay=requireNotNull(getSystemService(DisplayManager::class.java).getDisplay(displayId)) { "Pantalla no disponible" }
+                        val size=Point()
+                        @Suppress("DEPRECATION") labDisplay.getRealSize(size)
+                        if (call.method == "startLab") SessionController.arm(size.x,size.y,displayId)
                         else check(dev.mobimapper.mobimapper.backend.BackendRegistry.injector != null) { "Activa primero el backend ADB" }
                         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)
                         startForegroundService(Intent(this, SessionService::class.java))
-                        launchLab()
-                        if (call.method == "probe") SessionController.probe(bounds.width(), bounds.height())
+                        launchLab(displayId)
+                        if (call.method == "probe") SessionController.probe(size.x,size.y,displayId)
                         result.success(null)
                     }
                     "stop" -> { GameCoordinator.stop(); result.success(null) }
                     "shutdownBackend" -> { SessionController.shutdownBackend(); result.success(null) }
                     else -> result.notImplemented()
                 }
+            } catch(e: ExternalOverlayPermissionRequiredException) {
+                result.error("EXTERNAL_OVERLAY_PERMISSION_REQUIRED",e.message,mapOf("displayId" to e.displayId))
             } catch(e: Exception) { result.error("NATIVE_STATE", e.message, null) }
         }
     }
@@ -93,11 +109,11 @@ class MainActivity : FlutterActivity() {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults)
         if(requestCode==42) dev.mobimapper.mobimapper.activation.ActivationService.instance?.refresh()
     }
-    private fun launchLab() {
+    private fun launchLab(displayId:Int=display?.displayId ?: 0) {
         val intent = packageManager.getLaunchIntentForPackage(SessionController.TARGET) ?: error("Instala el APK MobiMapper Input Lab")
         // Reuse the focused task's existing receiver when starting another session.
         // A new Activity would discard the independent observer between recovery and a new press.
         intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        startActivity(intent)
+        startActivity(intent,ActivityOptions.makeBasic().apply { launchDisplayId=displayId }.toBundle())
     }
 }

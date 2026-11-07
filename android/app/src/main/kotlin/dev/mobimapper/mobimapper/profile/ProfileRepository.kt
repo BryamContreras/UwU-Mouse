@@ -52,12 +52,18 @@ class ProfileRepository(private val storage: ProfileStorage) {
         return ProfileImportResult(document.profiles.toList(), selection, next.size)
     }
 
-    @Synchronized fun delete(id: String) {
+    /** Deletion and an optional same-game selection replacement share one atomic document. */
+    @Synchronized fun delete(id: String, replacementId: String? = null) {
         load()
-        if (id !in profiles) return
+        val removed = profiles[id] ?: return
         val next = LinkedHashMap(profiles)
         next.remove(id)
-        commit(next, if (selectedId == id) null else selectedId)
+        if (replacementId != null) {
+            val replacement = requireNotNull(next[replacementId]) { "Perfil de reemplazo inexistente" }
+            require(replacement.packageName == removed.packageName) { "El perfil de reemplazo debe ser del mismo juego" }
+            require(replacement.calibration.displayScope == removed.calibration.displayScope) { "El perfil de reemplazo debe ser de la misma pantalla" }
+        }
+        commit(next, if (selectedId == id) replacementId else selectedId)
     }
 
     @Synchronized fun select(id: String?) {

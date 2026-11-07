@@ -15,10 +15,17 @@ data class PreparedProfile(val profile: GameProfile, val geometry: MappingGeomet
                            val cursorActions: List<PreparedCursorAction> = emptyList())
 
 object ProfileCompiler {
-    fun prepare(profile: GameProfile, currentWidth: Int, currentHeight: Int, rotation: Int): PreparedProfile {
+    fun prepare(profile: GameProfile, currentWidth: Int, currentHeight: Int, rotation: Int,
+                displayScope: String = "phone", windowFrame: GameArea? = null): PreparedProfile {
         ProfileValidator.requireValid(profile)
         val c = profile.calibration
         require(c.confirmed) { "Abre el editor y confirma el área de juego antes de iniciar" }
+        require(displayScope in setOf("phone","external") && c.displayScope==displayScope) {
+            "El perfil pertenece a otra pantalla; elige o calibra su mapeo"
+        }
+        if(c.displayScope=="external" || c.windowFrame!=null) require(c.windowFrame!=null && c.windowFrame==windowFrame) {
+            "Cambió la ventana del juego; recalibra el perfil"
+        }
         require(c.screenWidth == currentWidth && c.screenHeight == currentHeight && c.rotation == rotation) {
             "Cambió la orientación o geometría de pantalla; recalibra el perfil"
         }

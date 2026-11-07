@@ -10,13 +10,25 @@ import dev.mobimapper.mobimapper.MainActivity
 class SessionService : Service(), DisplayManager.DisplayListener {
     private var lastGeometry = ""
     private fun displayGeometry(): String {
-        val display = getSystemService(DisplayManager::class.java).getDisplay(0) ?: return "missing"
+        val id=SessionController.targetDisplayId
+        val display = getSystemService(DisplayManager::class.java).getDisplay(id) ?: return "$id:missing"
         val size = android.graphics.Point()
         @Suppress("DEPRECATION") display.getRealSize(size)
-        return "${display.rotation}:${size.x}:${size.y}"
+        val metrics=android.util.DisplayMetrics()
+        @Suppress("DEPRECATION") display.getRealMetrics(metrics)
+        return "$id:${display.state}:${display.rotation}:${size.x}:${size.y}:${metrics.densityDpi}"
     }
     private val lockReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) { SessionController.pause("Pantalla apagada o bloqueada") }
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val id=SessionController.targetDisplayId
+            val target=getSystemService(DisplayManager::class.java).getDisplay(id)
+            val locked=getSystemService(KeyguardManager::class.java).isKeyguardLocked
+            if(id==0 || locked || target?.state!=android.view.Display.STATE_ON) {
+                SessionController.pause("Pantalla apagada o bloqueada")
+                SessionController.targetChanged(false)
+                CaptureService.instance?.captureMouse(false)
+            } else CaptureService.instance?.refreshContext()
+        }
     }
     override fun onCreate() {
         super.onCreate()
@@ -37,20 +49,35 @@ class SessionService : Service(), DisplayManager.DisplayListener {
         lastGeometry = displayGeometry()
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        lastGeometry=displayGeometry()
         if (intent?.action == "stop") { dev.mobimapper.mobimapper.game.GameCoordinator.stop(); stopSelf() }
         return START_NOT_STICKY
     }
     override fun onBind(intent: Intent?): IBinder? = null
-    override fun onDisplayAdded(displayId: Int) = Unit
-    override fun onDisplayRemoved(displayId: Int) { if (displayId == 0) SessionController.pause("Pantalla retirada") }
+    override fun onDisplayAdded(displayId: Int) {
+        dev.mobimapper.mobimapper.session.CaptureService.instance?.refreshContext()
+        if(SessionController.active) SessionController.pause("Cambió la conexión de pantallas; reanuda manualmente")
+    }
+    override fun onDisplayRemoved(displayId: Int) {
+        if (displayId == SessionController.targetDisplayId)
+            dev.mobimapper.mobimapper.game.GameCoordinator.displayUnavailable(displayId)
+        else dev.mobimapper.mobimapper.session.CaptureService.instance?.refreshContext()
+    }
     override fun onDisplayChanged(displayId: Int) {
-        if (displayId != 0) return
+        if (displayId != SessionController.targetDisplayId) return
         val geometry = displayGeometry()
         if (geometry != lastGeometry) dev.mobimapper.mobimapper.game.GameCoordinator.geometryChanged()
         lastGeometry = geometry
+        if(getSystemService(DisplayManager::class.java).getDisplay(displayId)?.state!=android.view.Display.STATE_ON) {
+            // Cancel pending arms/diagnostics too, even when no contact has started yet.
+            SessionController.pause("Pantalla apagada o desconectada; inicia manualmente")
+            SessionController.targetChanged(false)
+            CaptureService.instance?.captureMouse(false)
+        }
+        CaptureService.instance?.refreshContext()
     }
     override fun onDestroy() {
-        SessionController.pause()
+        SessionController.sessionServiceDestroyed()
         unregisterReceiver(lockReceiver)
         getSystemService(DisplayManager::class.java).unregisterDisplayListener(this)
         stopForeground(STOP_FOREGROUND_REMOVE)

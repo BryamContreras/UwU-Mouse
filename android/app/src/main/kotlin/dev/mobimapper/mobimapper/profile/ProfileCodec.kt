@@ -82,6 +82,8 @@ object ProfileCodec {
             .put("name", profile.name).put("packageName", profile.packageName).put("orientation", profile.orientation).put("switchKey",profile.switchKey)
             .put("calibration", JSONObject().put("screenWidth", c.screenWidth).put("screenHeight", c.screenHeight)
                 .put("rotation", c.rotation).put("confirmed", c.confirmed)
+                .put("displayScope",c.displayScope)
+                .put("windowFrame",c.windowFrame?.let(::areaToJson) ?: JSONObject.NULL)
                 .put("area", JSONObject().put("left", a.left).put("top", a.top).put("right", a.right).put("bottom", a.bottom)))
             .put("joystick", JSONObject().put("x", j.x).put("y", j.y).put("radius", j.radius)
                 .put("upKey", j.upKey).put("downKey", j.downKey).put("leftKey", j.leftKey).put("rightKey", j.rightKey).put("enabled", j.enabled))
@@ -109,9 +111,14 @@ object ProfileCodec {
         val c = root.getJSONObject("calibration"); val area = c.getJSONObject("area")
         val j = root.getJSONObject("joystick"); val camera = root.getJSONObject("camera")
         val action = root.getJSONObject("action"); val shortcuts = root.getJSONObject("shortcuts")
+        val displayScope=if(schema>=9) string(c,"displayScope") else "phone"
+        val windowFrame=if(schema>=9) {
+            require(c.has("windowFrame")) { "Falta windowFrame en la calibración" }
+            if(c.isNull("windowFrame")) null else areaFromJson(c.getJSONObject("windowFrame"))
+        } else null
         val profile = GameProfile(string(root, "id"), string(root, "name"), string(root, "packageName"), GameProfile.SCHEMA_VERSION,
             Calibration(int(c, "screenWidth"), int(c, "screenHeight"), int(c, "rotation"),
-                GameArea(float(area, "left"), float(area, "top"), float(area, "right"), float(area, "bottom")), bool(c, "confirmed")),
+                GameArea(float(area, "left"), float(area, "top"), float(area, "right"), float(area, "bottom")), bool(c, "confirmed"),displayScope,windowFrame),
             JoystickSpec(float(j, "x"), float(j, "y"), float(j, "radius"), int(j, "upKey"), int(j, "downKey"), int(j, "leftKey"), int(j, "rightKey"),
                 if(schema>=7) bool(j,"enabled") else true),
             CameraSpec(float(camera, "x"), float(camera, "y"), float(camera, "width"), float(camera, "height"),
@@ -128,6 +135,10 @@ object ProfileCodec {
         require(string(root, "orientation") == profile.orientation) { "Orientación y dimensiones del perfil no coinciden" }
         return ProfileValidator.requireValid(profile)
     }
+
+    private fun areaToJson(area:GameArea):JSONObject = JSONObject().put("left",area.left).put("top",area.top)
+        .put("right",area.right).put("bottom",area.bottom)
+    private fun areaFromJson(area:JSONObject):GameArea = GameArea(float(area,"left"),float(area,"top"),float(area,"right"),float(area,"bottom"))
 
     private fun actionToJson(action: ActionSpec): JSONObject = JSONObject().put("x",action.x).put("y",action.y)
         .put("triggerKind",action.triggerKind).put("code",action.code).put("markerSizeDp",action.markerSizeDp)

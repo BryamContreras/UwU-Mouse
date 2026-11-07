@@ -81,10 +81,77 @@ void main() {
   );
   test('unsupported profile schema is rejected before use', () {
     expect(
-      () => LocalProfile.fromWire(profileWire()..['schemaVersion'] = 9),
+      () => LocalProfile.fromWire(profileWire()..['schemaVersion'] = 10),
       throwsFormatException,
     );
   });
+  test(
+    'UI display defaults to phone and reports the actual external scope',
+    () {
+      expect(NativeStatus.fromWire(status()).uiDisplayId, 0);
+      expect(NativeStatus.fromWire(status()).uiDisplayScope, 'phone');
+      expect(
+        NativeStatus.fromWire(status()..['uiDisplayId'] = 2).uiDisplayScope,
+        'external',
+      );
+      expect(
+        () => NativeStatus.fromWire(status()..['uiDisplayId'] = -1),
+        throwsFormatException,
+      );
+    },
+  );
+  test('overlay authorization requires an explicit native grant', () {
+    expect(NativeStatus.fromWire(status()).drawOverlays, isFalse);
+    expect(
+      NativeStatus.fromWire(status()..['drawOverlays'] = true).drawOverlays,
+      isTrue,
+    );
+    for (final value in [false, null, 'true', 1]) {
+      expect(
+        NativeStatus.fromWire(status()..['drawOverlays'] = value).drawOverlays,
+        isFalse,
+      );
+    }
+  });
+  test('overlay settings command uses the explicit native action', () async {
+    const channel = MethodChannel('dev.mobimapper/control.v1');
+    final calls = <MethodCall>[];
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          calls.add(call);
+          return null;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+    await const NativeApi().execute(NativeCommand.openOverlaySettings);
+    expect(calls.single.method, 'openOverlaySettings');
+    expect(calls.single.arguments, isNull);
+  });
+  test(
+    'schema 9 calibration is strict and legacy ignores external metadata',
+    () {
+      final wire = displayProfileWire('external', 'dex');
+      expect(LocalProfile.fromWire(wire).displayScope, 'external');
+      expect(
+        LocalProfile.fromWire({...wire, 'schemaVersion': 8}).displayScope,
+        'phone',
+      );
+      final calibration = wire['calibration']! as Map;
+      for (final invalid in [null, 1, true, 'desktop']) {
+        calibration['displayScope'] = invalid;
+        expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+      }
+      calibration['displayScope'] = 'external';
+      calibration['windowFrame'] = null;
+      expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+      calibration['confirmed'] = false;
+      expect(LocalProfile.fromWire(wire).displayScope, 'external');
+      calibration.remove('windowFrame');
+      expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+    },
+  );
   test(
     'legacy profile ignores unversioned switch key and keeps it unassigned',
     () {
@@ -527,6 +594,22 @@ Map<Object?, Object?> macroWire(int index) => {
     <Object?, Object?>{'x': .4, 'y': .6, 'waitMs': 100},
   ],
 };
+
+Map<Object?, Object?> displayProfileWire(String scope, String id) {
+  final wire = profileWire()
+    ..['schemaVersion'] = 9
+    ..['switchKey'] = 0
+    ..['id'] = id
+    ..['name'] = scope == 'external' ? 'Perfil DeX' : 'Perfil teléfono';
+  wire['calibration'] = <Object?, Object?>{
+    ...Map<Object?, Object?>.from(wire['calibration']! as Map),
+    'displayScope': scope,
+    'windowFrame': scope == 'external'
+        ? {'left': 0.0, 'top': 0.0, 'right': 2316.0, 'bottom': 1080.0}
+        : null,
+  };
+  return wire;
+}
 
 Map<Object?, Object?> profileWire({bool calibrated = true}) => {
   'schemaVersion': 7,

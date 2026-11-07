@@ -1,74 +1,51 @@
 # UwU Mouse
 
-Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, desarrollado con Flutter y Kotlin. La interfaz gestiona juegos, perfiles y ajustes; la entrada y composición multitáctil se procesan en Kotlin dentro del teléfono.
+Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.2.0+37**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
 
-La versión de desarrollo actual es **0.2.0+34**. Conserva la identidad Android `dev.mobimapper.mobimapper` para mantener perfiles y autorizaciones al actualizar con el mismo certificado. El nombre visible pasa de MobiMapper a **UwU Mouse**.
+## Empezar
 
-## Uso
+1. Abre **Ajustes de conexión** y comprueba **Accesibilidad** y **Motor de toques**. Cada estado muestra el acceso para activarlo cuando hace falta.
+2. Para activar el motor sin PC, abre **Activar en este teléfono**, empareja mediante el código de Depuración inalámbrica e introdúcelo desde la notificación. Después puedes usar **Reactivar sin código** mientras Android conserve la autorización. [Guía local](docs/ACTIVAR_TELEFONO.md).
+3. Agrega un juego y toca su círculo para abrirlo. **Mapear** permite colocar controles y guardar el perfil.
+4. La burbuja permite elegir **Perfiles**, mapear, alternar Control/Teclado y cerrar la sesión. Mantén pulsado un juego para ver sus opciones.
 
-**Activación desde el teléfono:** en **Ajustes → Conexión → Activar en este teléfono**, abre Depuración inalámbrica, elige **Emparejar dispositivo con código** e introduce sus seis dígitos desde la notificación de UwU Mouse. La app empareja e inicia el motor local; después puedes usar **Reactivar sin código** mientras Android conserve la autorización. Accesibilidad es un componente adicional y debe estar habilitada. [Guía paso a paso](docs/ACTIVAR_TELEFONO.md). En +34 se comprobaron el código por notificación, la conservación de autorización al actualizar y el arranque local desde **Reactivar sin código** en el Samsung, con UID2000 y permiso de inyección verificados.
+En una pantalla externa, activa también **Ventanas de DeX** desde Ajustes de conexión: abre el permiso estándar de Android para mostrar ventanas sobre otras apps. El teléfono conserva su ruta de superposición de accesibilidad.
 
-Después de reiniciar o perder el proceso puede hacer falta reactivar el motor. No se inicia el juego ni se recuperan acciones mantenidas automáticamente. **InputLab es opcional** para jugar. El [activador de PC](docs/ACTIVAR_PC.md) permanece como alternativa.
+Después de reiniciar o perder el motor puede hacer falta reactivarlo. Al tocar un juego, la app intenta hacerlo con la identidad guardada si Depuración inalámbrica sigue disponible; requiere tu pulsación y no recupera acciones mantenidas. **InputLab es opcional**. El [activador de PC](docs/ACTIVAR_PC.md) sigue disponible.
 
-Tras emparejar una vez, **toca tu juego para jugar**: si el motor está apagado y Depuración inalámbrica sigue activa, la app intenta reconectar y activarlo antes de abrir el juego. También puedes hacerlo desde **Activar en este teléfono → Reactivar sin código**. Ese inicio siempre parte de tu pulsación sobre el juego; no se abre por sí solo.
+## Mapeo y perfiles
 
-1. Agrega un juego a la biblioteca y ábrelo desde su círculo.
-2. Coloca los controles con **Mapear** y guarda el perfil.
-3. Usa la burbuja para alternar Control/Teclado, editar, elegir un perfil o cerrar la sesión.
-4. Mantén pulsado el círculo de un juego para abrir sus opciones.
+Joystick WASD, cámara continua o por región, acciones táctiles, Disparo M1, Apuntar M2, macros de puntos, **Repetir** al mantener y **Mapa/Mochila** con cursor. Hasta **24 acciones y macros combinadas**. Arrastra los círculos, asigna directamente una tecla, cambia su tamaño desde una esquina o elimínalos con su X. La burbuja permite mostrar los controles y ajustar su opacidad.
 
-Los perfiles son locales y persistentes. Cada uno conserva sus botones, posiciones, tamaños, joystick, cámara, sensibilidad y atajos. Se pueden usar varios perfiles del mismo juego; las teclas para seleccionarlos se validan contra las asignaciones existentes. El editor trabaja sobre un borrador: Guardar aplica el cambio mediante una transición segura y Cancelar conserva el perfil anterior.
+Cada juego admite varios perfiles locales con mapeos independientes. **Perfiles** aparece primero en la burbuja y permite seleccionarlos o eliminarlos con confirmación. Los atajos se validan contra las asignaciones existentes. El editor usa un borrador: Guardar valida y aplica de forma segura; Cancelar conserva el perfil anterior. Los paneles tienen controles compactos y barras de ajuste más visibles.
 
-Controles disponibles: joystick WASD, cámara, acciones táctiles, Disparo M1, Apuntar M2, macros de puntos, **Repetir** al mantener y **Mapa/Mochila** con alternancia de cursor. Se permiten hasta **24 acciones/macros combinadas**. Los círculos se arrastran, cambian de tamaño desde una esquina y se eliminan con su X. La burbuja permite mostrar el mapeo y ajustar su opacidad.
+En **DeX**, el perfil de pantalla externa se separa del perfil del teléfono. Su calibración incluye el marco de la ventana; cambiar su tamaño, posición u orientación exige recalibrar. La sesión se pausa al salir del contexto autorizado. Pausar, editar o recuperar el inyector no reproduce teclas o botones que seguían mantenidos.
 
-La sesión se pausa al perder el contexto autorizado, cambiar la calibración o recuperar el inyector. Las entradas mantenidas no se reproducen automáticamente después de una pausa. El guardián conserva la secuencia activa y puede reemplazar el worker y cancelar contactos; la pérdida completa de capacidad de inyección mantiene una limitación documentada. [Arquitectura y perfiles](docs/PUBLIC_ARCHITECTURE.md).
+## Compatibilidad comprobada
 
-## Descargar APK por arquitectura
+En **Samsung con Android 14, DeX por HDMI y pantalla completa a 1920×1080**, se probó Free Fire en Entrenamiento con teclado y ratón físicos. El usuario confirmó el recorrido de movimiento/cámara/acciones, incluida la mira, también después de editar, guardar y volver a abrir desde la interfaz.
 
-Abre **Actions → Android APKs**, elige una ejecución terminada y descarga su artifact. También puedes usar **Run workflow**. Hay APK separados para **arm64-v8a**, **armeabi-v7a** y **x86_64**, con versión en el nombre y un artifact de sumas SHA-256. El Samsung usado para las pruebas utiliza arm64-v8a.
+Esta prueba no acredita Wireless DeX, DeX para PC, ventanas movidas o redimensionadas, otros juegos ni todos los controles de cada perfil. La reapertura comprobada conservó el repositorio en memoria; el perfil externo reciente no se volvió a probar físicamente tras un reinicio frío del proceso. Las pruebas de persistencia, InputLab y recuperación tienen alcances separados. [Arquitectura, rendimiento y límites](docs/PUBLIC_ARCHITECTURE.md).
 
-Los builds de `main` y manuales usan el certificado de desarrollo persistente configurado como secreto del repositorio. Los pull requests sin ese secreto usan una firma efímera. Siguen siendo APK de desarrollo, no una distribución Play. [Workflow, toolchain y firma](docs/CI_ANDROID.md).
+## Descargar y compilar
 
-## Compilar
+**Actions → Android APKs** genera APK para **arm64-v8a**, **armeabi-v7a** y **x86_64**, más sumas SHA-256. Descarga los artifacts de una ejecución terminada o usa **Run workflow**. Los builds de `main` y manuales usan el certificado de desarrollo persistente del repositorio; los pull requests sin ese secreto usan firma efímera. [CI, herramientas y firma](docs/CI_ANDROID.md).
 
-Base fijada: Flutter **3.47.2**, Dart **3.13.2**, Android SDK **36**, NDK **28.2.13676358**, AGP **8.13.1**, Kotlin **2.2.20** y Gradle **8.14.3**. CI utiliza Temurin JDK **17**; la compilación local también admite el JDK 21 de Android Studio y produce bytecode 17. Conserva `pubspec.lock` y el wrapper.
-
-En Windows, con Flutter y Android SDK configurados:
+Base fijada: Flutter **3.47.2**, Dart **3.13.2**, SDK **36**, NDK **28.2.13676358**, AGP **8.13.1**, Kotlin **2.2.20**, Gradle **8.14.3** y bytecode Java **17**. Conserva `pubspec.lock` y el wrapper. En Windows:
 
 ```powershell
 .\scripts\Build.ps1 -Release
 ```
 
-El script ejecuta análisis y pruebas Flutter, construye el APK, ejecuta las pruebas JVM y lint de la app y del receptor independiente InputLab. Para obtener los tres APK localmente:
+Ejecuta análisis, pruebas Flutter/JVM, lint y APK. Para generar APK separados localmente:
 
 ```sh
 flutter pub get --enforce-lockfile
-flutter analyze
-flutter test
 flutter build apk --release --split-per-abi --android-project-arg=force-version-code-ignoring-abi=true
-cd android
-bash ./gradlew :app:testDebugUnitTest :app:lintDebug :inputlab:testDebugUnitTest :inputlab:assembleDebug :inputlab:lintDebug
 ```
 
-Las salidas se encuentran en `build/app/outputs/flutter-apk/`. En PowerShell sustituye `bash ./gradlew` por `.\gradlew.bat` al ejecutar las tareas Android.
+Instala sobre la versión existente con el mismo certificado, con la sesión detenida y sin contactos. El motor local se activa con ADB autorizado como UID 2000 y comprueba el permiso de inyección; no requiere root ni modifica los juegos. Accesibilidad sigue siendo necesaria para la captura y coordinación de esta implementación.
 
-## Instalar y activar
+Las métricas de cola o IPC no son latencia hasta imagen. CI no sustituye las pruebas físicas. Capturas, perfiles reales, inventarios, registros privados y claves de firma se excluyen del repositorio público.
 
-Instala encima de la versión existente con el mismo certificado. Para activar desde el teléfono sigue la [guía local](docs/ACTIVAR_TELEFONO.md); no requiere una PC. Como alternativa de desarrollo, con depuración Android autorizada y teclado y ratón conectados por OTG o Bluetooth:
-
-```powershell
-.\scripts\Install.ps1 -Release -Serial '<serial>'
-.\scripts\Activate.ps1 -Serial '<serial>'
-```
-
-Detén la sesión y confirma que no quedan contactos antes de actualizar. Reutiliza las autorizaciones existentes; si Android lo requiere, habilita únicamente **UwU Mouse · entrada local** desde sus ajustes de accesibilidad. La activación inicia el backend local UID 2000 y comprueba `INJECT_EVENTS`; no modifica los juegos ni instala root.
-
-## Pruebas y alcance
-
-El historial distingue la evidencia de InputLab, los registros del mapeador y el comportamiento visible confirmado en Free Fire. Un ACK de inyección no prueba que una acción haya ocurrido dentro de un juego. La referencia física disponible corresponde a Samsung/Free Fire en un escenario controlado; no se anuncia compatibilidad universal.
-
-La activación local +34 tiene evidencia de dispositivo; siguen pendientes las pruebas tras reinicio físico, revocación y ejecución con InputLab ausente. Las pruebas físicas nuevas de perfiles y atajos, Repetir, Mapa/Mochila, macros y Suspender deben registrarse por separado. Los periodos de repetición son nominales: si hay retrasos se omiten periodos en lugar de acumular ráfagas. Las métricas internas no representan latencia hasta imagen. CI verifica compilación, pruebas automatizadas y empaquetado; no sustituye esas pruebas físicas.
-
-Las capturas, perfiles, inventarios y logs del dispositivo en `evidence/`, las entregas locales de `dist/`, los informes históricos privados y los archivos de firma se excluyen del repositorio público.
-
-No se ha definido una licencia general para el proyecto. Las dependencias conservan sus licencias respectivas. El cliente de activación adapta componentes de Shizuku bajo Apache 2.0 y utiliza Conscrypt, Bouncy Castle y BoringSSL; se incluyen atribuciones y textos en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) y en el APK.
+No se ha definido una licencia general. Las dependencias conservan sus licencias; el cliente de activación adapta componentes de Shizuku bajo Apache 2.0 y utiliza Conscrypt, Bouncy Castle y BoringSSL. [Atribuciones](THIRD_PARTY_NOTICES.md).

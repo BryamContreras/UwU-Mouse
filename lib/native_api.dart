@@ -38,12 +38,17 @@ class NativeStatus {
       editorVisible = wire['editorVisible'] == true,
       pointerMode = wire['pointerMode'] as String? ?? 'none',
       contextError = wire['contextError'] as String? ?? '',
+      uiDisplayId = wire['uiDisplayId'] as int? ?? 0,
+      drawOverlays = wire['drawOverlays'] == true,
       devices = (wire['devices']! as List<Object?>)
           .cast<Map<Object?, Object?>>()
           .map((value) => value['name']! as String)
           .toList() {
     if (wire['protocol'] != 1) {
       throw const FormatException('Protocolo nativo incompatible');
+    }
+    if (uiDisplayId < 0) {
+      throw const FormatException('Pantalla de interfaz incompatible');
     }
   }
   final String state,
@@ -53,7 +58,12 @@ class NativeStatus {
       mode,
       contextError,
       pointerMode;
-  final bool accessibility, backend, releaseUnverified, active, editorVisible;
+  final bool accessibility,
+      backend,
+      releaseUnverified,
+      active,
+      editorVisible,
+      drawOverlays;
   final String? activeProfileId, activePackage, profileName;
   final int contacts,
       keys,
@@ -63,12 +73,14 @@ class NativeStatus {
       maxQueueDepth,
       mergedMoves;
   final int? backendUid, targetUid;
+  final int uiDisplayId;
   final List<double> queueMs, ipcMs;
   final List<String> devices;
 
   bool get recovering => mode == 'recovering';
   bool get blocked => mode == 'blocked' || releaseUnverified;
   bool get editing => mode == 'editing' || editorVisible;
+  String get uiDisplayScope => uiDisplayId == 0 ? 'phone' : 'external';
 
   static List<double> _timings(Object? value) => (value! as List<Object?>)
       .map((sample) => (sample! as num).toDouble())
@@ -77,6 +89,7 @@ class NativeStatus {
 
 enum NativeCommand {
   accessibilitySettings,
+  openOverlaySettings,
   openLab,
   startLab,
   probe,

@@ -4,8 +4,11 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.hardware.display.DisplayManager
 import android.os.*
 import android.util.Log
+import android.view.InputEvent
+import android.view.MotionEvent
 import dev.mobimapper.mobimapper.backend.recovery.*
 import dev.mobimapper.mobimapper.engine.TouchFrame
 import dev.mobimapper.mobimapper.engine.TouchCoordinatePolicy
@@ -24,7 +27,7 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     private var targetPackage="dev.mobimapper.mobimapper"
     private var targetUid=appUid
     private var coordinatePolicy=TouchCoordinatePolicy.STRICT
-    private val journal=RecoveryJournal()
+    private var journal=RecoveryJournal()
     private val recoveryThread=HandlerThread("MobiRecovery").apply { start() }
     private val handler=Handler(recoveryThread.looper)
     private var connection: WorkerConnection?=null
@@ -62,6 +65,7 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     private var timingSessionId=0L
     private val taskManager=Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
     private val focusMethod=Class.forName("android.app.IActivityTaskManager").getMethod("getFocusedRootTaskInfo")
+    private val motionDisplayMethod=InputEvent::class.java.getMethod("getDisplayId")
     private var expiry:Runnable?=null
     private val pointer = PointerPresentation { type ->
         val identity=Binder.clearCallingIdentity()
@@ -77,27 +81,53 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     }
 
     private fun authorize() { check(Binder.getCallingUid()==appUid) { "Unauthorized client" } }
+    /** The Binder supplies its own event copy. This read must never wait for injection/recovery. */
+    override fun motionDisplayId(event:MotionEvent):Int = try {
+        authorize()
+        motionDisplayMethod.invoke(event) as Int
+    } finally { event.recycle() }
+    /** Cold global focus query, independent of whichever destination the previous session used. */
+    override fun focusedApplication():Bundle {
+        authorize()
+        val identity=Binder.clearCallingIdentity()
+        return try {
+            runCatching {
+                val info=requireNotNull(focusMethod.invoke(taskManager))
+                val top=info.javaClass.getField("topActivity").get(info) as? ComponentName
+                val displayId=info.javaClass.getField("displayId").getInt(info)
+                Bundle().apply {
+                    putBoolean("valid",top!=null && displayId>=0)
+                    putString("packageName",top?.packageName)
+                    putInt("displayId",displayId)
+                }
+            }.getOrElse { Bundle().apply { putBoolean("valid",false);putInt("displayId",-1) } }
+        } finally { Binder.restoreCallingIdentity(identity) }
+    }
     private fun privileged(block:()->Boolean):Boolean {
         val identity=Binder.clearCallingIdentity()
         return try { block() } finally { Binder.restoreCallingIdentity(identity) }
     }
     private fun focused():Boolean=privileged {
         runCatching { val info=focusMethod.invoke(taskManager); val top=info.javaClass.getField("topActivity").get(info) as? ComponentName
-            top?.packageName==targetPackage && info.javaClass.getField("displayId").getInt(info)==0 }.getOrDefault(false)
+            top?.packageName==targetPackage && info.javaClass.getField("displayId").getInt(info)==journal.displayId }.getOrDefault(false)
     }
     private fun selectTarget(packageName:String, expectedUid:Int?=null,
-                             policy:TouchCoordinatePolicy=TouchCoordinatePolicy.STRICT) {
+                             policy:TouchCoordinatePolicy=TouchCoordinatePolicy.STRICT,displayId:Int=0) {
         require(packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) && packageName!="dev.mobimapper.mobimapper")
+        require(displayId >= 0) { "Pantalla de destino no válida" }
         val identity=Binder.clearCallingIdentity()
         val uid=try {
+            require(context.getSystemService(DisplayManager::class.java).getDisplay(displayId)?.isValid==true) { "La pantalla de destino ya no está disponible" }
             require(context.packageManager.getLaunchIntentForPackage(packageName)!=null) { "Destino sin actividad de lanzamiento" }
             context.packageManager.getPackageUid(packageName,0)
         } finally { Binder.restoreCallingIdentity(identity) }
         require(uid>=10000 && (expectedUid==null || expectedUid==uid)) { "El UID del destino cambió" }
         val snap=journal.snapshot()
-        check(snap.possibleContacts==0 && snap.state!=RecoveryInjectionState.RECOVERY_NEEDED && !recoveryScheduled) { "Recupera el gesto anterior antes de cambiar destino" }
-        if(uid!=targetUid || packageName!=targetPackage || policy!=coordinatePolicy) {
+        check(DestinationChangePolicy.maySelect(snap,recoveryScheduled)) { "Recupera el gesto anterior antes de cambiar destino" }
+        if(uid!=targetUid || packageName!=targetPackage || policy!=coordinatePolicy || displayId!=journal.displayId) {
             connection?.close(); connection=null
+            // A display belongs to the complete gesture. Never retarget an unfinished journal.
+            if(displayId!=journal.displayId) journal=RecoveryJournal(displayId=displayId)
             targetPackage=packageName; targetUid=uid; coordinatePolicy=policy
         }
     }
@@ -124,10 +154,14 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     @Synchronized override fun beginContinuousTarget(client:IBackendEvents,width:Int,height:Int,targetPackage:String):Long {
         return beginTargetWithPolicy(client,width,height,targetPackage,TouchCoordinatePolicy.CONTINUOUS_CAMERA_9)
     }
+    @Synchronized override fun beginTargetOnDisplay(client:IBackendEvents,width:Int,height:Int,targetPackage:String,
+                                                   displayId:Int,continuousCamera:Boolean):Long =
+        beginTargetWithPolicy(client,width,height,targetPackage,
+            if(continuousCamera) TouchCoordinatePolicy.CONTINUOUS_CAMERA_9 else TouchCoordinatePolicy.STRICT,displayId)
     private fun beginTargetWithPolicy(client:IBackendEvents,width:Int,height:Int,targetPackage:String,
-                                      policy:TouchCoordinatePolicy):Long {
+                                      policy:TouchCoordinatePolicy,displayId:Int=0):Long {
         authorize(); check(!closed)
-        selectTarget(targetPackage,policy=policy)
+        selectTarget(targetPackage,policy=policy,displayId=displayId)
         check(focused()) { "Destino sin foco" }
         require(width in 100..8192 && height in 100..8192)
         val old=journal.snapshot()
@@ -207,12 +241,17 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
         return recoverTargetOrphanWithPolicy(client,width,height,downTime,ids,xs,ys,originalTargetUid,
             originalTargetPackage,TouchCoordinatePolicy.CONTINUOUS_CAMERA_9)
     }
+    @Synchronized override fun recoverTargetOrphanOnDisplay(client:IBackendEvents,width:Int,height:Int,downTime:Long,
+        ids:IntArray,xs:FloatArray,ys:FloatArray,originalTargetUid:Int,originalTargetPackage:String,
+        originalDisplayId:Int,continuousCamera:Boolean):Long =
+        recoverTargetOrphanWithPolicy(client,width,height,downTime,ids,xs,ys,originalTargetUid,originalTargetPackage,
+            if(continuousCamera) TouchCoordinatePolicy.CONTINUOUS_CAMERA_9 else TouchCoordinatePolicy.STRICT,originalDisplayId)
     private fun recoverTargetOrphanWithPolicy(client:IBackendEvents,width:Int,height:Int,downTime:Long,
         ids:IntArray,xs:FloatArray,ys:FloatArray,originalTargetUid:Int,originalTargetPackage:String,
-        policy:TouchCoordinatePolicy):Long {
+        policy:TouchCoordinatePolicy,displayId:Int=0):Long {
         authorize(); check(!closed)
         require(width in 100..8192 && height in 100..8192)
-        selectTarget(originalTargetPackage,originalTargetUid,policy)
+        selectTarget(originalTargetPackage,originalTargetUid,policy,displayId)
         check(focused()) { "Vuelve al destino para recuperar el gesto anterior" }
         require(originalTargetUid==targetUid) { "Original target UID changed" }
         check(!appIsStopped()) { "Aplicación detenida por el usuario" }
@@ -333,11 +372,11 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
         val generation=++workerGeneration
         val apk=context.packageManager.getApplicationInfo("dev.mobimapper.mobimapper",0).sourceDir
         val builder=ProcessBuilder("/system/bin/app_process","/system/bin","--nice-name=mobimapper_injector","dev.mobimapper.mobimapper.backend.InjectionWorkerMain",generation.toString(),targetUid.toString(),
-            if(coordinatePolicy==TouchCoordinatePolicy.CONTINUOUS_CAMERA_9) "1" else "0")
+            if(coordinatePolicy==TouchCoordinatePolicy.CONTINUOUS_CAMERA_9) "1" else "0",journal.displayId.toString())
         builder.environment()["CLASSPATH"]=apk
         builder.redirectError(File("/data/local/tmp/mobimapper-injector.log"))
         val process=builder.start()
-        val worker=try { WorkerConnection(process,generation) } catch(e:Exception) { process.destroyForcibly(); throw e }
+        val worker=try { WorkerConnection(process,generation,journal.displayId) } catch(e:Exception) { process.destroyForcibly(); throw e }
         connection=worker; lastWorkerPid=worker.pid
         Thread({ process.waitFor(); synchronized(this) {
             if(!closed && connection===worker) {
@@ -352,7 +391,9 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
         val snapshot=journal.snapshot()
         val fault=if(mode==1 && frame.action and 255 == faultAction) faultStage else 0
         if(fault!=0) { faultAction=-1; faultStage=0 }
-        return requireNotNull(connection).send(sid,frame,snapshot.width,snapshot.height,mode,fault)
+        val worker=requireNotNull(connection)
+        check(worker.displayId==snapshot.displayId) { "Worker display no longer matches the original gesture" }
+        return worker.send(sid,frame,snapshot.width,snapshot.height,mode,fault)
     }
     @Synchronized override fun armTestFault(action:Int,stage:Int) {
         authorize(); require(action in intArrayOf(0,1,2,3,5,6) && stage in 1..3)
@@ -370,6 +411,7 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
             putString("targetPackage",targetPackage)
             putString("coordinatePolicy",coordinatePolicy.name)
             putBoolean("continuousCameraSupported",true)
+            putBoolean("multiDisplaySupported",true)
             putBoolean("systemPointerHidden",pointer.hidden); putString("systemPointerError",pointer.error)
             putBoolean("workerAlive",connection?.alive==true); putBoolean("controllerBinderAlive",client?.asBinder()?.isBinderAlive==true)
             putLong("workerGeneration",workerGeneration); putLong("sessionId",snap.sessionId); putString("recoveryState",state)
@@ -380,7 +422,7 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
             putBoolean("rejectedMoveReconciled",snap.rejectedMoveReconciled)
             putBoolean("releaseUnverified",snap.state==RecoveryInjectionState.RECOVERY_NEEDED)
             putBoolean("injectPermission",context.checkPermission("android.permission.INJECT_EVENTS",Process.myPid(),Process.myUid())==PackageManager.PERMISSION_GRANTED)
-            putInt("targetUid",targetUid); putInt("displayId",0); putInt("source",4098); putInt("deviceId",0); putInt("effectiveDeviceId",-1)
+            putInt("targetUid",targetUid); putInt("displayId",snap.displayId); putInt("source",4098); putInt("deviceId",0); putInt("effectiveDeviceId",-1)
             putBoolean("targetFocused",focused()); putString("focusError",""); putBoolean("targeted",true); putInt("maxContacts",10)
             putLong("timingSessionId",timingSessionId)
             putLong("focusTimingCount",focusTimingCount); putLong("pipeTimingCount",pipeTimingCount)
@@ -433,7 +475,7 @@ class SupervisedInjector(private val context: Context) : IInjector.Stub() {
     }
 }
 
-private class WorkerConnection(private val process:java.lang.Process,val generation:Long) {
+private class WorkerConnection(private val process:java.lang.Process,val generation:Long,val displayId:Int) {
     private val input=DataInputStream(BufferedInputStream(process.inputStream))
     private val output=DataOutputStream(BufferedOutputStream(process.outputStream))
     private val timer=Object()

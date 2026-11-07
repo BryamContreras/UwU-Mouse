@@ -11,7 +11,11 @@ data class ContextWindowFrame(
 )
 
 /** Only metadata needed to classify an external window; unknown types remain conservative. */
-data class ContextWindowCandidate(val type:Int,val packageName:String?,val frame:ContextWindowFrame)
+data class ContextWindowCandidate(val type:Int,val packageName:String?,val frame:ContextWindowFrame,
+                                  val focused:Boolean=false,val rootResolved:Boolean=false)
+
+/** A real application window observed before this exact editor presentation covered it. */
+data class EditorPresentationAnchor(val token:Long,val packageName:String,val frame:ContextWindowFrame)
 
 /** Shared by context monitoring and the editor release barrier, independent of Android UI. */
 object SessionPolicy {
@@ -23,11 +27,36 @@ object SessionPolicy {
         targetWindowVisible && !systemWindowCoversTarget &&
             (foregroundApplication==target || (ownEditorFocused && targetWindowVisible && foregroundApplication==null))
 
+    /**
+     * Retains only an idle editor's presentation when Android omits its covered application.
+     * This never authorizes injection, supplies target bounds or replaces authorizedContext.
+     * The caller also rejects a locked/disconnected display or a focused foreign window.
+     */
+    fun mayRetainEditorPresentation(mode:SessionMode,active:Boolean,contacts:Int,releaseUnverified:Boolean,
+                                   targetPackage:String,targetDisplayId:Int,ownPackage:String,
+                                   editorToken:Long,anchor:EditorPresentationAnchor?,
+                                   brokerPackage:String?,brokerDisplayId:Int,brokerTrusted:Boolean,brokerFocusAgeMs:Long,
+                                   focusedOwnWindow:ContextWindowCandidate?):Boolean {
+        if(mode!=SessionMode.EDITING || active || contacts!=0 || releaseUnverified ||
+            targetPackage.isBlank() || ownPackage.isBlank() || targetDisplayId<0 || editorToken<=0) return false
+        if(anchor==null || anchor.token!=editorToken || anchor.packageName!=targetPackage ||
+            !validFrameOnDisplay(anchor.frame,targetDisplayId)) return false
+        if(!brokerTrusted || brokerPackage!=targetPackage || brokerDisplayId!=targetDisplayId ||
+            brokerFocusAgeMs !in 0L..500L) return false
+        val overlay=focusedOwnWindow ?: return false
+        return overlay.focused && overlay.rootResolved && overlay.packageName==ownPackage &&
+            overlay.type in 3..4 && validFrameOnDisplay(overlay.frame,targetDisplayId)
+    }
+
+    private fun validFrameOnDisplay(frame:ContextWindowFrame,displayId:Int)=
+        frame.displayId==displayId && frame.left>=0 && frame.top>=0 &&
+            frame.right>frame.left && frame.bottom>frame.top
+
     /** Same eligibility drives blocked touch points and full-window context barriers. */
     fun potentiallyBlockingWindow(target:ContextWindowFrame,candidate:ContextWindowCandidate,
                                   targetPackage:String,ownPackage:String):Boolean =
-        target.displayId==0 && candidate.frame.displayId==target.displayId && candidate.frame.layer>target.layer &&
-            candidate.type!=APPLICATION_WINDOW_TYPE && candidate.packageName!=ownPackage && candidate.packageName!=targetPackage
+        target.displayId>=0 && candidate.frame.displayId==target.displayId && candidate.frame.layer>target.layer &&
+            candidate.packageName!=ownPackage && candidate.packageName!=targetPackage
 
     fun coveringWindow(target:ContextWindowFrame,candidates:List<ContextWindowCandidate>,
                        targetPackage:String,ownPackage:String):ContextWindowCandidate? = candidates.firstOrNull {
@@ -35,7 +64,7 @@ object SessionPolicy {
     }
 
     private fun windowFullyCoversTarget(target:ContextWindowFrame,cover:ContextWindowFrame):Boolean =
-        target.displayId==0 && cover.displayId==target.displayId && cover.layer>target.layer &&
+        target.displayId>=0 && cover.displayId==target.displayId && cover.layer>target.layer &&
             target.right>target.left && target.bottom>target.top && cover.right>cover.left && cover.bottom>cover.top &&
             cover.left<=target.left && cover.top<=target.top && cover.right>=target.right && cover.bottom>=target.bottom
 

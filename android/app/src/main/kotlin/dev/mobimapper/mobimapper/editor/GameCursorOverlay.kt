@@ -1,6 +1,7 @@
 package dev.mobimapper.mobimapper.editor
 
 import android.accessibilityservice.AccessibilityService
+import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -13,8 +14,8 @@ import android.view.View
 import android.view.WindowManager
 
 /** Display-coordinate hotspot. This window can never become an injection target. */
-class GameCursorOverlay(private val service:AccessibilityService) {
-    private val windows=service.getSystemService(WindowManager::class.java)
+class GameCursorOverlay(private val service:AccessibilityService,private val overlayContext:Context=service) {
+    private val windows=overlayContext.getSystemService(WindowManager::class.java)
     private var view:PointerView?=null
     private var x=0f
     private var y=0f
@@ -26,20 +27,25 @@ class GameCursorOverlay(private val service:AccessibilityService) {
     }
     fun show() {
         if(view!=null) return
-        val pointer=PointerView(service).apply {
+        val pointer=PointerView(overlayContext).apply {
             pointerX=x;pointerY=y;importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
             contentDescription="MobiMapper · cursor visual"
         }
-        val p=WindowManager.LayoutParams(-1,-1,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        val p=WindowManager.LayoutParams(-1,-1,OverlayWindows.type(overlayContext),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,PixelFormat.TRANSLUCENT).apply {
             gravity=Gravity.TOP or Gravity.START;title="MobiMapper · Cursor"
+            alpha=OverlayWindows.nonTouchAlpha(overlayContext)
             layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS;setFitInsetsTypes(0)
         }
+        // A failed admission must never advertise a visible cursor to the session owner.
         windows.addView(pointer,p);view=pointer
     }
-    fun hide() { val prior=view ?: return;view=null;windows.removeViewImmediate(prior) }
-    private class PointerView(service:AccessibilityService):View(service) {
+    fun hide() {
+        val prior=view ?: return;view=null
+        try { windows.removeViewImmediate(prior) } catch (_:IllegalArgumentException) { /* Display removal may detach it first. */ }
+    }
+    private class PointerView(context:Context):View(context) {
         var pointerX=0f;var pointerY=0f
         private val density=resources.displayMetrics.density
         private val fill=Paint(Paint.ANTI_ALIAS_FLAG).apply {

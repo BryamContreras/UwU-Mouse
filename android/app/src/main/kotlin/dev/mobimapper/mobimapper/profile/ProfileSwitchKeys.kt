@@ -12,7 +12,7 @@ object ProfileSwitchKeys {
     }
 
     fun requireValid(profiles: Collection<GameProfile>) {
-        for (game in profiles.groupBy { it.packageName }.values) {
+        for (game in profiles.groupBy { it.packageName to it.calibration.displayScope }.values) {
             val assigned = game.filter { it.switchKey != 0 }
             require(assigned.map { it.switchKey }.distinct().size == assigned.size) { "Dos perfiles usan la misma tecla" }
             val occupied = game.flatMap { mappedKeys(it) }.toSet()
