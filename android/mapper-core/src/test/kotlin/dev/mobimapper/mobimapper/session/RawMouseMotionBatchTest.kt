@@ -5,7 +5,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RawMouseMotionBatchTest {
-    private fun batch(count:Int=10)=RawMouseMotionBatch(LongArray(count) { it*1_000_000L },
+    private fun batch(count:Int=10)=RawMouseMotionBatch(LongArray(count) { it*8_000_000L },
         FloatArray(count) { 1f },FloatArray(count) { -.25f })
 
     @Test fun precisionRunsBeforeSummationEvenWhenTheAggregateWouldBeAFlick() {

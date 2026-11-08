@@ -10,6 +10,7 @@
         android:extractNativeLibs="true"
         android:name="dev.mobimapper.mobimapper.MapperApplication"
         android:icon="@mipmap/ic_mobimapper">
+        <activity android:name=".ProfileFileActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

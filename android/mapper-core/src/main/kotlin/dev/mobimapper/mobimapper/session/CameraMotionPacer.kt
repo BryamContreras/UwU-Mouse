@@ -187,6 +187,6 @@ class CameraMotionPacer(
         private const val NANOS_PER_SECOND=1_000_000_000L
         private const val INPUT_BATCH_MAX_SAMPLES=8L
         private const val INPUT_BATCH_WINDOW_NANOS=8_000_000L
-        private val ALLOWED_RATES=setOf(0,60,90,120,144,240)
+        private val ALLOWED_RATES=setOf(0,60,90,120,125,144,240,250,500)
     }
 }

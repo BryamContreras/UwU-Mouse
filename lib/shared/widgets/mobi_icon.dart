@@ -76,12 +76,16 @@ enum _Glyph {
   accessibility,
   warning,
   more,
+  importFile,
+  exportFile,
 }
 
 _Glyph _resolve(IconData? icon) => icon == MobiIcons.brand
     ? _Glyph.brand
     : (_identifiers[icon] ?? _Glyph.controller);
 final _identifiers = <IconData, _Glyph>{
+  Icons.file_open_outlined: _Glyph.importFile,
+  Icons.save_alt_rounded: _Glyph.exportFile,
   Icons.accessibility_new: _Glyph.accessibility,
   Icons.add: _Glyph.plus,
   Icons.add_circle_outline_rounded: _Glyph.plusCircle,
@@ -128,6 +132,42 @@ class _Shape {
 }
 
 final Map<_Glyph, List<_Shape>> _art = {
+  _Glyph.importFile: [
+    _Shape(
+      Path()
+        ..moveTo(4, 4)
+        ..lineTo(15, 4)
+        ..lineTo(20, 9)
+        ..lineTo(20, 20)
+        ..lineTo(4, 20)
+        ..close(),
+    ),
+    _Shape(
+      Path()
+        ..moveTo(12, 8)
+        ..lineTo(12, 16)
+        ..moveTo(8.5, 12.5)
+        ..lineTo(12, 16)
+        ..lineTo(15.5, 12.5),
+    ),
+  ],
+  _Glyph.exportFile: [
+    _Shape(
+      Path()
+        ..moveTo(4, 15)
+        ..lineTo(4, 20)
+        ..lineTo(20, 20)
+        ..lineTo(20, 15),
+    ),
+    _Shape(
+      Path()
+        ..moveTo(12, 16)
+        ..lineTo(12, 4)
+        ..moveTo(8, 8)
+        ..lineTo(12, 4)
+        ..lineTo(16, 8),
+    ),
+  ],
   _Glyph.arrowDown: [
     _Shape(
       Path()
@@ -140,78 +180,39 @@ final Map<_Glyph, List<_Shape>> _art = {
   _Glyph.brand: [
     _Shape(
       Path()
-        ..moveTo(7, 5.5)
-        ..lineTo(17, 5.5)
-        ..cubicTo(18.8, 5.5, 20, 6.8, 20.4, 8.6)
-        ..lineTo(21.5, 16)
-        ..cubicTo(21.9, 18.3, 19.6, 19.5, 18, 18)
-        ..lineTo(15.5, 15.8)
-        ..lineTo(8.5, 15.8)
-        ..lineTo(6, 18)
-        ..cubicTo(4.4, 19.5, 2.1, 18.3, 2.5, 16)
-        ..lineTo(3.6, 8.6)
-        ..cubicTo(4, 6.8, 5.2, 5.5, 7, 5.5)
+        ..moveTo(12, 2)
+        ..cubicTo(6.8, 2, 3.8, 5.5, 3.8, 10)
+        ..lineTo(3.8, 14.5)
+        ..cubicTo(3.8, 19.6, 7, 22, 12, 22)
+        ..cubicTo(17, 22, 20.2, 19.6, 20.2, 14.5)
+        ..lineTo(20.2, 10)
+        ..cubicTo(20.2, 5.5, 17.2, 2, 12, 2)
         ..close(),
-      accent: true,
-      filled: true,
-      opacity: 0.16,
-      width: 1.8,
+      width: 1.7,
     ),
     _Shape(
       Path()
-        ..moveTo(7, 5.5)
-        ..lineTo(17, 5.5)
-        ..cubicTo(18.8, 5.5, 20, 6.8, 20.4, 8.6)
-        ..lineTo(21.5, 16)
-        ..cubicTo(21.9, 18.3, 19.6, 19.5, 18, 18)
-        ..lineTo(15.5, 15.8)
-        ..lineTo(8.5, 15.8)
-        ..lineTo(6, 18)
-        ..cubicTo(4.4, 19.5, 2.1, 18.3, 2.5, 16)
-        ..lineTo(3.6, 8.6)
-        ..cubicTo(4, 6.8, 5.2, 5.5, 7, 5.5)
-        ..close(),
-      accent: false,
-      filled: false,
-      opacity: 1,
-      width: 1.8,
+        ..moveTo(6.8, 11.2)
+        ..lineTo(6.8, 12.2)
+        ..cubicTo(6.8, 14.3, 10, 14.3, 10, 12.2)
+        ..lineTo(10, 11.2)
+        ..moveTo(14, 11.2)
+        ..lineTo(14, 12.2)
+        ..cubicTo(14, 14.3, 17.2, 14.3, 17.2, 12.2)
+        ..lineTo(17.2, 11.2),
+      width: 1.5,
     ),
     _Shape(
       Path()
-        ..moveTo(7, 12.6)
-        ..lineTo(7, 8.3)
-        ..lineTo(12, 12.2)
-        ..lineTo(17, 8.3)
-        ..lineTo(17, 12.6),
-      accent: true,
-      filled: false,
-      opacity: 1,
-      width: 2,
+        ..moveTo(10.2, 16.5)
+        ..cubicTo(10.4, 18.7, 11.8, 18.8, 12, 17.2)
+        ..cubicTo(12.2, 18.8, 13.6, 18.7, 13.8, 16.5),
+      width: 1.4,
     ),
     _Shape(
       Path()
-        ..moveTo(6.8, 15.3)
-        ..cubicTo(6.8, 15.7418, 6.4418, 16.1, 6, 16.1)
-        ..cubicTo(5.5582, 16.1, 5.2, 15.7418, 5.2, 15.3)
-        ..cubicTo(5.2, 14.8582, 5.5582, 14.5, 6, 14.5)
-        ..cubicTo(6.4418, 14.5, 6.8, 14.8582, 6.8, 15.3)
-        ..close(),
-      accent: true,
-      filled: true,
-      opacity: 1,
-      width: 1.8,
-    ),
-    _Shape(
-      Path()
-        ..moveTo(18.8, 15.3)
-        ..cubicTo(18.8, 15.7418, 18.4418, 16.1, 18, 16.1)
-        ..cubicTo(17.5582, 16.1, 17.2, 15.7418, 17.2, 15.3)
-        ..cubicTo(17.2, 14.8582, 17.5582, 14.5, 18, 14.5)
-        ..cubicTo(18.4418, 14.5, 18.8, 14.8582, 18.8, 15.3)
-        ..close(),
-      accent: true,
-      filled: true,
-      opacity: 1,
+        ..moveTo(12, 5)
+        ..lineTo(12, 7.5),
       width: 1.8,
     ),
   ],

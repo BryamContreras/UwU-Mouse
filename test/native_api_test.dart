@@ -215,9 +215,9 @@ void main() {
     'camera modes retain their identity without changing legacy profiles',
     () {
       for (final entry in const {
-        'continuous': 'Continua',
+        'continuous': 'Región suave',
         'smooth': 'Región suave',
-        'bounded': 'Modo anterior',
+        'bounded': 'Región suave',
       }.entries) {
         final wire = profileWire()..['schemaVersion'] = 3;
         (wire['camera']! as Map)['mode'] = entry.key;
@@ -233,7 +233,7 @@ void main() {
             'schemaVersion': legacy,
           });
           expect(decoded.cameraMode, 'bounded');
-          expect(decoded.cameraModeLabel, 'Modo anterior');
+          expect(decoded.cameraModeLabel, 'Región suave');
         }
         expect((wire['camera']! as Map)['mode'], entry.key);
       }
@@ -264,6 +264,29 @@ void main() {
       expect(camera, before);
     },
   );
+  test('custom camera region is optional and strictly typed in schema 9', () {
+    final wire = displayProfileWire('phone', 'smooth-region');
+    final camera = Map<Object?, Object?>.from(wire['camera']! as Map);
+    wire['camera'] = camera;
+    expect(LocalProfile.fromWire(wire).cameraCustomRegion, isFalse);
+    camera['customRegion'] = true;
+    expect(LocalProfile.fromWire(wire).cameraCustomRegion, isTrue);
+    for (final value in [null, 'true', 0, 1]) {
+      camera['customRegion'] = value;
+      expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+    }
+    expect(
+      LocalProfile.fromWire({...wire, 'schemaVersion': 8}).cameraCustomRegion,
+      isFalse,
+    );
+  });
+  test('GG capture rates are supported without changing saved rates', () {
+    for (final rate in [125, 250, 100, 1000]) {
+      final wire = displayProfileWire('phone', 'rate-$rate');
+      (wire['camera']! as Map)['updateRateHz'] = rate;
+      expect(LocalProfile.fromWire(wire).cameraUpdateRateHz, rate);
+    }
+  });
   test('schema 3 requires a known camera mode', () {
     final missing = profileWire()..['schemaVersion'] = 3;
     (missing['camera']! as Map).remove('mode');

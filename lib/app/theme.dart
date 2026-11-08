@@ -4,9 +4,9 @@ import 'package:flutter/services.dart';
 ThemeData buildAppTheme() => ThemeData(
   brightness: Brightness.light,
   colorScheme: const ColorScheme.light(
-    primary: Color(0xff0d6ed1),
+    primary: Color(0xff244d96),
     onPrimary: Color(0xffffffff),
-    secondary: Color(0xff009bce),
+    secondary: Color(0xff345fb0),
     surface: Colors.white,
     onSurface: Color(0xff10315e),
     onSurfaceVariant: Color(0xff527394),
@@ -14,6 +14,34 @@ ThemeData buildAppTheme() => ThemeData(
     error: Color(0xffad3f35),
   ),
   scaffoldBackgroundColor: Colors.white,
+  switchTheme: SwitchThemeData(
+    thumbColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.selected)
+          ? Colors.white
+          : const Color(0xff6b7b91),
+    ),
+    trackColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.selected)
+          ? const Color(0xff244d96)
+          : const Color(0xffd6dde7),
+    ),
+    trackOutlineColor: WidgetStateProperty.resolveWith(
+      (states) => states.contains(WidgetState.selected)
+          ? const Color(0xff244d96)
+          : const Color(0xff8090a8),
+    ),
+    thumbIcon: WidgetStateProperty.resolveWith(
+      (states) => Icon(
+        states.contains(WidgetState.selected)
+            ? Icons.check_rounded
+            : Icons.close_rounded,
+        size: 16,
+        color: states.contains(WidgetState.selected)
+            ? const Color(0xff244d96)
+            : Colors.white,
+      ),
+    ),
+  ),
   iconTheme: const IconThemeData(color: Color(0xff1966ab), size: 26),
   appBarTheme: const AppBarTheme(
     systemOverlayStyle: SystemUiOverlayStyle(

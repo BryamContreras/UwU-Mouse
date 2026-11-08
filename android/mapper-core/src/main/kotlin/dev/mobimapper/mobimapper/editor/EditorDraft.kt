@@ -133,8 +133,8 @@ class EditorDraft(
             original.calibration.screenHeight == screenHeight && original.calibration.rotation == rotation &&
             original.calibration.displayScope==displayScope && original.calibration.windowFrame==windowFrame
         val area = if (sameGeometry && original.calibration.confirmed) original.calibration.area else suggestedArea ?: windowFrame ?: GameArea(0f, 0f, screenWidth.toFloat(), screenHeight.toFloat())
-        // Legacy runtime/import support stays intact; only a saved editing transaction adopts Smooth.
-        val camera = if (original.camera.mode == CameraSpec.BOUNDED) original.camera.copy(mode = CameraSpec.SMOOTH) else original.camera
+        // Legacy tags are accepted on disk. Editing always offers the single Smooth policy.
+        val camera = original.camera.copy(mode = CameraSpec.SMOOTH)
         value = original.copy(camera = camera, calibration = Calibration(screenWidth, screenHeight, rotation, boundedArea(area, screenWidth, screenHeight), false,displayScope,windowFrame))
         value = boundedControls(value)
     }
@@ -144,7 +144,7 @@ class EditorDraft(
         require(profile.calibration.screenWidth == value.calibration.screenWidth &&
             profile.calibration.screenHeight == value.calibration.screenHeight && profile.calibration.rotation == value.calibration.rotation &&
             profile.calibration.displayScope==value.calibration.displayScope && profile.calibration.windowFrame==value.calibration.windowFrame)
-        value = boundedControls(profile)
+        value = boundedControls(profile.copy(camera=profile.camera.copy(mode=CameraSpec.SMOOTH)))
     }
 
     fun move(control: Control, screenX: Float, screenY: Float) {
@@ -176,12 +176,6 @@ class EditorDraft(
             width = (widthPixels / a.width).coerceIn(.04f, .95f),
             height = (heightPixels / a.height).coerceIn(.04f, .95f),
         )))
-    }
-
-    /** Mode changes neither recalibrate nor move the saved start point or other controls. */
-    fun cameraMode(mode: String) {
-        require(CameraSpec.isSupportedMode(mode)) { "Modo de cámara no válido" }
-        value = value.copy(camera = value.camera.copy(mode = mode))
     }
 
     fun cameraUpdateRate(hz: Int) {

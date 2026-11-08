@@ -44,6 +44,10 @@ object WindowDumpParser {
     private val tokenType = Regex("\\bmToken=WindowToken\\{[^\\r\\n]*\\btype=(\\d+)\\b")
     private val frames = Regex("(?m)^\\s*Frames:[^\\r\\n]*\\bframe=\\[(-?\\d+),(-?\\d+)\\]\\[(-?\\d+),(-?\\d+)\\]")
     private val legacyFrame = Regex("(?m)^\\s*mFrame=\\[(-?\\d+),(-?\\d+)\\]\\[(-?\\d+),(-?\\d+)\\]")
+    private val trustedOverlayFlag=Regex("\\bTRUSTED_OVERLAY\\b")
+    private val nonTouchableFlag=Regex("\\bNOT_TOUCHABLE\\b")
+    private val hexWindowFlags=Regex("(?m)^\\s+fl=([0-9a-fA-F]{1,8})[ \\t]*\\r?$")
+    private val hexPrivateFlags=Regex("(?m)^\\s+pfl=([0-9a-fA-F]{1,8})[ \\t]*\\r?$")
 
     // AOSP WindowManager.LayoutParams debug labels. Unrecognized labels stay system windows.
     private val layoutLabels = mapOf(
@@ -116,6 +120,14 @@ object WindowDumpParser {
             if (left !in -100_000..100_000 || top !in -100_000..100_000 ||
                 right !in -100_000..100_000 || bottom !in -100_000..100_000 ||
                 right <= left || bottom <= top) return invalid("invalid_window_frame")
+            // Only our passive shell cursor is excluded. An ordinary application cannot
+            // obtain TRUSTED_OVERLAY; matching a title alone never bypasses the context gate.
+            if(uid==2000 && ownership.groupValues[2]=="com.android.shell" && layoutType==2038 &&
+                block.contains("UwU Mouse · Cursor opaco") &&
+                (trustedOverlayFlag.containsMatchIn(block) ||
+                    hexPrivateFlags.find(block)?.groupValues?.get(1)?.toLongOrNull(16)?.let { it and 0x20000000L!=0L }==true) &&
+                (nonTouchableFlag.containsMatchIn(block) ||
+                    hexWindowFlags.find(block)?.groupValues?.get(1)?.toLongOrNull(16)?.let { it and 0x10L!=0L }==true) && focusByDisplay[displayId]!=id) continue
             visible.add(WindowMetadata(id, category, layoutType, ownership.groupValues[2], uid,
                 displayId, blocks.size - index, left, top, right, bottom,
                 focusByDisplay[displayId] == id))

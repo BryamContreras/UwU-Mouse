@@ -36,4 +36,8 @@ interface IInjector {
     // One camera-only three-frame replacement; commit an attempt record before each worker send.
     int injectCameraReset(long sessionId, in int[] actions, in long[] downTimes, in long[] eventTimes,
         in int[] counts, in int[] ids, in float[] xs, in float[] ys, in ParcelFileDescriptor progress);
+    // Passive, trusted cursor surface; never receives input or injects events.
+    long showVisualCursor(int displayId, float x, float y, float sizeDp);
+    oneway void moveVisualCursor(long cursorToken, float x, float y, float sizeDp);
+    void hideVisualCursor(long cursorToken);
 }

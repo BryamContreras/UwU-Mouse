@@ -29,6 +29,8 @@ abstract interface class MapperGateway {
   Future<LocalProfile> selectProfile(String id);
   Future<LocalProfile> renameProfile(String id, String name);
   Future<void> deleteProfile(String id);
+  Future<bool> exportProfileFile(String id);
+  Future<bool> importProfileFile();
   Future<void> openEditor(String id);
   Future<void> startProfile(String id);
   Future<void> execute(NativeCommand command);

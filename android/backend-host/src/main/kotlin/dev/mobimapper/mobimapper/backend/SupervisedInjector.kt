@@ -112,9 +112,17 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             manager.javaClass.getMethod("setPointerIconType",Int::class.javaPrimitiveType).invoke(manager,type)
         } finally { Binder.restoreCallingIdentity(identity) }
     }
+    private val visualCursor=TrustedCursorOverlay(context) { display -> nativeCapture?.let { it.mouseActive && it.displayId==display }==true && !closed }
+
+    override fun showVisualCursor(displayId:Int,x:Float,y:Float,sizeDp:Float):Long {
+        authorize();return visualCursor.show(displayId,x,y,sizeDp)
+    }
+    override fun moveVisualCursor(cursorToken:Long,x:Float,y:Float,sizeDp:Float) { authorize();visualCursor.move(cursorToken,x,y,sizeDp) }
+    override fun hideVisualCursor(cursorToken:Long) { authorize();visualCursor.hide(cursorToken) }
 
     private fun syncCapturePointer(forceRestore:Boolean=false) {
         val capture=nativeCapture
+        if(capture?.mouseActive!=true) visualCursor.hide()
         pointer.setMouseCaptureActive(capture?.mouseActive==true && capture.targetPackage!="dev.mobimapper.inputlab",forceRestore)
     }
 
@@ -666,6 +674,14 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             var reconciled=false
             if(!accepted && replacement.alive && connection===replacement &&
                 recoveryContextMatches(original,originalPackage) &&
+                journal.rejectedInitialDownCancellation(sessionId,cancel,true,previousGeneration,replacement.generation) &&
+                DispatcherTouchState.isDefinitelyUntouched() &&
+                replacement.alive && connection===replacement && !appIsStopped() &&
+                recoveryContextMatches(original,originalPackage)) {
+                reconciled=journal.reconciledRejectedDown(sessionId,replacement.generation,true)
+            }
+            if(!accepted && !reconciled && replacement.alive && connection===replacement &&
+                recoveryContextMatches(original,originalPackage) &&
                 journal.rejectedFocusLossCancellation(sessionId,cancel,true,previousGeneration,replacement.generation) &&
                 DispatcherTouchState.isDefinitelyUntouched() &&
                 replacement.alive && connection===replacement && !appIsStopped() &&
@@ -764,6 +780,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         notifyClient(1,reason)
         val epoch=++recoveryEpoch
         val failedWorkerGeneration=workerGeneration
+        val failedPackage=targetPackage
         handler.post { synchronized(this) {
             if(closed || epoch!=recoveryEpoch) return@synchronized
             if(forceStopped || appIsStopped()) { stopForForceStop(); return@synchronized }
@@ -780,6 +797,12 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                 Log.i("MobiSupervisor","live_worker_cancel sid=$sid admitted=$accepted worker=$workerGeneration")
             }
             connection?.close(); connection=null
+            // A rejected initial DOWN is reconciled only after every previous worker exits.
+            val previousWorkersTerminated=if(journal.snapshot().attempted?.action==0) {
+                unretiredWorkers.filter { it.generation<=failedWorkerGeneration }.all {
+                    it.closeAndAwaitTermination(750L)
+                }
+            } else false
             for(attempt in 1..3) {
                 if(accepted) break
                 if(forceStopped || appIsStopped()) { stopForForceStop(); return@synchronized }
@@ -796,14 +819,21 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                     if(cancel!=null && connection?.alive==true &&
                         (connection?.generation ?: 0)>failedWorkerGeneration) {
                         journal.rejectedRecoveryCancellation(sid,cancel)
+                        journal.rejectedInitialDownCancellation(sid,cancel,previousWorkersTerminated,
+                            failedWorkerGeneration,requireNotNull(connection).generation)
                     }
                     // An UP may have completed before the worker died, while its reply was lost.
                     // A rejected MOVE has a separate, stricter failed-CANCEL provenance gate.
                     // This exceptional query never runs in ordinary movement processing.
                     val attempted=journal.snapshot().attempted
                     val rejectedMove=journal.canReconcileRejectedMove(sid)
-                    if((attempted?.action==1 || rejectedMove) && DispatcherTouchState.isDefinitelyUntouched()) {
-                        reconciled=if(rejectedMove) connection?.takeIf {
+                    val rejectedDown=journal.canReconcileRejectedDown(sid,connection?.generation ?: 0L)
+                    if((attempted?.action==1 || rejectedMove || rejectedDown) && DispatcherTouchState.isDefinitelyUntouched()) {
+                        reconciled=if(rejectedDown) connection?.takeIf {
+                            it.alive && it.generation>failedWorkerGeneration && !appIsStopped() &&
+                                recoveryContextMatches(snap,failedPackage)
+                        }?.let { journal.reconciledRejectedDown(sid,it.generation,true) } ?: false
+                        else if(rejectedMove) connection?.takeIf {
                             it.alive && it.generation>failedWorkerGeneration
                         }?.let { journal.reconciledRejectedMove(sid,true) } ?: false
                             else journal.reconciledTerminal(sid,true)
@@ -816,9 +846,10 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             lastRecovery=SystemClock.uptimeMillis(); recoveryScheduled=false
             state=if(accepted || reconciled) "RECOVERED" else "BLOCKED"
             if(accepted || reconciled) recoveredCount++
-            Log.i("MobiSupervisor","recovery_complete sid=$sid worker=$workerGeneration pid=$lastWorkerPid admitted=$accepted terminalReconciled=$reconciled rejectedMoveReconciled=${journal.snapshot().rejectedMoveReconciled} attempts=$recoveryAttempts uptime=$lastRecovery durationMs=${lastRecovery-lastDetection} receiverVerified=false")
+            Log.i("MobiSupervisor","recovery_complete sid=$sid worker=$workerGeneration pid=$lastWorkerPid admitted=$accepted terminalReconciled=$reconciled rejectedMoveReconciled=${journal.snapshot().rejectedMoveReconciled} rejectedDownReconciled=${journal.snapshot().rejectedDownReconciled} attempts=$recoveryAttempts uptime=$lastRecovery durationMs=${lastRecovery-lastDetection} receiverVerified=false")
             val message=when {
                 accepted -> "Cancelación admitida; iniciar manualmente"
+                journal.snapshot().rejectedDownReconciled -> "Android no conserva contactos tras rechazar DOWN y CANCEL; iniciar manualmente"
                 journal.snapshot().rejectedMoveReconciled -> "Android no conserva contactos tras rechazar MOVE y CANCEL; iniciar manualmente"
                 reconciled -> "UP terminal cerrado en Android; iniciar manualmente"
                 else -> "No se pudo cancelar el gesto anterior"
@@ -874,6 +905,8 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("captureSupported",nativeCapture!=null)
             putBoolean("nativeCaptureRateSupported",nativeCapture!=null)
             putBoolean("nativeMotionBatchSupported",nativeCapture!=null)
+            putBoolean("trustedCursorSupported",true);putBoolean("trustedCursorVisible",visualCursor.visible)
+            putString("trustedCursorError",visualCursor.error)
             putString("captureProvider","native-evdev")
             putString("captureError",captureFailure)
             putBundle("nativeCapture",nativeCapture?.status())
@@ -899,6 +932,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("liveWorkerCancelAdmitted",liveCancellationAccepted)
             putBoolean("terminalReconciled",snap.terminalReconciled)
             putBoolean("rejectedMoveReconciled",snap.rejectedMoveReconciled)
+            putBoolean("rejectedDownReconciled",snap.rejectedDownReconciled)
             putBoolean("focusLossReconciled",snap.focusLossReconciled)
             putBoolean("sessionRecoverySupported",true)
             putBoolean("releaseUnverified",snap.state==RecoveryInjectionState.RECOVERY_NEEDED)
@@ -917,7 +951,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         }
     }
     @Synchronized override fun shutdown() {
-        authorize(); nativeCapture?.close();ownedCaptureId=0L;pointer.releaseOwners();releaseInternal(); closed=true
+        authorize(); nativeCapture?.close();ownedCaptureId=0L;visualCursor.hide();pointer.releaseOwners();releaseInternal(); closed=true
         windowContexts.close()
         runCatching { reattachServer.close() }
         connection?.close(); connection=null

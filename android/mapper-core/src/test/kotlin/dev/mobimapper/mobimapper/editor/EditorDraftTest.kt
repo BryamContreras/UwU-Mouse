@@ -223,28 +223,26 @@ class EditorDraftTest {
         assertTrue(ProfileValidator.validate(draft.save()).isEmpty())
     }
 
-    @Test fun continuousCameraModeIsTransactionalAndDoesNotMoveControlsOrChangeBindings() {
+    @Test fun legacyCameraSavesAsSmoothWithoutMovingControlsOrChangingBindings() {
         val original=original()
         val draft=EditorDraft(original,1000,600,0)
         val before=draft.value
-        draft.cameraMode(CameraSpec.CONTINUOUS)
         val saved=draft.save()
-        assertEquals(before.copy(camera=before.camera.copy(mode=CameraSpec.CONTINUOUS),calibration=before.calibration.copy(confirmed=true)),saved)
-        assertTrue(ProfileCompiler.prepare(saved,1000,600,0).bindings.continuousCamera)
+        assertEquals(before.copy(calibration=before.calibration.copy(confirmed=true)),saved)
+        assertEquals(CameraSpec.SMOOTH,saved.camera.mode)
+        assertNotNull(ProfileCompiler.prepare(saved,1000,600,0).bindings.ggCameraPolicy)
         assertSame(original,draft.cancel())
         assertEquals(CameraSpec.BOUNDED,original.camera.mode)
-        draft.cameraMode(CameraSpec.BOUNDED)
-        assertEquals(before.copy(camera=before.camera.copy(mode=CameraSpec.BOUNDED)),draft.value)
+        assertEquals(before,draft.value)
     }
 
-    @Test fun invalidCameraModeDoesNotChangeTheDraftAndExistingContinuousModeCanBeCancelled() {
+    @Test fun replacingAnOldContinuousDraftCannotRestoreTheRemovedCameraPolicy() {
         val original=original().let { it.copy(camera=it.camera.copy(mode=CameraSpec.CONTINUOUS)) }
         val draft=EditorDraft(original,1000,600,0)
         val before=draft.value
-        try { draft.cameraMode("unknown"); fail("Unknown camera mode must be rejected") }
-        catch(_:IllegalArgumentException) { }
+        draft.replace(before.copy(camera=before.camera.copy(mode=CameraSpec.CONTINUOUS)))
         assertEquals(before,draft.value)
-        draft.cameraMode(CameraSpec.BOUNDED)
+        assertEquals(CameraSpec.SMOOTH,draft.value.camera.mode)
         assertSame(original,draft.cancel())
         assertEquals(CameraSpec.CONTINUOUS,original.camera.mode)
     }
@@ -286,8 +284,7 @@ class EditorDraftTest {
         draft.markerSize(EditorDraft.Control.CAMERA,90f)
         draft.markerSize(EditorDraft.Control.ACTION,32f)
         draft.cameraUpdateRate(120)
-        draft.cameraMode(CameraSpec.CONTINUOUS)
-        assertEquals(before.copy(camera=before.camera.copy(markerSizeDp=90f,updateRateHz=120,mode=CameraSpec.CONTINUOUS),
+        assertEquals(before.copy(camera=before.camera.copy(markerSizeDp=90f,updateRateHz=120),
             action=before.action.copy(markerSizeDp=32f)),draft.value)
         val saved=draft.save()
         assertEquals(120,saved.camera.updateRateHz)
@@ -296,7 +293,7 @@ class EditorDraftTest {
         assertEquals(ProfileCompiler.prepare(original,1000,600,0).geometry,ProfileCompiler.prepare(saved,1000,600,0).geometry)
         assertSame(original,draft.cancel())
         assertEquals(52f,original.camera.markerSizeDp,0f)
-        assertEquals(0,original.camera.updateRateHz)
+        assertEquals(250,original.camera.updateRateHz)
     }
 
     @Test fun markerResizeOnlyChangesTheSelectedActionAndRejectsNonFiniteOrUnsupportedControls() {

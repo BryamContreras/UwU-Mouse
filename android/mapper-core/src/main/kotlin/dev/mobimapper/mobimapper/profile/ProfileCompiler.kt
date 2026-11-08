@@ -7,6 +7,8 @@ import dev.mobimapper.mobimapper.engine.PreparedMacro
 import dev.mobimapper.mobimapper.engine.PreparedMacroStep
 import dev.mobimapper.mobimapper.engine.PreparedRepeat
 import dev.mobimapper.mobimapper.engine.PreparedCursorAction
+import dev.mobimapper.mobimapper.engine.AimBounds
+import dev.mobimapper.mobimapper.engine.GgCameraPolicy
 
 /** Immutable execution snapshot; building this is control-plane work, never input-event work. */
 data class PreparedProfile(val profile: GameProfile, val geometry: MappingGeometry, val bindings: MappingBindings,
@@ -43,10 +45,24 @@ object ProfileCompiler {
         }
         val area = c.area
         val j = profile.joystick
-        val camera = profile.camera
+        // Old mode tags remain readable in stored documents; every game profile runs Smooth.
+        val camera = profile.camera.copy(mode=CameraSpec.SMOOTH)
         val action = profile.actions.firstOrNull() ?: ActionSpec(.5f, .5f, code=0, enabled=false)
         val actions = profile.actions.withIndex().toList()
         val commands = actions.filter { it.value.behavior != ActionSpec.TAP }
+        val ggCameraPolicy=if(camera.enabled) {
+            val freeFire=CameraSpec.isGgFreeFirePackage(profile.packageName)
+            val bounds=if(camera.customRegion && !freeFire) AimBounds(
+                area.displayX(camera.x-camera.width/2),area.displayY(camera.y-camera.height/2),
+                area.displayX(camera.x+camera.width/2),area.displayY(camera.y+camera.height/2))
+            else {
+                val insetX=if(freeFire) 0f else minOf(50f,(area.width-1f)/2)
+                val insetY=if(freeFire) 0f else minOf(50f,(area.height-1f)/2)
+                AimBounds(area.left+insetX,area.top+insetY,
+                    Math.nextDown(area.right-insetX),Math.nextDown(area.bottom-insetY))
+            }
+            GgCameraPolicy(freeFire,bounds,maxOf(area.width,area.height))
+        } else null
         val geometry = MappingGeometry(currentWidth.toFloat(), currentHeight.toFloat(),
             joystickX = area.displayX(j.x), joystickY = area.displayY(j.y),
             joystickRadius = j.radius * minOf(area.width, area.height),
@@ -57,8 +73,8 @@ object ProfileCompiler {
             sensitivityX = camera.sensitivityX, sensitivityY = camera.sensitivityY)
         val bindings = MappingBindings(j.upKey, j.downKey, j.leftKey, j.rightKey,
             actionKey = null, actionButton = null, distinctCameraContacts = true, overlapCameraHandoff = false, cameraLast = true,
-            continuousCamera = camera.enabled && camera.mode in setOf(CameraSpec.CONTINUOUS,CameraSpec.SMOOTH),
-            retireBoundedCameraOnIdle = camera.enabled && camera.mode == CameraSpec.SMOOTH,
+            continuousCamera = camera.enabled,
+            ggCameraPolicy = ggCameraPolicy,
             joystickEnabled = j.enabled, cameraMappingEnabled = camera.enabled,
             commandKeys = commands.filter { it.value.triggerKind == "key" }.map { it.value.code }.toSet(),
             commandButtons = commands.filter { it.value.triggerKind == "mouse" }.map { it.value.code }.toSet(),
@@ -78,6 +94,6 @@ object ProfileCompiler {
         }?.let {
             PreparedFireCadence(verticalPixelsPerSecond = -it.cadenceYPercent / 100f * area.height * .20f)
         }
-        return PreparedProfile(profile, geometry, bindings, macros, repeats, cursorActions, fireCadence)
+        return PreparedProfile(profile.copy(camera=camera), geometry, bindings, macros, repeats, cursorActions, fireCadence)
     }
 }

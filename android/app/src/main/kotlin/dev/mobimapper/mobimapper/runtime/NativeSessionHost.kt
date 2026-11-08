@@ -146,7 +146,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(cursorInstance==null || cursorInstanceDisplay!=displayId) {
             cursorInstance?.hide()
             setCursorOpacityActive(cursorInstanceDisplay,false)
-            cursorInstance=GameCursorOverlay(this,overlayContextFor(displayId)).apply { setSizeDp(cursorSizeDp) }
+            cursorInstance=GameCursorOverlay(this,overlayContextFor(displayId),object:dev.mobimapper.mobimapper.editor.VisualCursorHost {
+                private var token=0L
+                override fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean {
+                    token=BackendRegistry.injector?.showVisualCursor(displayId,x,y,sizeDp) ?: 0L
+                    return token>0L
+                }
+                override fun move(x:Float,y:Float,sizeDp:Float) { if(token>0) BackendRegistry.injector?.moveVisualCursor(token,x,y,sizeDp) }
+                override fun hide() { val prior=token;token=0L;if(prior>0) BackendRegistry.injector?.hideVisualCursor(prior) }
+            }).apply { setSizeDp(cursorSizeDp) }
             cursorInstanceDisplay=displayId
         }
         return requireNotNull(cursorInstance)
@@ -574,6 +582,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
 
     override fun begin(packageName:String,displayId:Int)=beginEditorPresentation(packageName,displayId)
+    override fun cursorPosition():android.graphics.PointF?=if(cursorPositionKnown) android.graphics.PointF(cursorX,cursorY) else null
+    override fun cursorSizeDp():Float=cursorSizeDp
     override fun end(reason:String)=endEditorPresentation(reason)
     override fun windows(displayId:Int):List<EditorWindowBounds> = windowContext.windows.filter {
         it.type==WindowType.TYPE_APPLICATION && it.frame.displayId==displayId && it.packageName!=null
@@ -930,6 +940,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             } catch (_:IllegalArgumentException) {
                 // A context can reject a display removed during cursor publication.
                 GameCoordinator.displayUnavailable(SessionController.targetDisplayId)
+            } catch (failure:IllegalStateException) {
+                SessionController.pause(failure.message ?: "No se pudo mostrar el cursor")
+                forceMouseOff("cursor_renderer_unavailable")
             }
         } else clearCursorInteraction()
     }

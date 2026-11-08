@@ -58,6 +58,11 @@ class LocalProfile {
       precisionAim = _integer(wire, 'schemaVersion') >= 5
           ? _boolean(_map(wire, 'camera'), 'precisionAim')
           : false,
+      cameraCustomRegion =
+          _integer(wire, 'schemaVersion') >= 9 &&
+              _map(wire, 'camera').containsKey('customRegion')
+          ? _boolean(_map(wire, 'camera'), 'customRegion')
+          : false,
       cameraSuspendKey = _integer(wire, 'schemaVersion') >= 6
           ? _integer(_map(wire, 'camera'), 'suspendKey')
           : 0,
@@ -105,8 +110,10 @@ class LocalProfile {
       90,
       100,
       120,
+      125,
       144,
       240,
+      250,
       500,
       1000,
     ].contains(cameraUpdateRateHz)) {
@@ -143,6 +150,7 @@ class LocalProfile {
   final int schemaVersion, screenWidth, screenHeight, switchKey;
   final bool calibrated,
       precisionAim,
+      cameraCustomRegion,
       joystickEnabled,
       cameraEnabled,
       actionEnabled,
@@ -166,11 +174,7 @@ class LocalProfile {
       cameraMarkerSizeDp,
       actionMarkerSizeDp;
 
-  String get cameraModeLabel => switch (cameraMode) {
-    'continuous' => 'Continua',
-    'smooth' => 'Región suave',
-    _ => 'Modo anterior',
-  };
+  String get cameraModeLabel => 'Región suave';
   String get cameraRateLabel =>
       cameraUpdateRateHz == 0 ? 'Libre' : '$cameraUpdateRateHz Hz';
 

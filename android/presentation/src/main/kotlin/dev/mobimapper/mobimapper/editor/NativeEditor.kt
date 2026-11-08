@@ -32,6 +32,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowManager
+import android.view.PointerIcon
 import android.view.inputmethod.EditorInfo
 import android.widget.*
 import dev.mobimapper.presentation.R
@@ -81,7 +82,7 @@ class NativeEditor(
         val hint = suggestedArea(profile.packageName, size.x, size.y, display.displayId)
         val draft = EditorDraft(profile, size.x, size.y, display.rotation, hint.area,
             displayScope=if(display.displayId==0) "phone" else "external",windowFrame=hint.windowFrame)
-        val view = EditorRoot(overlayContext, draft, profile.camera.mode==CameraSpec.BOUNDED, {
+        val view = EditorRoot(overlayContext, draft, presentationHost.cursorPosition(),presentationHost.cursorSizeDp(), {
             onSave(it)
             close()
         }, {
@@ -158,10 +159,34 @@ class NativeEditor(
     private class EditorRoot(
         context: Context,
         private val draft: EditorDraft,
-        private val legacyCameraMode: Boolean,
+        initialPointer:PointF?,
+        private val cursorSizeDp:Float,
         private val save: (GameProfile) -> Unit,
         private val cancel: () -> Unit,
     ) : FrameLayout(context) {
+        private var cursorScreenX=initialPointer?.x ?: Float.NaN
+        private var cursorScreenY=initialPointer?.y ?: Float.NaN
+        private var cursorShown=initialPointer!=null
+        private val cursorOrigin=IntArray(2)
+        private val cursorFill=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(246,249,255);style=Paint.Style.FILL }
+        private val cursorEdge=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.rgb(25,52,102);style=Paint.Style.STROKE;strokeWidth=1.1f;strokeJoin=Paint.Join.ROUND }
+        private val cursorPath=android.graphics.Path().apply { moveTo(0f,0f);lineTo(1.4f,20f);lineTo(7.8f,13.2f);lineTo(17.5f,13.6f);close() }
+        override fun onResolvePointerIcon(event:MotionEvent,pointerIndex:Int):PointerIcon =
+            PointerIcon.getSystemIcon(context,PointerIcon.TYPE_NULL)
+        private fun trackEditorPointer(event:MotionEvent) {
+            if(!event.isFromSource(InputDevice.SOURCE_MOUSE)) return
+            cursorScreenX=event.rawX;cursorScreenY=event.rawY
+            cursorShown=event.actionMasked!=MotionEvent.ACTION_HOVER_EXIT
+            postInvalidateOnAnimation()
+        }
+        override fun dispatchDraw(canvas:Canvas) {
+            super.dispatchDraw(canvas)
+            if(!cursorShown || !cursorScreenX.isFinite() || !cursorScreenY.isFinite()) return
+            getLocationOnScreen(cursorOrigin)
+            canvas.save();canvas.translate(cursorScreenX-cursorOrigin[0],cursorScreenY-cursorOrigin[1])
+            val scale=resources.displayMetrics.density*cursorSizeDp/20f
+            canvas.scale(scale,scale);canvas.drawPath(cursorPath,cursorFill);canvas.drawPath(cursorPath,cursorEdge);canvas.restore()
+        }
         private val density = resources.displayMetrics.density
         private val refreshers = ArrayList<() -> Unit>()
         private var selected = EditorDraft.Control.JOYSTICK
@@ -221,7 +246,7 @@ class NativeEditor(
             palette.apply { orientation=LinearLayout.VERTICAL; setPadding(dp(5),0,dp(5),dp(5)); background=background(24) }
             val paletteHandle=LinearLayout(context).apply {
                 gravity=Gravity.CENTER; orientation=LinearLayout.HORIZONTAL; contentDescription="Arrastrar paleta"
-                addView(ImageView(context).apply { setImageResource(R.drawable.mm_drag); imageTintList=null; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(22),dp(22)))
+                addView(TextView(context).apply { text="Controles";textSize=11f;setTextColor(Color.rgb(201,214,234)) })
             }
             palette.addView(paletteHandle,LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT,dp(28)))
             installPaletteDrag(paletteHandle)
@@ -279,13 +304,9 @@ class NativeEditor(
                 orientation=LinearLayout.VERTICAL; setPadding(dp(12),dp(6),dp(12),dp(8)); background=background(16)
             }
             val heading=LinearLayout(context).apply { orientation=LinearLayout.HORIZONTAL }
-            val propertyGrip=ImageView(context).apply {
-                setImageResource(R.drawable.mm_drag);imageTintList=null;contentDescription="Arrastrar panel"
-            }
-            heading.addView(propertyGrip,LinearLayout.LayoutParams(dp(24),dp(44)))
             instruction.apply { setTextColor(Color.rgb(163,208,255)); textSize=13f; typeface=android.graphics.Typeface.DEFAULT_BOLD; gravity=Gravity.CENTER_VERTICAL; setPadding(0,0,dp(4),0) }
             heading.addView(instruction,LinearLayout.LayoutParams(0,dp(44),1f))
-            installPanelDrag(propertyGrip);installPanelDrag(instruction)
+            installPanelDrag(instruction)
             heading.addView(ImageButton(context).apply {
                 setImageResource(R.drawable.mm_close); imageTintList=null; scaleType=ImageView.ScaleType.FIT_CENTER
                 setPadding(dp(6),dp(6),dp(6),dp(6)); background=gradient(Color.rgb(31,53,88),Color.rgb(18,34,61),10)
@@ -477,16 +498,16 @@ class NativeEditor(
         }
 
         private fun addGeometry() {
-            if(selected == EditorDraft.Control.CAMERA) { addCameraMode(); addCameraFrequency() }
+            if(selected == EditorDraft.Control.CAMERA) { addCameraSuspend(); addCameraRegion(); addCameraFrequency() }
             if(selected == EditorDraft.Control.JOYSTICK) slider("Radio", 2, 40, { (draft.value.joystick.radius * 100).toInt() }, { "$it%" }) {
                 val a = draft.value.calibration.area
                 draft.joystickRadius(it / 100f * min(a.width, a.height))
             }
-            if(selected == EditorDraft.Control.CAMERA && draft.value.camera.mode != CameraSpec.CONTINUOUS) slider("Ancho", 4, 95, { (draft.value.camera.width * 100).toInt() }, { "$it%" }) {
+            if(selected == EditorDraft.Control.CAMERA && customCameraRegion()) slider("Ancho", 4, 95, { (draft.value.camera.width * 100).toInt() }, { "$it%" }) {
                 val a = draft.value.calibration.area
                 draft.cameraSize(a.width * it / 100f, a.height * draft.value.camera.height)
             }
-            if(selected == EditorDraft.Control.CAMERA && draft.value.camera.mode != CameraSpec.CONTINUOUS) slider("Alto", 4, 95, { (draft.value.camera.height * 100).toInt() }, { "$it%" }) {
+            if(selected == EditorDraft.Control.CAMERA && customCameraRegion()) slider("Alto", 4, 95, { (draft.value.camera.height * 100).toInt() }, { "$it%" }) {
                 val a = draft.value.calibration.area
                 draft.cameraSize(a.width * draft.value.camera.width, a.height * it / 100f)
             }
@@ -498,42 +519,31 @@ class NativeEditor(
             }
         }
 
-        private fun addCameraMode() {
+        private fun customCameraRegion():Boolean=draft.value.camera.let {
+            it.customRegion && !CameraSpec.isGgFreeFirePackage(draft.value.packageName)
+        }
+
+        private fun addCameraRegion() {
+            if(CameraSpec.isGgFreeFirePackage(draft.value.packageName)) return
             var refreshing=false
-            helpLabel("Modo de cámara",
-                "Continua mantiene el arrastre y puede renovarlo durante pausas tras acumular recorrido. " +
-                "Región suave usa el área como referencia para renovar en pausas, sin reiniciar al cruzar el borde." +
-                if(legacyCameraMode) " Se ha seleccionado Región suave para sustituir el modo anterior; Guardar aplica el modo elegido y Cancelar conserva el perfil original." else "")
-            val choices=listOf(
-                CameraSpec.CONTINUOUS to "Continua",
-                CameraSpec.SMOOTH to "Región suave"
-            )
-            val group=RadioGroup(context).apply { orientation=RadioGroup.VERTICAL }
-            val modeIds=choices.associate { (mode,title) ->
-                val radio=RadioButton(context).apply {
-                    id=View.generateViewId();text=title;textSize=12f;setTextColor(Color.WHITE)
-                    buttonTintList=ColorStateList.valueOf(Color.rgb(113,182,255))
-                }
-                group.addView(radio,RadioGroup.LayoutParams(RadioGroup.LayoutParams.MATCH_PARENT,dp(36)))
-                mode to radio.id
-            }
-            group.check(modeIds.getValue(draft.value.camera.mode))
-            group.setOnCheckedChangeListener { view,checkedId ->
-                if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE) {
-                    val mode=modeIds.entries.firstOrNull { it.value==checkedId }?.key
-                    if(mode!=null && mode!=draft.value.camera.mode) {
-                        draft.cameraMode(mode)
+            val custom=CheckBox(context).apply {
+                text="Usar región personalizada";textSize=13f;setTextColor(Color.WHITE)
+                buttonTintList=ToggleStyle.checkColors()
+                isChecked=draft.value.camera.customRegion
+                setOnCheckedChangeListener { view,checked ->
+                    if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE && selected==EditorDraft.Control.CAMERA) {
+                        draft.replace(draft.value.copy(camera=draft.value.camera.copy(customRegion=checked)))
                         showPanel()
                     }
                 }
             }
             refreshers += {
                 refreshing=true
-                group.check(modeIds.getValue(draft.value.camera.mode))
+                custom.isChecked=draft.value.camera.customRegion
                 refreshing=false
             }
-            body.addView(group)
-            addCameraSuspend()
+            body.addView(SettingHelp.heading(context,custom,"Región personalizada",
+                "Permite ajustar ancho y alto del área de cámara en los juegos que utilizan una región. Desactivado utiliza el área de juego."))
         }
 
         private fun addCameraSuspend() {
@@ -721,7 +731,7 @@ class NativeEditor(
                 (choices.filter { it!=0 }+savedRate).distinct().sorted()+0).toIntArray()
             val heading=TextView(context).apply { textSize=12f; setTextColor(Color.WHITE); setPadding(0,dp(8),0,0) }
             body.addView(SettingHelp.heading(context,heading,"Frecuencia de captura",
-                "Tope de movimientos entregados: 100 Hz ≈ 10 ms; 500 ≈ 2 ms; 1000 ≈ 1 ms. Conserva las muestras; clics y teclas inmediatos. Libre no impone un límite de software ni acelera un mouse lento."))
+                "Tope de movimientos entregados: 100 Hz ≈ 10 ms; 125 ≈ 8 ms; 250 ≈ 4 ms; 500 ≈ 2 ms; 1000 ≈ 1 ms. Conserva las muestras; clics y teclas inmediatos. Libre no impone un límite de software ni acelera un mouse lento."))
             val frequency=SeekBar(context).apply {
                 min=0; max=rates.lastIndex; progress=rates.indexOf(draft.value.camera.updateRateHz).coerceAtLeast(0)
                 contentDescription="Frecuencia de captura del mouse"
@@ -773,7 +783,7 @@ class NativeEditor(
             var refreshing=false
             val precision=CheckBox(context).apply {
                 text="Mira precisa"; textSize=13f; setTextColor(Color.WHITE)
-                buttonTintList=ColorStateList.valueOf(Color.rgb(113,182,255))
+                buttonTintList=ToggleStyle.checkColors()
                 isChecked=draft.value.camera.precisionAim
                 setOnCheckedChangeListener { view,checked ->
                     if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE &&
@@ -789,13 +799,14 @@ class NativeEditor(
                 refreshing=false
             }
             body.addView(SettingHelp.heading(context,precision,"Mira precisa",
-                "Suaviza pequeños movimientos horizontales mientras disparas. Conserva el movimiento vertical y los giros rápidos."))
+                "Reduce de forma sostenida los movimientos horizontales finos mientras mantienes M1. Usa la velocidad de las muestras originales; conserva el movimiento vertical y los giros rápidos."))
         }
 
         private fun addFireCadence() {
             val actionIndex=draft.selectedAction
             var refreshing=false
             val enabled=Switch(context).apply {
+                ToggleStyle.apply(this)
                 text="Opciones de cadencia";textSize=13f;setTextColor(Color.WHITE)
                 isChecked=draft.action().cadenceEnabled
                 setOnCheckedChangeListener { view,checked ->
@@ -996,6 +1007,7 @@ class NativeEditor(
             capturedSuspendMouseButton=0;lastSuspendMouseReleaseTime=eventTime
         }
         override fun dispatchGenericMotionEvent(event:MotionEvent):Boolean {
+            trackEditorPointer(event)
             if(event.isFromSource(InputDevice.SOURCE_MOUSE)) {
                 val button=event.actionButton
                 if(event.actionMasked==MotionEvent.ACTION_BUTTON_PRESS && button in intArrayOf(1,2,4,8,16)) {
@@ -1010,6 +1022,7 @@ class NativeEditor(
             return super.dispatchGenericMotionEvent(event)
         }
         override fun dispatchTouchEvent(event:MotionEvent):Boolean {
+            trackEditorPointer(event)
             if(capturedSuspendMouseTouch && event.actionMasked==MotionEvent.ACTION_CANCEL) {
                 capturedSuspendMouseTouch=false;releaseCapturedSuspendMouse(capturedSuspendMouseDevice,event.eventTime)
                 return true
@@ -1060,7 +1073,7 @@ class NativeEditor(
                 setPadding(0,0,dp(8),0)
             },LinearLayout.LayoutParams(0,dp(40),1f))
             if(name=="Suspender") addView(SettingHelp.button(context,name,
-                "Mantén esta tecla o botón del mouse para usar el cursor; al soltarlo regresas a la cámara."),
+                "Mantén esta tecla o botón para usar el cursor temporalmente. Al regresar a la cámara empieza un contacto nuevo y se limpia el historial de Mira precisa. Se liberan las acciones mantenidas; no cambia la sensibilidad guardada."),
                 LinearLayout.LayoutParams(dp(24),dp(24)).apply { rightMargin=dp(6) })
         }
         private fun assignmentButton(description:String,clicked:(View)->Unit)=button("",clicked).apply {
@@ -1177,7 +1190,7 @@ class NativeEditor(
             val cw = p.camera.width * a.width; val ch = p.camera.height * a.height
             if(p.camera.enabled) {
                 shapeStyle(EditorDraft.Control.CAMERA, Color.rgb(155, 201, 255))
-                if(cameraRegion() && p.camera.mode != CameraSpec.CONTINUOUS) canvas.drawRect(cx-cw/2,cy-ch/2,cx+cw/2,cy+ch/2,line)
+                if(cameraRegion() && p.camera.customRegion && !CameraSpec.isGgFreeFirePackage(p.packageName)) canvas.drawRect(cx-cw/2,cy-ch/2,cx+cw/2,cy+ch/2,line)
                 val cameraRadius=p.camera.markerSizeDp*density/2
                 circleSurface(canvas,cx,cy,cameraRadius,selected()==EditorDraft.Control.CAMERA)
                 canvas.drawCircle(cx,cy,cameraRadius,line);targetGlyph(canvas,cx,cy,cameraRadius,line.color)
@@ -1423,7 +1436,7 @@ class NativeEditor(
                             hitMacro!=null -> { draft.selectMacro(hitMacro);EditorDraft.Control.MACRO }
                             hitAction!=null -> { draft.selectAction(index); EditorDraft.Control.ACTION }
                             p.joystick.enabled && hypot(x - jx, y - jy) <= radius + hit -> EditorDraft.Control.JOYSTICK
-                            p.camera.enabled && (hypot(x-cx,y-cy)<=cr+5*density || (cameraRegion() && p.camera.mode != CameraSpec.CONTINUOUS && x in (cx-cw/2)..(cx+cw/2) && y in (cy-ch/2)..(cy+ch/2))) -> EditorDraft.Control.CAMERA
+                            p.camera.enabled && (hypot(x-cx,y-cy)<=cr+5*density || (cameraRegion() && p.camera.customRegion && !CameraSpec.isGgFreeFirePackage(p.packageName) && x in (cx-cw/2)..(cx+cw/2) && y in (cy-ch/2)..(cy+ch/2))) -> EditorDraft.Control.CAMERA
                             else -> null
                         }
                         tapBinding=if(resizing==ResizeTarget.NONE && dragging in listOf(EditorDraft.Control.ACTION,EditorDraft.Control.CAMERA,EditorDraft.Control.MACRO)) dragging else null

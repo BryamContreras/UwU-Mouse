@@ -76,11 +76,11 @@ data class CameraSpec(
     val y: Float,
     val width: Float,
     val height: Float,
-    val sensitivityX: Float = 1f,
-    val sensitivityY: Float = 1f,
-    val mode: String = CONTINUOUS,
+    val sensitivityX: Float = .70f,
+    val sensitivityY: Float = .70f,
+    val mode: String = SMOOTH,
     /** Native motion capture delivery cap; zero preserves unrestricted delivery. */
-    val updateRateHz: Int = 0,
+    val updateRateHz: Int = 250,
     val markerSizeDp: Float = MarkerStyle.DEFAULT_DP,
     /** Opt-in input smoothing, active only while the mapped physical fire button is held. */
     val precisionAim: Boolean = false,
@@ -89,15 +89,19 @@ data class CameraSpec(
     val enabled: Boolean = true,
     /** Optional physical mouse hold-to-show-cursor button; distinct from Android key codes. */
     val suspendMouseButton: Int = 0,
+    /** Smooth otherwise uses the calibrated game area with a 50-pixel inset. */
+    val customRegion: Boolean = false,
 ) {
     companion object {
         const val BOUNDED = "bounded"
         const val CONTINUOUS = "continuous"
         const val SMOOTH = "smooth"
-        val CAPTURE_RATE_CHOICES_HZ: List<Int> = listOf(100,500,1000,0)
+        val CAPTURE_RATE_CHOICES_HZ: List<Int> = listOf(100,125,250,500,1000,0)
         // Existing profiles remain valid and retain their saved value until explicitly edited.
         val UPDATE_RATES_HZ: Set<Int> = (CAPTURE_RATE_CHOICES_HZ + listOf(60,90,120,144,240)).toSet()
         fun isSupportedMode(mode: String): Boolean = mode == BOUNDED || mode == CONTINUOUS || mode == SMOOTH
+        fun isGgFreeFirePackage(packageName:String):Boolean =
+            packageName.contains("com.dts.freefire") || packageName.contains("com.garena.game.ffi")
         fun isSupportedUpdateRate(hz: Int): Boolean = hz in UPDATE_RATES_HZ
         fun isSupportedSuspendMouseButton(button:Int):Boolean = button in setOf(0,1,2,4,8,16)
     }
@@ -226,7 +230,13 @@ object ProfileValidator {
             check(macro.steps.sumOf { MACRO_TAP_MS.toLong() + it.waitMs } <= GameProfile.MAX_MACRO_DURATION_MS, "La macro supera los 30 segundos")
         }
         val triggers = actions.map { it.triggerKind to it.code } + macros.map { it.triggerKind to it.code }
-        check(triggers.distinct().size == triggers.size, "Dos acciones o macros usan la misma entrada")
+        val actionGroups=actions.groupBy { it.triggerKind to it.code }
+        check(actionGroups.all { (trigger,group) -> group.size==1 ||
+            trigger.first=="key" && group.all { it.behavior==ActionSpec.TAP } },
+            "Sólo las acciones de pulsación normal pueden compartir una tecla")
+        val macroTriggers=macros.map { it.triggerKind to it.code }
+        check(macroTriggers.distinct().size==macroTriggers.size && macroTriggers.none { it in actionGroups },
+            "Una macro comparte entrada con otra acción o macro")
         val configuredDirections = listOf(j.upKey, j.downKey, j.leftKey, j.rightKey)
         check(configuredDirections.all(::keyValid), "Teclas de dirección no válidas")
         val directions = if (j.enabled) configuredDirections else emptyList()
@@ -243,7 +253,8 @@ object ProfileValidator {
         val shortcuts = configured.filter { it != 0 }
         check(keyValid(profile.shortcuts.cameraToggle) && configured.all { it == 0 || keyValid(it) } && shortcuts.distinct().size == shortcuts.size, "Los atajos de sesión deben ser distintos")
         val engineKeys = directions + actions.filter { it.triggerKind == "key" }.map { it.code } + macros.filter { it.triggerKind == "key" }.map { it.code }
-        check(engineKeys.distinct().size == engineKeys.size, "La acción coincide con una dirección")
+        check((actions.filter { it.triggerKind=="key" }.map { it.code } + macros.filter { it.triggerKind=="key" }.map { it.code }).none { it in directions },
+            "La acción coincide con una dirección")
         check(engineKeys.none { it in shortcuts }, "Una asignación coincide con un atajo de sesión")
         check(profile.switchKey == 0 || profile.switchKey !in engineKeys + shortcuts, "La tecla de perfil ya está asignada al mapeo")
         return errors

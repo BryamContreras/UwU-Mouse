@@ -216,6 +216,14 @@ class TouchComposer(
         return true
     }
 
+    /** GG ends an edge-crossing drag at its candidate, without a preceding MOVE. */
+    @Synchronized fun endAt(owner:String,x:Float,y:Float):Boolean {
+        if(!ready(owner,x,y,continuingMove=true) || !flushPendingMove()) return false
+        val contact=contacts.firstOrNull { it.owner==owner } ?: return true
+        contact.x=x;contact.y=y
+        return end(owner)
+    }
+
     /** Overlap just the two camera fingers so the game never sees an empty camera interval. */
     @Synchronized fun handoff(owner:String,x:Float,y:Float,preferredId:Int?=null):Boolean {
         if(!ready(owner,x,y)) return false

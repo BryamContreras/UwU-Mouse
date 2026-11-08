@@ -22,6 +22,13 @@ class RawMouseMotionBatch(
         for(value in ys) sum+=value.toDouble()
         return sum.toFloat()
     }
+    /** Stateful compensation/filtering runs on original samples before MOVE delivery coalesces. */
+    inline fun deliverMotion(deliver:(Float,Float,Long)->Boolean):Boolean {
+        for(index in timesNanos.indices) if(xs[index]!=0f || ys[index]!=0f) {
+            if(!deliver(xs[index],ys[index],timesNanos[index])) return false
+        }
+        return true
+    }
     fun moveCursor(cursor:CursorPositionPolicy,untilExclusive:Int=size,sensitivity:Float=1f) {
         require(untilExclusive in 0..size)
         // Native records are unique. Different devices may legitimately share a

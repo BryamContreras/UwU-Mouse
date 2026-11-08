@@ -31,6 +31,7 @@ data class RecoverySnapshot(
     /** A known acknowledged stream ended after verified focus loss and a rejected retry CANCEL. */
     val focusLossReconciled: Boolean = false,
     val coordinatePolicy: TouchCoordinatePolicy = TouchCoordinatePolicy.STRICT,
+    val rejectedDownReconciled: Boolean = false,
 ) {
     /** Last acknowledged post-event state; an unacknowledged DOWN is absent here. */
     val activeContacts: Int get() = activeFrame?.ids?.size ?: 0
@@ -64,6 +65,10 @@ class RecoveryJournal(
     private var terminalReconciled = false
     private var importedForRecovery = false
     private var explicitRejectedMove = false
+    private var explicitRejectedDown = false
+    private var rejectedDownCancelTime = -1L
+    private var downReplacementGeneration = 0L
+    private var rejectedDownReconciled = false
     private var rejectedRecoveryCancel = false
     private var rejectedMoveReconciled = false
     private var focusLossObserved = false
@@ -90,6 +95,7 @@ class RecoveryJournal(
         terminalReconciled = false
         importedForRecovery = false
         explicitRejectedMove = false
+        clearRejectedDownProof()
         rejectedRecoveryCancel = false
         rejectedMoveReconciled = false
         clearFocusLossProof()
@@ -134,6 +140,7 @@ class RecoveryJournal(
         terminalReconciled = false
         importedForRecovery = true
         explicitRejectedMove = false
+        clearRejectedDownProof()
         rejectedRecoveryCancel = false
         rejectedMoveReconciled = false
         clearFocusLossProof()
@@ -176,6 +183,8 @@ class RecoveryJournal(
                 activeFrame?.let { active ->
                     active.downTime == frame.downTime && active.ids.contentEquals(frame.ids)
                 } == true && lastConfirmed != null
+            explicitRejectedDown = failed && frame.action == TouchComposer.DOWN &&
+                frame.ids.size == 1 && activeFrame == null && !importedForRecovery
             return failed
         }
         val admitted = requireNotNull(attempted)
@@ -197,6 +206,7 @@ class RecoveryJournal(
         terminalReconciled = false
         importedForRecovery = false
         explicitRejectedMove = false
+        clearRejectedDownProof()
         rejectedRecoveryCancel = false
         rejectedMoveReconciled = false
         clearFocusLossProof()
@@ -226,6 +236,8 @@ class RecoveryJournal(
         // A later CANCEL requires its own explicit negative acknowledgement.
         rejectedFocusCancel = null
         focusReplacementGeneration = 0L
+        rejectedDownCancelTime = -1L
+        downReplacementGeneration = 0L
         lastEventTime = maxOf(nowUptime, possible.eventTime, possible.downTime, lastEventTime)
         return possible.detached().copy(
             action = TouchComposer.CANCEL,
@@ -313,6 +325,53 @@ class RecoveryJournal(
             lastConfirmed != null && !importedForRecovery
     }
 
+    /** A rejected initial DOWN needs a terminated old worker and an exact rejected retry. */
+    @Synchronized fun rejectedInitialDownCancellation(
+        sessionId: Long, cancelFrame: TouchFrame, previousWorkerTerminated: Boolean,
+        previousWorkerGeneration: Long, replacementWorkerGeneration: Long,
+    ): Boolean {
+        val uncertain = attempted ?: return false
+        if (sessionId != this.sessionId || state != RecoveryInjectionState.RECOVERY_NEEDED ||
+            !explicitRejectedDown || importedForRecovery || activeFrame != null ||
+            uncertain.action != TouchComposer.DOWN || uncertain.ids.size != 1 ||
+            !previousWorkerTerminated || previousWorkerGeneration <= 0L ||
+            replacementWorkerGeneration <= previousWorkerGeneration ||
+            cancelFrame.action != TouchComposer.CANCEL || cancelFrame.eventTime != lastEventTime ||
+            cancelFrame.eventTime < uncertain.eventTime || cancelFrame.downTime != uncertain.downTime ||
+            !cancelFrame.ids.contentEquals(uncertain.ids) || !cancelFrame.xs.contentEquals(uncertain.xs) ||
+            !cancelFrame.ys.contentEquals(uncertain.ys)) return false
+        rejectedDownCancelTime = cancelFrame.eventTime
+        downReplacementGeneration = replacementWorkerGeneration
+        return true
+    }
+
+    @Synchronized fun canReconcileRejectedDown(sessionId: Long, replacementWorkerGeneration: Long): Boolean =
+        sessionId == this.sessionId && state == RecoveryInjectionState.RECOVERY_NEEDED &&
+            explicitRejectedDown && !importedForRecovery && activeFrame == null &&
+            attempted?.action == TouchComposer.DOWN && attempted?.ids?.size == 1 &&
+            rejectedDownCancelTime == lastEventTime && replacementWorkerGeneration > 0L &&
+            downReplacementGeneration == replacementWorkerGeneration
+
+    /** Global OS proof closes uncertainty without inventing CANCEL admission or delivery. */
+    @Synchronized fun reconciledRejectedDown(
+        sessionId: Long, replacementWorkerGeneration: Long, dispatcherGloballyNoDown: Boolean,
+    ): Boolean {
+        if (!dispatcherGloballyNoDown || !canReconcileRejectedDown(sessionId, replacementWorkerGeneration)) return false
+        state = RecoveryInjectionState.RECOVERY_ADMITTED
+        attempted = null
+        cancellationAccepted = false
+        terminalReconciled = true
+        rejectedDownReconciled = true
+        return true
+    }
+
+    private fun clearRejectedDownProof() {
+        explicitRejectedDown = false
+        rejectedDownCancelTime = -1L
+        downReplacementGeneration = 0L
+        rejectedDownReconciled = false
+    }
+
     /**
      * Android can close a gesture independently (for example after a device/source switch),
      * then reject both a MOVE and its exact late CANCEL. Only an explicitly rejected MOVE,
@@ -389,6 +448,7 @@ class RecoveryJournal(
         rejectedMoveReconciled = rejectedMoveReconciled,
         focusLossReconciled = focusLossReconciled,
         coordinatePolicy = coordinatePolicy,
+        rejectedDownReconciled = rejectedDownReconciled,
     )
 
     private fun validTransition(frame: TouchFrame): Boolean {

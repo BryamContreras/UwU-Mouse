@@ -99,6 +99,15 @@ class MethodChannelMapperGateway implements MapperGateway {
       _channel.invokeMethod<void>('deleteProfile', {'id': id});
 
   @override
+  Future<bool> exportProfileFile(String id) async =>
+      await _channel.invokeMethod<bool>('exportProfileFile', {'id': id}) ??
+      false;
+
+  @override
+  Future<bool> importProfileFile() async =>
+      await _channel.invokeMethod<bool>('importProfileFile') ?? false;
+
+  @override
   Future<void> openEditor(String id) =>
       _channel.invokeMethod<void>('openEditor', {'id': id});
 

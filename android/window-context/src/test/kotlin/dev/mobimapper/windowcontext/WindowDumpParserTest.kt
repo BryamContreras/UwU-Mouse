@@ -4,6 +4,24 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WindowDumpParserTest {
+    @Test fun onlyTheNonTouchableTrustedShellCursorIsExcludedFromObstructionMetadata() {
+        val cursor=window(index=0,id="c0ffee",name="com.android.shell",type="APPLICATION_OVERLAY")
+            .replace("private title ignored by metadata parser","UwU Mouse · Cursor opaco")
+            .replace("mOwnerUid=10123","mOwnerUid=2000")
+            .replace("fmt=TRANSLUCENT}","fmt=TRANSLUCENT fl=NOT_TOUCHABLE pfl=TRUSTED_OVERLAY}")
+        val game=window(index=1,id="123abc")
+        val safe=parse(windows(cursor,game),displays(0 to "123abc"))
+        assertTrue(safe.valid);assertEquals(1,safe.windows.size)
+        val hexCursor=cursor.replace(" fl=NOT_TOUCHABLE pfl=TRUSTED_OVERLAY}","\n      fl=1000138\n      pfl=32000000\n    }")
+        assertEquals(1,parse(windows(hexCursor,game),displays(0 to "123abc")).windows.size)
+        assertEquals(2,parse(windows(hexCursor.replace("pfl=32000000","pfl=12000000"),game),displays(0 to "123abc")).windows.size)
+        assertEquals(2,parse(windows(hexCursor.replace("fl=1000138","fl=1000128"),game),displays(0 to "123abc")).windows.size)
+        for(other in listOf(cursor.replace("mOwnerUid=2000","mOwnerUid=10123"),
+            cursor.replace("TRUSTED_OVERLAY","UNTRUSTED"),cursor.replace("NOT_TOUCHABLE","NOT_FOCUSABLE"))) {
+            val result=parse(windows(other,game),displays(0 to "123abc"))
+            assertTrue(result.valid);assertEquals(2,result.windows.size)
+        }
+    }
     @Test fun regexLiteralClosersAreExplicitForAndroidIcuCompatibility() {
         // The desktop JDK accepts literal } and ] that Android ICU rejects during
         // class initialization. Keep this stricter invariant in addition to fixture tests.

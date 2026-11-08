@@ -6,35 +6,69 @@ import 'package:mobimapper/application/ports/mapper_gateway.dart';
 import 'support/profile_fixtures.dart';
 
 void main() {
-  testWidgets('library launches through an injected gateway without a platform channel', (
+  testWidgets('profiles expose export and import below new profile', (
     tester,
   ) async {
     final gateway = _MemoryGateway();
     await tester.pumpWidget(MobiMapperApp(gateway: gateway));
     await tester.pumpAndSettle();
-    expect(find.text('Free Fire'), findsOneWidget);
-    expect(find.text('Captura nativa: Activada'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+    await tester.longPress(
+      find.byKey(const ValueKey('game-com.dts.freefireth')),
+    );
     await tester.pumpAndSettle();
-    expect(gateway.startedProfiles, ['profile-1']);
+    await tester.ensureVisible(find.text('Nuevo perfil'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Importar perfil'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getTopLeft(find.text('Importar perfil')).dy,
+      greaterThan(tester.getTopLeft(find.text('Nuevo perfil')).dy),
+    );
+    await tester.tap(find.text('Importar perfil'));
+    await tester.pumpAndSettle();
+    expect(gateway.imports, 1);
+    await tester.ensureVisible(find.text('Exportar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Exportar'));
+    await tester.pumpAndSettle();
+    expect(gateway.exports, ['profile-1']);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+  testWidgets(
+    'library launches through an injected gateway without a platform channel',
+    (tester) async {
+      final gateway = _MemoryGateway();
+      await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+      await tester.pumpAndSettle();
+      expect(find.text('Free Fire'), findsOneWidget);
+      expect(find.text('Captura nativa: Activada'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+      await tester.pumpAndSettle();
+      expect(gateway.startedProfiles, ['profile-1']);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
-  testWidgets('legacy accessibility cannot enable a missing native capture module', (
-    tester,
-  ) async {
-    final gateway = _MemoryGateway(captureReady: false, legacyAccessibility: true);
-    await tester.pumpWidget(MobiMapperApp(gateway: gateway));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
-    await tester.pumpAndSettle();
-    expect(gateway.startedProfiles, isEmpty);
-    expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
-    expect(find.text('Activar accesibilidad'), findsNothing);
-    expect(find.text('Listo para abrir tu juego'), findsNothing);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+  testWidgets(
+    'legacy accessibility cannot enable a missing native capture module',
+    (tester) async {
+      final gateway = _MemoryGateway(
+        captureReady: false,
+        legacyAccessibility: true,
+      );
+      await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+      await tester.pumpAndSettle();
+      expect(gateway.startedProfiles, isEmpty);
+      expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(find.text('Listo para abrir tu juego'), findsNothing);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets('phone mapping requires its application overlay permission too', (
     tester,
@@ -65,6 +99,8 @@ class _MemoryGateway implements MapperGateway {
   final bool captureReady, overlayPermission, legacyAccessibility;
   final startedProfiles = <String>[];
   final commands = <NativeCommand>[];
+  final exports = <String>[];
+  int imports = 0;
 
   @override
   Future<NativeStatus> status() async => NativeStatus.fromWire({
@@ -116,6 +152,17 @@ class _MemoryGateway implements MapperGateway {
 
   @override
   Future<void> startProfile(String id) async => startedProfiles.add(id);
+  @override
+  Future<bool> exportProfileFile(String id) async {
+    exports.add(id);
+    return true;
+  }
+
+  @override
+  Future<bool> importProfileFile() async {
+    imports++;
+    return true;
+  }
 
   @override
   Future<void> execute(NativeCommand command) async => commands.add(command);

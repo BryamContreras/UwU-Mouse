@@ -5,8 +5,9 @@ import kotlin.math.exp
 
 /**
  * Optional, worker-owned horizontal input damping while the physical firing button is held.
- * Small deltas use a time-based speed estimate. A reversal starts a new estimate, so output
- * can never move against the current input. Suppressed displacement is discarded, never queued.
+ * Fine motion keeps a lower gain throughout the hold. Classification uses original sample
+ * speed, with an immediate pass-through for fast motion. Output always follows current input.
+ * Suppressed displacement is discarded, never queued.
  * The caller passes original sample times and handles Y unchanged.
  */
 class PrecisionAimFilter {
@@ -59,16 +60,6 @@ class PrecisionAimFilter {
         if(haveSample && elapsed>RESET_GAP_NANOS) {
             timingResets++; clearMotion(); return dx
         }
-        val magnitude=abs(dx.toDouble())
-        if(magnitude>=FLICK_DELTA) {
-            flickSamples++; clearMotion(); return dx
-        }
-        val nextDirection=if(dx>0f) 1 else -1
-        if(direction!=nextDirection) {
-            if(direction!=0) reversals++
-            smoothedSpeed=0.0
-            direction=nextDirection
-        }
         val dtNanos=elapsed.coerceIn(MIN_SAMPLE_NANOS,MAX_SAMPLE_NANOS)
         if(dtNanos!=coefficientIntervalNanos) {
             coefficientSeconds=dtNanos/1_000_000_000.0
@@ -76,12 +67,27 @@ class PrecisionAimFilter {
             coefficientIntervalNanos=dtNanos
         }
         val dtSeconds=coefficientSeconds
+        val magnitude=abs(dx.toDouble())
         val rawSpeed=magnitude/dtSeconds
-        smoothedSpeed+=(rawSpeed-smoothedSpeed)*coefficientAlpha
-        val damped=minOf(magnitude,smoothedSpeed*dtSeconds)
-        // Blend smoothly back to exact input before the large-motion pass-through threshold.
-        val weight=MAX_DAMPING*((FLICK_DELTA-magnitude)/(FLICK_DELTA-SMALL_DELTA)).coerceIn(0.0,1.0)
-        val outputMagnitude=(magnitude+(damped-magnitude)*weight).coerceIn(0.0,magnitude)
+        val nextDirection=if(dx>0f) 1 else -1
+        val changedDirection=direction!=nextDirection
+        if(changedDirection && direction!=0) reversals++
+        // Keep sample timing across flicks. Clearing it here would alternate between the
+        // nominal interval and real intervals on a fast mouse, changing the gain each sample.
+        if(rawSpeed>=FLICK_SPEED) {
+            flickSamples++;lastGain=1f;smoothedSpeed=FLICK_SPEED
+            direction=nextDirection;lastSampleTimeNanos=sampleTimeNanos;haveSample=true
+            return dx
+        }
+        if(!haveSample || changedDirection) smoothedSpeed=rawSpeed
+        else smoothedSpeed+=(rawSpeed-smoothedSpeed)*coefficientAlpha
+        direction=nextDirection
+        // Slowdown responds immediately; speeding up blends until the flick threshold.
+        val speed=minOf(rawSpeed,smoothedSpeed)
+        val transition=((speed-FINE_SPEED)/(FLICK_SPEED-FINE_SPEED)).coerceIn(0.0,1.0)
+        val blend=transition*transition*(3.0-2.0*transition)
+        val gain=FINE_GAIN+(1.0-FINE_GAIN)*blend
+        val outputMagnitude=(magnitude*gain).coerceIn(0.0,magnitude)
         val output=(if(nextDirection>0) outputMagnitude else -outputMagnitude).toFloat()
         lastSampleTimeNanos=sampleTimeNanos; haveSample=true
         lastGain=(outputMagnitude/magnitude).toFloat()
@@ -95,6 +101,7 @@ class PrecisionAimFilter {
         "attenuatedSamples" to attenuatedSamples,"flickSamples" to flickSamples,
         "invalidSamples" to invalidSamples,"timingResets" to timingResets,"reversals" to reversals,
         "lastGain" to lastGain,
+        "fineMotionGain" to FINE_GAIN,
     )
 
     private fun clearMotion() {
@@ -102,10 +109,11 @@ class PrecisionAimFilter {
     }
 
     companion object {
-        // Relative input units before profile sensitivity; not a calibrated physical distance.
-        private const val SMALL_DELTA=2.0
-        private const val FLICK_DELTA=8.0
-        private const val MAX_DAMPING=.50 // Slightly stronger damping; no dead zone or stored tail.
+        // Original relative units/second before sensitivity. These classify mouse speed,
+        // independently of the display, window, delivery batches or selected capture cap.
+        private const val FINE_SPEED=250.0
+        private const val FLICK_SPEED=1_000.0
+        private const val FINE_GAIN=.60
         private const val SMOOTHING_NANOS=14_000_000.0
         private const val NOMINAL_SAMPLE_NANOS=8_000_000L
         private const val MIN_SAMPLE_NANOS=500_000L

@@ -326,7 +326,8 @@ void main() {
     calibrated = true;
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pumpAndSettle();
-    expect(find.text('Jugar'), findsOneWidget);
+    expect(find.text('Jugar'), findsNothing);
+    expect(find.bySemanticsLabel('Jugar Free Fire'), findsOneWidget);
     expect(find.text('Colocar controles'), findsNothing);
     expect(reads, greaterThan(initialReads));
     await tester.pumpWidget(const SizedBox.shrink());
@@ -551,10 +552,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('connection-settings')));
       await tester.pumpAndSettle();
-      expect(
-        find.text('Mostrar sobre otras apps'),
-        findsOneWidget,
-      );
+      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
       expect(find.text('Permitir superposición'), findsNothing);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
@@ -693,7 +691,10 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final calls = <String>[];
-      mockActivation(calls, () => status(captureReady: false, backend: false, drawOverlays: false));
+      mockActivation(
+        calls,
+        () => status(captureReady: false, backend: false, drawOverlays: false),
+      );
       await tester.pumpWidget(const MobiMapperApp());
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
@@ -711,46 +712,45 @@ void main() {
     },
   );
 
-  testWidgets(
-    'missing motor offers local activation and checks a live service',
-    (tester) async {
-      var backend = false;
-      final calls = <String>[];
-      mockActivation(calls, () => status(backend: backend));
-      await tester.pumpWidget(const MobiMapperApp());
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
-      // The launch action allows a bounded time for an existing Binder to attach.
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pump(const Duration(milliseconds: 300));
-      await tester.pumpAndSettle();
-      expect(find.text('Captura nativa: Activada'), findsOneWidget);
-      expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
-      expect(find.text('Activar motor'), findsOneWidget);
-      expect(find.text('Activar accesibilidad'), findsNothing);
-      expect(calls, isNot(contains('startProfile')));
-      expect(calls, isNot(contains('openEditor')));
-      expect(calls, isNot(contains('activationStartDiscovery')));
-      expect(calls, isNot(contains('activationConnect')));
-      expect(calls, isNot(contains('activationCancel')));
-      final check = find.text('Comprobar servicio');
-      await tester.ensureVisible(check);
-      final readsBefore = calls.where((method) => method == 'status').length;
-      backend = true;
-      await tester.tap(check);
-      await tester.pumpAndSettle();
-      expect(
-        calls.where((method) => method == 'status').length,
-        greaterThan(readsBefore),
-      );
-      expect(find.text('Motor de toques: Activado'), findsOneWidget);
-      expect(find.text('Activar motor'), findsNothing);
-      expect(find.text('Listo para abrir tu juego'), findsOneWidget);
-      expect(calls, isNot(contains('startProfile')));
-      expect(calls, isNot(contains('openEditor')));
-      await tester.pumpWidget(const SizedBox.shrink());
-    },
-  );
+  testWidgets('missing motor offers local activation and checks a live service', (
+    tester,
+  ) async {
+    var backend = false;
+    final calls = <String>[];
+    mockActivation(calls, () => status(backend: backend));
+    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+    // The launch action allows a bounded time for an existing Binder to attach.
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(find.text('Captura nativa: Activada'), findsOneWidget);
+    expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
+    expect(find.text('Activar motor'), findsOneWidget);
+    expect(find.text('Activar accesibilidad'), findsNothing);
+    expect(calls, isNot(contains('startProfile')));
+    expect(calls, isNot(contains('openEditor')));
+    expect(calls, isNot(contains('activationStartDiscovery')));
+    expect(calls, isNot(contains('activationConnect')));
+    expect(calls, isNot(contains('activationCancel')));
+    final check = find.text('Comprobar servicio');
+    await tester.ensureVisible(check);
+    final readsBefore = calls.where((method) => method == 'status').length;
+    backend = true;
+    await tester.tap(check);
+    await tester.pumpAndSettle();
+    expect(
+      calls.where((method) => method == 'status').length,
+      greaterThan(readsBefore),
+    );
+    expect(find.text('Motor de toques: Activado'), findsOneWidget);
+    expect(find.text('Activar motor'), findsNothing);
+    expect(find.text('Listo para abrir tu juego'), findsOneWidget);
+    expect(calls, isNot(contains('startProfile')));
+    expect(calls, isNot(contains('openEditor')));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 
   testWidgets(
     'local activation validates code then pairs without starting play',

@@ -63,6 +63,8 @@ class ControllerBubble(
     private var onActivateProfile:(String)->Unit = {}
     private var onProfileKey:(String,Int)->Unit = { _,_ -> }
     private var onDeleteProfile:(String)->Unit = {}
+    private var onExportProfile:(String)->Unit = {}
+    private var onImportProfile:()->Unit = {}
     private var pendingProfileKeyId:String?=null
     private var pendingProfileDeleteId:String?=null
     private var profileError:String?=null
@@ -85,7 +87,7 @@ class ControllerBubble(
              pointerIntercepted:Boolean=false,onCursorReturn:()->Unit={},onVisualSettingsChanged:()->Unit={},
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
              onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
-             onDeleteProfile:(String)->Unit={}) {
+             onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={}) {
         check(Looper.myLooper() == Looper.getMainLooper())
         this.label = label; this.profileName = profileName; this.onMenu = onMenu
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
@@ -94,6 +96,7 @@ class ControllerBubble(
         this.pointerIntercepted=pointerIntercepted;this.onCursorReturn=onCursorReturn
         this.onVisualSettingsChanged=onVisualSettingsChanged
         this.profileItems=profileItems;this.onCreateProfile=onCreateProfile
+        this.onExportProfile=onExportProfile;this.onImportProfile=onImportProfile
         this.onActivateProfile=onActivateProfile;this.onProfileKey=onProfileKey
         this.onDeleteProfile=onDeleteProfile
         menuStatus?.let { if(it.text.toString()!=label) it.text=label }
@@ -198,11 +201,6 @@ class ControllerBubble(
             background = gradient(Color.rgb(30,65,119),Color.rgb(10,27,60),14,Color.rgb(100,158,237))
         }
         val header=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
-        val menuGrip=ImageView(overlayContext).apply {
-            setImageResource(R.drawable.mm_drag);imageTintList=null;contentDescription="Arrastrar menú"
-            setPadding(dp(8),dp(8),dp(8),dp(8))
-        }
-        header.addView(menuGrip,LinearLayout.LayoutParams(dp(40),dp(40)))
         val status=text(label,11f).apply { gravity=Gravity.CENTER; typeface=android.graphics.Typeface.DEFAULT_BOLD }
         menuStatus=status
         header.addView(status,LinearLayout.LayoutParams(0,dp(40),1f))
@@ -225,7 +223,7 @@ class ControllerBubble(
             }
             val show=Switch(overlayContext).apply {
                 text="Mostrar controles";textSize=12f;setTextColor(Color.WHITE)
-                thumbTintList=ColorStateList.valueOf(Color.rgb(186,224,255))
+                ToggleStyle.apply(this)
                 isChecked=style.showControls;contentDescription="Mostrar controles en pantalla"
             }
             detail.addView(SettingHelp.heading(overlayContext,show,"Mostrar controles",
@@ -326,6 +324,11 @@ class ControllerBubble(
                             pendingProfileKeyId=null;pendingProfileDeleteId=item.id;profileError=null;render()
                         }
                     },LinearLayout.LayoutParams(dp(52),dp(30)).apply { marginStart=dp(5) })
+                    row.addView(text("Exportar",11f).apply {
+                        gravity=Gravity.CENTER;isClickable=true;contentDescription="Exportar perfil ${item.name}"
+                        background=gradient(Color.rgb(38,74,133),Color.rgb(22,46,91),7)
+                        setOnClickListener { closeMenu();onExportProfile(item.id) }
+                    },LinearLayout.LayoutParams(dp(60),dp(30)).apply { marginStart=dp(5) })
                     detail.addView(row,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(46)).apply { bottomMargin=dp(4) })
                 }
                 profileError?.let { message -> detail.addView(text(message,11f).apply { setTextColor(Color.rgb(255,179,190)) }) }
@@ -344,6 +347,11 @@ class ControllerBubble(
                         render()
                     }
                 },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(5) })
+                detail.addView(text("Importar perfil",12f).apply {
+                    gravity=Gravity.CENTER;isClickable=true;contentDescription="Importar perfil desde archivo"
+                    background=gradient(Color.rgb(34,65,117),Color.rgb(18,39,78),8)
+                    setOnClickListener { closeMenu();onImportProfile() }
+                },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(6) })
                 centerMenu()
             }
             pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles={ render() };render()
@@ -373,7 +381,7 @@ class ControllerBubble(
         }
         val p = params("MobiMapper · Opciones")
         centerMenuGeometry(panel,p)
-        installMenuDrag(menuGrip,scroll,p);installMenuDrag(status,scroll,p)
+        installMenuDrag(status,scroll,p)
         try { windows.addView(scroll,p) }
         catch(failure:WindowManager.BadTokenException) { closeMenu();throw failure }
         catch(failure:WindowManager.InvalidDisplayException) { closeMenu();throw failure }

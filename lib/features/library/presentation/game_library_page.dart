@@ -242,6 +242,14 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     }, profiles: true);
   }
 
+  Future<void> _importProfileFile() => _run(() async {
+    await _api.importProfileFile();
+  }, profiles: true);
+
+  Future<void> _exportProfileFile(LocalProfile profile) => _run(() async {
+    await _api.exportProfileFile(profile.id);
+  });
+
   Future<void> _renameProfile(LocalProfile profile) async {
     final name = await _nameDialog('Nombre del perfil', profile.name);
     if (!mounted || name == null || name == profile.name) return;
@@ -488,9 +496,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
                 colors: [
-                  Color(0xff0875d6),
-                  Color(0xff1685d8),
-                  Color(0xff2587d5),
+                  Color(0xff142c59),
+                  Color(0xff203e79),
+                  Color(0xff2c5095),
                 ],
                 stops: [0, .62, 1],
               ),
@@ -844,34 +852,34 @@ class _GameLibraryPageState extends State<GameLibraryPage>
           ),
         ),
       ),
-      const SizedBox(height: 3),
-      Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          MobiIcon(
-            icon,
-            size: 18,
-            color: available
-                ? const Color(0xff147bc3)
-                : const Color(0xff7b8794),
-          ),
-          const SizedBox(width: 3),
-          Flexible(
-            child: Text(
-              action,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: available
-                    ? const Color(0xff147bc3)
-                    : const Color(0xff7b8794),
+      if (action != 'Jugar' && action != 'Mapear')
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            MobiIcon(
+              icon,
+              size: 18,
+              color: available
+                  ? const Color(0xff147bc3)
+                  : const Color(0xff7b8794),
+            ),
+            const SizedBox(width: 3),
+            Flexible(
+              child: Text(
+                action,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: available
+                      ? const Color(0xff147bc3)
+                      : const Color(0xff7b8794),
+                ),
               ),
             ),
-          ),
-        ],
-      ),
+          ],
+        ),
     ],
   );
 
@@ -1018,11 +1026,33 @@ class _GameLibraryPageState extends State<GameLibraryPage>
             spacing: 8,
             runSpacing: 4,
             children: [
-              TextButton.icon(
-                onPressed: _busy ? null : () => updateAfter(_createProfile()),
-                icon: const MobiIcon(Icons.add, size: 26),
-                label: const Text('Nuevo perfil'),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextButton.icon(
+                    onPressed: _busy
+                        ? null
+                        : () => updateAfter(_createProfile()),
+                    icon: const MobiIcon(Icons.add, size: 26),
+                    label: const Text('Nuevo perfil'),
+                  ),
+                  TextButton.icon(
+                    onPressed: _busy
+                        ? null
+                        : () => updateAfter(_importProfileFile()),
+                    icon: const MobiIcon(Icons.file_open_outlined, size: 26),
+                    label: const Text('Importar perfil'),
+                  ),
+                ],
               ),
+              if (chosen != null)
+                TextButton.icon(
+                  onPressed: _busy
+                      ? null
+                      : () => updateAfter(_exportProfileFile(chosen)),
+                  icon: const MobiIcon(Icons.save_alt_rounded, size: 24),
+                  label: const Text('Exportar'),
+                ),
               if (chosen != null)
                 TextButton(
                   onPressed: _busy
@@ -1040,6 +1070,12 @@ class _GameLibraryPageState extends State<GameLibraryPage>
             ],
           ),
         ],
+        if (_selectedPackage == null)
+          TextButton.icon(
+            onPressed: _busy ? null : () => updateAfter(_importProfileFile()),
+            icon: const MobiIcon(Icons.file_open_outlined, size: 26),
+            label: const Text('Importar perfil'),
+          ),
       ],
     );
   }
@@ -1067,7 +1103,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         _bindingLine(
           Icons.mouse_outlined,
           'Cámara',
-          '${profile.cameraModeLabel} · ${profile.cameraRateLabel}\n'
+          '${profile.cameraRateLabel}\n'
               'X ${profile.sensitivityX.toStringAsFixed(2)} · Y ${profile.sensitivityY.toStringAsFixed(2)}',
         ),
         _bindingLine(

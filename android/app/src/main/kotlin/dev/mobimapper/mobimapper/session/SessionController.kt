@@ -95,6 +95,8 @@ object SessionController {
     private val precisionAimFilter=PrecisionAimFilter()
     @Volatile private var cameraPacer:CameraMotionPacer?=null
     private var cameraPacerWakeup:Runnable?=null
+    private var ggCameraWakeup:Runnable?=null
+    private var ggCameraWakeupAtMillis=Long.MAX_VALUE
     private var nativeRatePacing=false
     @Volatile private var cameraResetBatchSupported=false
     @Volatile private var cameraResetBatches=0L
@@ -176,7 +178,8 @@ object SessionController {
                     cadence?.input("mouse",code,x!=0f,cadenceCanStart)
                 }
                 3 -> if (camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled()) {
-                    if(nativeRatePacing && (runtimeProfile?.bindings?.continuousCamera==false || cameraResetBatchSupported)) {
+                    if(nativeRatePacing && (runtimeProfile?.bindings?.ggCameraPolicy!=null ||
+                        runtimeProfile?.bindings?.continuousCamera==false || cameraResetBatchSupported)) {
                         if(!beginBoundedMoveDrain() || engine?.relativeMouse(precisionMouseX(x),y)!=true) {
                             if(active) pause("No se pudo integrar el movimiento de cámara")
                         }
@@ -185,23 +188,20 @@ object SessionController {
                 }
                 8 -> if(camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled()) {
                     val batch=queue.consumingMotionBatch ?: return@InputQueue
-                    if(runtimeProfile?.bindings?.continuousCamera==true && !cameraResetBatchSupported) {
+                    if(runtimeProfile?.bindings?.ggCameraPolicy==null &&
+                        runtimeProfile?.bindings?.continuousCamera==true && !cameraResetBatchSupported) {
                         val sumX=batch.filteredXSum { dx,time -> precisionAimFilter.filterX(dx,time) }
                         if(cameraPacer?.offer(sumX,batch.ySum(),enqueued,batch.timesNanos.last())==false && active)
                             pause("No se pudo enviar el movimiento de cámara")
                     } else {
-                        // Bounded camera/fire drag must integrate and clamp each raw
-                        // sample. Only redundant MOVE delivery is deferred; boundaries
-                        // flush before their original UP/DOWN sequence.
+                        // Both nonlinear compensation and precision aim consume original
+                        // samples. Only delivery coalesces; contact edges always flush.
                         val sink=composer ?: return@InputQueue
                         val currentEngine=engine ?: return@InputQueue
                         if(!beginBoundedMoveDrain()) { if(active) pause("No se pudo preparar el movimiento de cámara");return@InputQueue }
-                        var completed=true
-                        for(index in batch.timesNanos.indices) {
-                            if(!active || !targetConfirmed || run!=generation) { completed=false;break }
-                            if(batch.xs[index]==0f && batch.ys[index]==0f) continue
-                            val filtered=precisionAimFilter.filterX(batch.xs[index],batch.timesNanos[index])
-                            if(!currentEngine.relativeMouse(filtered,batch.ys[index])) { completed=false;break }
+                        val completed=batch.deliverMotion { dx,dy,time ->
+                            active && targetConfirmed && run==generation &&
+                                currentEngine.relativeMouse(precisionAimFilter.filterX(dx,time),dy)
                         }
                         if(!completed) {
                             inputDrainMoveComposer=null;sink.discardMoveBatch()
@@ -245,7 +245,8 @@ object SessionController {
             }
         }
     }, { pause("Cola saturada; transiciones detenidas") }, beforeDrain={
-        inputDrainPacer=if(active && targetConfirmed && runtimeProfile?.bindings?.continuousCamera==true && !cameraResetBatchSupported) cameraPacer else null
+        inputDrainPacer=if(active && targetConfirmed && runtimeProfile?.bindings?.continuousCamera==true &&
+            runtimeProfile?.bindings?.ggCameraPolicy==null && !cameraResetBatchSupported) cameraPacer else null
         inputDrainGeneration=generation
         inputDrainPacer?.beginInputBatch()
     }, afterDrain={
@@ -257,12 +258,43 @@ object SessionController {
             else if(!pacer.endInputBatch() && active) pause("No se pudo enviar el movimiento de cámara pendiente")
         }
         requestCameraIdleRetirement()
+        requestGgCameraWakeup()
     })
 
     /** One bounded wakeup per moving burst; defer while application input is queued. */
     private fun usesIdleCameraRetirement():Boolean=runtimeProfile?.bindings?.let {
-        it.continuousCamera || it.retireBoundedCameraOnIdle
+        it.ggCameraPolicy==null && (it.continuousCamera || it.retireBoundedCameraOnIdle)
     }==true
+
+    private fun requestGgCameraWakeup() {
+        if(!active || !targetConfirmed || !camera || pointerTransitionPending) return
+        val currentEngine=engine ?: return
+        val delay=currentEngine.ggCameraWakeupDelayMillis ?: return
+        val due=SystemClock.uptimeMillis()+delay
+        if(ggCameraWakeup!=null && ggCameraWakeupAtMillis<=due) return
+        ggCameraWakeup?.let { worker.removeCallbacks(it) }
+        val run=generation
+        val task=object:Runnable {
+            override fun run() {
+                if(ggCameraWakeup!==this) return
+                ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
+                if(run!=generation || engine!==currentEngine || !active || !targetConfirmed || !camera ||
+                    pointerTransitionPending) return
+                if(!currentEngine.dispatchGgCameraTimers()) {
+                    if(active) pause("No se pudo renovar el contacto de cámara")
+                    return
+                }
+                publishEngineState()
+                requestGgCameraWakeup()
+            }
+        }
+        ggCameraWakeup=task
+        ggCameraWakeupAtMillis=due
+        if(!worker.postDelayed(task,delay)) {
+            ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
+            pause("El hilo de cámara no está disponible")
+        }
+    }
     private fun requestCameraIdleRetirement() {
         if(cameraIdleWakeup!=null || !active || !targetConfirmed || !camera || pointerTransitionPending ||
             !nativeRatePacing || !usesIdleCameraRetirement()) return
@@ -388,6 +420,8 @@ object SessionController {
     }
     private fun precisionMouseX(dx:Float):Float=precisionAimFilter.filterX(dx,queue.consumingSampleTimeNanos)
     private fun discardPacedMotion() {
+        ggCameraWakeup?.let { worker.removeCallbacks(it) }
+        ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
         cameraIdleWakeup?.let { worker.removeCallbacks(it) }
         cameraIdleWakeup=null;cameraIdlePolicy.reset()
         precisionAimFilter.reset()
@@ -596,7 +630,8 @@ object SessionController {
             if(mergeGeometry!=null) queue.configureCameraMerge(
                 mergeGeometry.cameraRadiusX.toDouble()/mergeGeometry.sensitivityX,
                 mergeGeometry.cameraRadiusY.toDouble()/mergeGeometry.sensitivityY,
-                preserveSamples=runtimeProfile?.profile?.camera?.precisionAim==true || cameraResetBatchSupported)
+                preserveSamples=runtimeProfile?.profile?.camera?.precisionAim==true || cameraResetBatchSupported ||
+                    runtimeProfile?.bindings?.ggCameraPolicy!=null)
             else queue.disableCameraMerge()
             if (run != generation) { releaseOnWorker(); return false }
             composer = TouchComposer(SystemClock::uptimeMillis, { frame ->
@@ -663,7 +698,7 @@ object SessionController {
             val prepared=runtimeProfile
             precisionAimFilter.configure(prepared?.let { it.profile.camera.precisionAim &&
                 it.bindings.handlesButton(MappingEngine.LEFT_BUTTON) }==true)
-            engine = if(prepared!=null) MappingEngine(composer!!,prepared.geometry,prepared.bindings).apply { if(startInCursor) enterCursorMode() else setCameraEnabled(true) }
+            engine = if(prepared!=null) MappingEngine(composer!!,prepared.geometry,prepared.bindings,SystemClock::uptimeMillis).apply { if(startInCursor) enterCursorMode() else setCameraEnabled(true) }
             else MappingEngine(composer!!, MappingGeometry(width.toFloat(), height.toFloat(),
                 joystickX=width*.23f, joystickY=height*.70f, joystickRadius=minOf(width*.12f,height*.24f),
                 actionX=width*.82f, actionY=height*.82f)).apply { setCameraEnabled(true) }
@@ -691,6 +726,7 @@ object SessionController {
                                 cadenceLastDeltaAtMs=submitted
                             }
                             publishEngineState()
+                            requestGgCameraWakeup()
                             accepted && active && run==generation
                         }
                     },canContinue={ run==generation && active && targetConfirmed && camera &&
@@ -743,6 +779,7 @@ object SessionController {
                     if(engine?.relativeMouse(dx,dy)==true) cameraIdlePolicy.motionDelivered(SystemClock.elapsedRealtimeNanos())
                     publishEngineState()
                     requestCameraIdleRetirement()
+                    requestGgCameraWakeup()
                     active && run==generation && composer?.paused!=true && engine?.lastOperationSucceeded!=false
                 }
             },{ delayNanos ->
@@ -753,8 +790,11 @@ object SessionController {
             nativeRatePacing=nativeRateSupported
             val requestedRate=prepared?.profile?.camera?.updateRateHz ?: 0
             cameraIdlePolicy.configureRate(requestedRate)
-            check(nativeRateSupported || requestedRate !in setOf(100,500,1000)) {
+            check(nativeRateSupported || requestedRate !in setOf(100,1000)) {
                 "Actualiza el motor para limitar la captura nativa"
+            }
+            check(nativeRateSupported || requestedRate==0 || prepared?.bindings?.ggCameraPolicy==null) {
+                "Actualiza el motor para limitar la captura sin alterar la compensación de cámara"
             }
             sessionPacer.configure(if(nativeRateSupported) 0 else requestedRate)
             cameraPacer=sessionPacer;cameraPacerWakeup=wakeup
@@ -1031,7 +1071,7 @@ object SessionController {
         display.getRealSize(size)
         val profile=GameProfile.create(TARGET,"Acciones InputLab",size.x,size.y,display.rotation).let {
             it.copy(calibration=it.calibration.copy(confirmed=true),
-                camera=it.camera.copy(enabled=true,mode=CameraSpec.CONTINUOUS,suspendKey=0,updateRateHz=0,precisionAim=false),
+                camera=it.camera.copy(enabled=true,mode=CameraSpec.SMOOTH,suspendKey=0,updateRateHz=0,precisionAim=false),
                 action=ActionSpec(.87f,.80f,code=62),shortcuts=SessionShortcuts(138,139,0),
                 additionalActions=listOf(
                     ActionSpec(.50f,.50f,code=30,behavior=ActionSpec.REPEAT,repeatIntervalMs=100),
@@ -1116,7 +1156,6 @@ object SessionController {
         val capture=environment
         check(capture.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
         val saved=requireNotNull(ProfileStore(context).selected()) { "Selecciona un perfil primero" }
-        require(!holdContinuous || saved.camera.mode=="continuous") { "Selecciona cámara continua para probar su recuperación" }
         useLaboratory()
         capture.refreshContext()
         val bounds=requireNotNull(capture.boundsForPackage(TARGET)) { "Receptor sin ventana verificada" }
@@ -1132,7 +1171,10 @@ object SessionController {
             shortcuts=SessionShortcuts(138,139,0))
         val precisionMarkerKey=mirrored.actions.firstOrNull { it.triggerKind=="key" }?.code
         require(!precision || precisionMarkerKey!=null) { "El perfil de prueba necesita una acción de teclado" }
-        armProfile(ProfileCompiler.prepare(mirrored,size.x,size.y,display.rotation))
+        val probe=ProfileCompiler.prepare(mirrored,size.x,size.y,display.rotation)
+        // Existing recovery scripts probe the exterior-coordinate capability directly;
+        // this laboratory override is never offered as a game-camera setting.
+        armProfile(if(holdContinuous) probe.copy(bindings=probe.bindings.copy(ggCameraPolicy=null)) else probe)
         activeProfileId=null
         if(!automated && !holdContinuous) return
         val run=generation;val deadline=SystemClock.uptimeMillis()+5000
@@ -1285,6 +1327,7 @@ object SessionController {
             "liveWorkerCancelAdmitted" to backend?.getBoolean("liveWorkerCancelAdmitted"),
             "terminalReconciled" to backend?.getBoolean("terminalReconciled"),
             "rejectedMoveReconciled" to backend?.getBoolean("rejectedMoveReconciled"),
+            "rejectedDownReconciled" to backend?.getBoolean("rejectedDownReconciled"),
             "focusLossReconciled" to backend?.getBoolean("focusLossReconciled"),
             "sessionRecoverySupported" to backend?.getBoolean("sessionRecoverySupported",false),
             "detectedUptime" to backend?.getLong("detectedUptime"), "recoveredUptime" to backend?.getLong("recoveredUptime"),
@@ -1296,6 +1339,7 @@ object SessionController {
             "backendProtocol" to backend?.getInt("protocol"), "controllerBinderAlive" to backend?.getBoolean("controllerBinderAlive"), "workerAlive" to backend?.getBoolean("workerAlive"),
             "backendCoordinatePolicy" to backend?.getString("coordinatePolicy"),"continuousCameraSupported" to backend?.getBoolean("continuousCameraSupported"),
             "systemPointerHidden" to backend?.getBoolean("systemPointerHidden"), "systemPointerError" to backend?.getString("systemPointerError"),
+            "trustedCursorVisible" to backend?.getBoolean("trustedCursorVisible"),"trustedCursorError" to backend?.getString("trustedCursorError"),
             "recoveryIds" to backend?.getIntArray("recoveryIds")?.toList(), "recoveryDownTime" to backend?.getLong("recoveryDownTime"), "recoveryEventTime" to backend?.getLong("recoveryEventTime"),
             "releaseUnverified" to (releaseUnverified || backend?.getBoolean("releaseUnverified") == true || backend?.getBoolean("keyReleaseUnverified")==true),
             "keyReleaseUnverified" to (backend?.getBoolean("keyReleaseUnverified")==true),
@@ -1328,6 +1372,7 @@ object SessionController {
             },"cameraOverlap" to runtimeProfile?.bindings?.overlapCameraHandoff,
             "cameraDistinctIds" to runtimeProfile?.bindings?.distinctCameraContacts,
             "cameraMode" to runtimeProfile?.profile?.camera?.mode,"continuousCameraSession" to originalContinuousCamera,
+            "ggCameraKind" to runtimeProfile?.bindings?.ggCameraPolicy?.let { if(it.freeFire) "freeFireStandard" else "mainView" },
             "cameraRate" to cameraPacer?.diagnostics(),"cameraDeliveryWaitMs" to percentiles(cameraDeliveryWait,cameraDeliveryCount),
             "precisionAim" to precisionAimFilter.snapshot(),
             "actionRuntime" to actionState,

@@ -93,7 +93,7 @@ object ProfileCodec {
                 .putValue("sensitivityX", camera.sensitivityX).putValue("sensitivityY", camera.sensitivityY).putValue("mode", camera.mode)
                 .putValue("updateRateHz",camera.updateRateHz).putValue("markerSizeDp",camera.markerSizeDp)
                 .putValue("precisionAim",camera.precisionAim).putValue("suspendKey",camera.suspendKey).putValue("enabled",camera.enabled)
-                .putValue("suspendMouseButton",camera.suspendMouseButton))
+                .putValue("suspendMouseButton",camera.suspendMouseButton).putValue("customRegion",camera.customRegion))
             .putValue("action", actionToJson(action))
             .putValue("additionalActions", JSONArray().apply { profile.additionalActions.forEach { a -> put(actionToJson(a)) } })
             .putValue("macros", JSONArray().apply { profile.macros.forEach { macro -> put(macroToJson(macro)) } })
@@ -132,7 +132,8 @@ object ProfileCodec {
                 if(schema>=5) bool(camera,"precisionAim") else false,
                 if(schema>=6) int(camera,"suspendKey") else 0,
                 if(schema>=7) bool(camera,"enabled") else true,
-                if(schema>=6 && camera.has("suspendMouseButton")) int(camera,"suspendMouseButton") else 0),
+                if(schema>=6 && camera.has("suspendMouseButton")) int(camera,"suspendMouseButton") else 0,
+                if(schema>=9 && camera.has("customRegion")) bool(camera,"customRegion") else false),
             actionFromJson(action,schema),
             SessionShortcuts(int(shortcuts, "cameraToggle"), int(shortcuts, "stop"), int(shortcuts, "edit")), additional, macros,
             if(schema>=8) int(root,"switchKey") else 0)

@@ -1,6 +1,7 @@
 package dev.mobimapper.mobimapper.editor
 
 import android.graphics.Rect
+import android.graphics.PointF
 
 /** Detached window geometry supplied by the application host, never accessibility nodes. */
 data class EditorWindowBounds(
@@ -17,4 +18,6 @@ interface EditorPresentationHost {
     fun begin(packageName: String, displayId: Int): Boolean
     fun end(reason: String)
     fun windows(displayId: Int): List<EditorWindowBounds>
+    fun cursorPosition():PointF?=null
+    fun cursorSizeDp():Float=20f
 }

@@ -192,6 +192,27 @@ object GameCoordinator {
     }
     fun profiles()=store().list().map { wire(ProfileCodec.toJson(it)) }
     fun selected():Any?=store().selected()?.let { wire(ProfileCodec.toJson(it)) }
+    fun exportProfileFile(id:String):Pair<String,String> {
+        val profile=requireNotNull(store().get(id)) { "Perfil no encontrado" }
+        val safeName=profile.name.replace(Regex("[^\\p{L}\\p{N} ._-]"),"_").take(80).ifBlank { "UwU Mouse" }
+        return "$safeName.uwumouse.json" to ProfileCodec.encodeDocument(ProfileDocument(listOf(profile),profile.id))
+    }
+    /** User-selected JSON uses the same transactional importer, without requiring activation. */
+    fun importUserProfileFile(document:ProfileDocument):Int {
+        requireProfileChangeAllowed()
+        check(SessionPolicy.mayInstallConfiguration(SessionController.mode,SessionController.contacts,SessionController.releaseUnverified)) { "Espera a que se liberen los controles" }
+        val result=store().importDocument(document,true)
+        clearTools();currentId=result.selectedProfileId;refreshProfileLibrary()
+        return result.importedProfiles.size
+    }
+    fun openProfileFilePicker(exportId:String?=null) {
+        bubble?.closeMenu()
+        SessionController.pause("Archivo de perfil")
+        val displayId=presentationDisplayId.takeIf { it>=0 } ?: 0
+        val intent=Intent(app,dev.mobimapper.mobimapper.ProfileFileActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("exportId",exportId)
+        app.startActivity(intent,ActivityOptions.makeBasic().apply { launchDisplayId=displayId }.toBundle())
+    }
     fun selectedForDisplay(displayId:Int):Any? {
         val selected=store().selected() ?: return null
         val matching=if(selected.calibration.displayScope==displayScope(displayId)) selected
@@ -220,9 +241,9 @@ object GameCoordinator {
             "selectedProfileId" to result.selectedProfileId,
             "imported" to result.importedProfiles.map { mapOf("id" to it.id,"name" to it.name) })
     }
-    /** Explicit control-plane change only; the next arm compiles the persisted mode. */
+    /** Compatibility diagnostic: the only selectable camera policy is Smooth. */
     fun setSelectedCameraMode(mode:String):Any? {
-        require(CameraSpec.isSupportedMode(mode)) { "Modo de cámara no válido" }
+        require(mode==CameraSpec.SMOOTH) { "La cámara utiliza Región suave" }
         requireProfileChangeAllowed()
         check(SessionPolicy.mayInstallConfiguration(SessionController.mode,SessionController.contacts,SessionController.releaseUnverified)) {
             "Detén el mapeo y espera la liberación antes de cambiar el modo de cámara"
@@ -334,7 +355,7 @@ object GameCoordinator {
         }
     }
     fun editCurrent() { (SessionController.activeProfileId ?: currentId ?: store().selected()?.id)?.let { openEditor(it) } }
-    fun startProfile(id:String,cursor:Boolean=false,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
+    fun startProfile(id:String,cursor:Boolean=true,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Recupera la secuencia anterior antes de iniciar" }
         OverlayWindows.requirePermission(app,displayId)
         val p=matchingProfile(id,displayId)
@@ -538,7 +559,8 @@ object GameCoordinator {
                 if(toolsRequested && SessionController.targetConfirmed && canResume) runCatching { startProfile(id,true) }.onFailure { message(it.message ?: "No se pudo abrir el cursor") }
             },onVisualSettingsChanged={refreshControls()},profileItems=bubbleProfiles(),
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
-            onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)})
+            onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)},
+            onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()})
     }
     fun openControlsMenu() {
         if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed) return

@@ -215,11 +215,11 @@ class CameraMotionPacerTest {
         val h=Harness(90)
         assertTrue(h.offer())
         h.now=1_000_000L; assertTrue(h.offer())
-        try { h.pacer.configure(125); fail("Unsupported rate accepted") }
+        try { h.pacer.configure(123); fail("Unsupported rate accepted") }
         catch(_:IllegalArgumentException) { }
         assertTrue(h.pacer.pending)
         assertEquals(90,h.pacer.diagnostics()["rateHz"])
-        for(hz in listOf(0,60,90,120,144,240)) {
+        for(hz in listOf(0,60,90,120,125,144,240,250,500)) {
             h.wakeups.clear() // The owner removes/invalidates callbacks on configure.
             h.pacer.configure(hz)
             assertFalse(h.pacer.pending)

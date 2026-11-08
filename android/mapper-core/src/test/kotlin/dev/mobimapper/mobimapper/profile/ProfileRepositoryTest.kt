@@ -9,7 +9,7 @@ import org.junit.Test
 
 class ProfileRepositoryTest {
     @Test fun captureRatesRoundTripWithoutRewritingLegacyOrNewSavedValuesOnRead() {
-        for(rate in listOf(0,60,90,100,120,144,240,500,1000)) {
+        for(rate in listOf(0,60,90,100,120,125,144,240,250,500,1000)) {
             val original=profile().let { it.copy(camera=it.camera.copy(updateRateHz=rate)) }
             val storage=Storage()
             ProfileRepository(storage).save(original)
@@ -28,7 +28,7 @@ class ProfileRepositoryTest {
             3 to CameraSpec.BOUNDED,3 to CameraSpec.CONTINUOUS)) {
             val p=profile().let { it.copy(
                 calibration=it.calibration.copy(area=GameArea(75f,0f,2400f,1080f),confirmed=true),
-                camera=it.camera.copy(mode=mode,sensitivityX=.75f,sensitivityY=1.25f),
+                camera=it.camera.copy(mode=mode,sensitivityX=.75f,sensitivityY=1.25f,updateRateHz=0),
                 shortcuts=SessionShortcuts(135,0,0),
                 additionalActions=if(version==1) emptyList() else listOf(ActionSpec(.8f,.6f,"mouse",1))) }
             val row=legacyRow(p,version)
@@ -61,7 +61,7 @@ class ProfileRepositoryTest {
         val storage=Storage(); val store=ProfileRepository(storage); store.save(p)
         assertEquals(p,ProfileRepository(storage).selected())
         val bytes=storage.document
-        rejects { store.save(p.copy(additionalActions=p.additionalActions + p.additionalActions.first())) }
+        rejects { store.save(p.copy(additionalActions=p.additionalActions + p.additionalActions.first().copy(behavior=ActionSpec.REPEAT))) }
         assertEquals(bytes,storage.document)
         assertEquals(p,store.selected())
     }
@@ -414,7 +414,7 @@ class ProfileRepositoryTest {
 
     @Test fun legacyPayloadMetadataCannotOptIntoAnUnversionedRateOrMarkerSize() {
         for(version in listOf(1,2,3)) {
-            val wire=legacyRow(profile(),version).apply {
+            val wire=legacyRow(profile().let { it.copy(camera=it.camera.copy(mode=CameraSpec.CONTINUOUS)) },version).apply {
                 getJSONObject("camera").put("updateRateHz",240).put("markerSizeDp",100f)
                 getJSONObject("action").put("markerSizeDp",100f)
             }

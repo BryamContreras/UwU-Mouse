@@ -28,7 +28,7 @@ class LegacyCameraDraftTest {
         assertSame(decoded, draft.cancel())
         assertEquals(encoded, ProfileCodec.encode(decoded))
         assertEquals(original, decoded)
-        assertFalse(ProfileCompiler.prepare(decoded, 1000, 600, 0).bindings.continuousCamera)
+        assertNotNull(ProfileCompiler.prepare(decoded, 1000, 600, 0).bindings.ggCameraPolicy)
     }
 
     @Test fun savingLegacyDraftChangesOnlyModeAndPreservesBothSuspendKindsRatesAndCadence() {
@@ -39,16 +39,16 @@ class LegacyCameraDraftTest {
             val saved = draft.save()
             assertEquals(original.copy(camera = camera.copy(mode = CameraSpec.SMOOTH)), saved)
             assertEquals(saved, ProfileCodec.decode(ProfileCodec.encode(saved)))
-            assertTrue(ProfileCompiler.prepare(saved, 1000, 600, 0).bindings.retireBoundedCameraOnIdle)
+            assertNotNull(ProfileCompiler.prepare(saved, 1000, 600, 0).bindings.ggCameraPolicy)
             assertSame(original, draft.cancel())
         }
     }
 
-    @Test fun openingCurrentModesRetainsTheirSelectionIncludingDisabledCamera() {
+    @Test fun disabledLegacyCameraAlsoSavesAsSmoothWithoutEnablingIt() {
         val base = profile()
         for (mode in listOf(CameraSpec.SMOOTH, CameraSpec.CONTINUOUS)) {
             val original = base.copy(camera = base.camera.copy(mode = mode, enabled = false))
-            assertEquals(original, EditorDraft(original, 1000, 600, 0).save())
+            assertEquals(original.copy(camera=original.camera.copy(mode=CameraSpec.SMOOTH)), EditorDraft(original, 1000, 600, 0).save())
         }
     }
 }

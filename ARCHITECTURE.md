@@ -241,17 +241,107 @@ candidato de cancelación. CANCEL, pérdida de contexto o cambio de generación
 descartan movimiento pendiente y no lo reproducen después. Los snapshots y
 frames publicados siguen separados del almacenamiento mutable privado.
 
-La mira precisa sólo actúa sobre X durante el disparo físico M1 reconocido. La
-amortiguación máxima pasa de 0,45 a 0,50 y la estimación de velocidad de 12 a
-14 ms; esa constante matemática no añade una espera. Y no cambia y los flicks
-de magnitud igual o mayor a ocho unidades relativas pasan exactamente. Se
-reutiliza el coeficiente exponencial exacto para intervalos repetidos.
+La mira precisa sólo actúa sobre X durante el disparo físico M1 reconocido.
+Clasifica velocidad de las muestras originales en unidades relativas/segundo:
+hasta 250 conserva una ganancia de 0,60 durante todo el movimiento fino y desde
+1000 deja pasar la muestra exactamente. La transición intermedia es continua;
+la estimación de velocidad usa 14 ms y no almacena desplazamiento ni añade una
+espera. Al bajar de velocidad responde inmediatamente. Se conserva el timestamp
+después de un flick para evitar alternar el intervalo nominal y el real en un
+mouse rápido. Y no cambia. Los umbrales describen unidades de entrada, no una
+distancia física calibrada para cualquier DPI. Se reutiliza el coeficiente
+exponencial exacto para intervalos repetidos.
 
 Las explicaciones de los ajustes se publican desde un `?` en su misma fila. La
 ayuda se representa dentro de la superposición existente, con hover del cursor
 propio en menús y hover normal en el editor, además de pulsación táctil. No crea
 otra ventana para cada tooltip. El alcance de las mediciones y las comprobaciones
 está en Frecuencia y rendimiento (informe local no distribuido).
+
+## Cámara: Región suave y comportamiento de GG Mouse
+
+`smooth` es la única política de cámara para perfiles de juego; no hay selector.
+Deriva del control principal visible en el Java de GG Mouse Pro 3.3.2, con ajustes
+para conservar fracciones y reducir la dependencia de la agrupación de entradas.
+Los perfiles nuevos usan sensibilidad X/Y de **0,70** y captura a **250 Hz**.
+Los tags antiguos `bounded` y `continuous` siguen siendo legibles en documentos,
+pero el compilador siempre prepara `smooth`; editar y guardar lo persiste, y
+Cancelar conserva el documento original. El schema 9 admite el booleano
+opcional `camera.customRegion`, con `false` cuando falta. Las opciones de captura
+incorporan 125 y 250 Hz y mantienen la compatibilidad con las frecuencias previas.
+
+La política depende del paquete del juego:
+
+- En juegos ordinarios, el área predeterminada es el área calibrada con un margen
+  de 50 píxeles. `customRegion=true` usa el rectángulo de cámara configurado. El
+  contacto arranca desde el ancla configurada, sin variación aleatoria. La
+  primera muestra inicia el contacto; su delta no mueve la cámara. Salir del área
+  retira el dedo y descarta la muestra que cruza el borde; el reinicio espera al
+  menos 15 ms. La renovación por quietud utiliza 700 ms sin movimiento, con
+  comprobaciones cada 350 ms. Se conservan estas pérdidas de muestras de GG.
+- En paquetes que contienen `com.dts.freefire` o `com.garena.game.ffi`, se utiliza
+  su política específica de Free Fire: contacto continuo, ancla fija y límites
+  finitos de coordenadas **±666 666**. No reinicia al
+  cruzar el área ni durante quietud. El desplazamiento horizontal se multiplica
+  por `2 * (.98 / (5.6 * r * r + 1) + .02)` antes de aplicar la sensibilidad X,
+  donde `r = abs(cameraXConfigurada - contactoXActual) / max(anchoÁreaJuego, altoÁreaJuego)`.
+  El eje Y conserva su ganancia lineal. La región personalizada no interviene en
+  esta política. Se utiliza la curva visible sin estado premium; no se selecciona
+  la variante premium sin disponer de ese estado.
+
+La sensibilidad X/Y sigue siendo independiente. `precisionAim` se aplica mientras
+el M1 físico reconocido está mantenido, antes de compensación y sensibilidad.
+El filtro y la curva consumen las muestras originales y sus tiempos; sólo la
+entrega de MOVE se agrupa, con barreras en botones, teclas y bordes de contacto.
+Las coordenadas internas se acumulan en `Double` y se convierten a `Float` para
+Android. Esto conserva desplazamientos fraccionarios cuando crecen las coordenadas.
+El ancla fija evita variación entre gestos. Las pruebas comparan distintos tamaños
+de lote, movimientos pequeños a coordenadas grandes y ventanas iguales sobre
+displays diferentes. No acreditan los mismos cm/360 entre resoluciones o DPI.
+Los controles y las liberaciones conservan destino, propiedad y recuperación del
+inyector de UwU; el lector nativo y el backend siguen siendo propios.
+
+Estas mejoras están en el núcleo compartido, sin condiciones de fabricante o
+DeX. Las regresiones comparan teléfono y display externo a 1080×2400, 1920×1080
+y 2560×1440: mismos deltas y tiempos, misma compensación y estado del filtro.
+No sustituyen la comprobación física de cada dispositivo. `Suspender` usa la
+transición temporal a cursor; al entrar se liberan contactos y al regresar se
+inician cámara y filtro desde cero. Conserva sensibilidad y orientación del juego.
+Si el cursor ya era el modo base, mantener/soltar no fuerza otra transición.
+
+La primera integración GG pasó con **753 pruebas JVM registradas**, cero
+fallos, compilación del host y revisión de **129 clases** para ABI JSON. También
+pasaron **68 pruebas Flutter** y el análisis Flutter. El APK de desarrollo
+`62715C…`, de **72 113 153 bytes**, se instaló como **UwU Mouse Native Preview**
+en el SM-S908U. La firma local difiere de la app original, por lo que la
+instalación es paralela. Se importó el perfil seleccionado y se eligió `smooth`,
+conservando X 0,50, Y 1,80, 500 Hz y los controles. La comparación de documentos
+confirma que el perfil original permanece intacto; el motor nuevo responde como
+UID shell, con captura disponible, sesión detenida y cero contactos. Esto acredita
+instalación y configuración; la valoración física del juego está pendiente.
+
+El refinamiento posterior pasó **758 pruebas JVM registradas**, **68 Flutter**,
+análisis Flutter y la revisión JSON de **129 clases**, sin fallos. El APK
+`4E8B09…`, de **72 112 865 bytes**, actualizó Native Preview conservando exactamente
+el documento de perfiles existente antes de instalar. Su SHA-256 coincide con
+el `base.apk` del dispositivo. El perfil seleccionado conserva X 0,50, Y 1,00,
+100 Hz y `precisionAim=false`; el filtro vuelve a estar disponible y se aplica
+al activarlo en Disparo M1. La sesión quedó detenida, sin contactos pendientes,
+con backend UID 2000 y captura disponibles. La prueba física de este refinamiento
+sigue pendiente.
+
+El ajuste de precisión sostenida pasó **762 pruebas JVM registradas** y **68
+Flutter**, con análisis y guard JSON correctos. Las pruebas nuevas cubren la
+ganancia fina mantenida, velocidad equivalente a distintas cadencias, ausencia
+de alternancia temporal tras flicks, teléfono/display externo y el reinicio por
+Suspender. El APK `1E5492…` se instaló y su hash coincide con el del dispositivo.
+El documento de perfiles se conservó exactamente: el perfil seleccionado mantiene
+Mira precisa activada, X 0,55, Y 1,20, 100 Hz y Suspender en M5. El motor confirma
+la nueva ganancia fina de 0,60, con sesión detenida y cero contactos pendientes.
+La valoración física de este ajuste sigue pendiente.
+
+Los resultados de cámara anteriores que figuran en Validación y referencias son
+históricos; sus números de pruebas y aceptaciones no validan esta nueva política.
 
 ## Contexto de ventanas y presentación
 
@@ -511,16 +601,16 @@ el umbral del 70 % de la región para permitir un retiro en quietud; M1 mantenid
 impide ese retiro. No fuerza UP por cruzar la región mientras se mueve. Conserva
 los límites finitos de coordenadas y las comprobaciones de destino y recuperación.
 
-La integración persistente ofrece los valores `continuous`, `smooth` y `bounded`,
+La integración persistente anterior ofrecía los valores `continuous`, `smooth` y `bounded`,
 presentados como Continua y Región suave. `bounded` se conserva para leer perfiles
 antiguos; el editor lo convierte sólo en el borrador a `smooth`. Guardar aplica el
-modo elegido y Cancelar conserva el original. El compilador aplica
-a `smooth` cámara continua y renovación regional sólo en quietud. Se reutiliza
+modo elegido y Cancelar conserva el original. El compilador de esa etapa aplicaba
+a `smooth` cámara continua y renovación regional sólo en quietud. Se reutilizó
 el campo `camera.mode` del schema 9, sin migrar la selección guardada ni cambiar
-defaults. Editor y DTO Flutter conservan identidad y ajustes independientes;
-Región suave expone el tamaño del área. Esta integración aprobó
+defaults. Editor y DTO Flutter conservaron identidad y ajustes independientes;
+Región suave exponía el tamaño del área. Esta integración histórica aprobó
 705 pruebas JVM, 63 Flutter, análisis correcto y revisión de 122 clases de JSON.
-El APK `41F2F9…` está instalado y activo en DeX, display 2, con captura propia y
+El APK `41F2F9…` quedó instalado y activo en DeX, display 2, con captura propia y
 política `CONTINUOUS_CAMERA_9`. La instalación conservó los perfiles; después
 se cambió únicamente el modo del perfil seleccionado a `smooth`, manteniendo
 geometría, sensibilidades, 100 Hz y M5. Esta selección explícita no migra otros
@@ -600,3 +690,50 @@ Su rama experimental aporta una referencia conceptual de teclado evdev; el mouse
 estudiado aún usa captura de puntero de una View. La implementación de UwU Mouse
 es propia y no incorpora esos archivos. Se mantienen los controles de contexto,
 destino, reloj, propiedad y recuperación de este proyecto.
+
+## Cursor opaco, teclas compartidas y archivos de perfil
+
+El inicio desde la biblioteca usa el modo cursor. Su visual en juego pertenece
+al proceso shell: `TrustedCursorOverlay` crea una ventana pasiva, sin foco ni
+entrada, con alpha 1 y `PRIVATE_FLAG_TRUSTED_OVERLAY`. WindowManager exige el
+permiso del proceso; no se modifica ninguna política global de Android. Los
+tres RPC de presentación se añaden al final de `IInjector`, con autorización
+por UID y un token que impide que una instancia antigua oculte al cursor nuevo.
+La pérdida de captura retira la ventana. El analizador de contexto excluye sólo
+la ventana con UID shell, paquete, título, tipo, flags y ausencia de foco
+esperados. Una ventana ordinaria con el mismo título sigue bloqueando entrada.
+
+El editor usa eventos normales de Android, oculta el icono del sistema mediante
+`onResolvePointerIcon` y dibuja el mismo cursor opaco sobre sus controles. La
+posición inicial y el tamaño se reciben por el puerto de presentación. La
+burbuja y los paneles conservan sus zonas de arrastre sin los seis puntos.
+
+El validador admite varias acciones TAP asociadas a una tecla. El motor abre
+todos sus contactos en DOWN y los cierra en UP; los DOWN repetidos del teclado
+no generan otros contactos. Las direcciones, macros, comandos y botones de
+mouse conservan la validación de conflictos.
+
+`ProfileFileActivity` usa Storage Access Framework para crear o abrir JSON, con
+lectura acotada, UTF-8 estricto y el importador transaccional existente. Exporta
+un único perfil con calibración y selección; importar exige una sesión que
+permita cambiar configuración. El explorador concede acceso sólo al URI elegido.
+
+El rechazo explícito de un primer DOWN tiene una recuperación separada: exige
+la terminación confirmada de los workers anteriores, rechazo del CANCEL exacto
+por una generación nueva y viva, contexto original y una observación global del
+dispatcher sin contactos. Un ACK perdido, POINTER_DOWN, otro candidato o un
+formato de diagnóstico desconocido no habilitan este cierre. Se registra como
+reconciliación, nunca como CANCEL admitido ni entrega verificada al juego, y
+no reanuda entradas automáticamente.
+
+La validación de esta etapa aprobó **770 pruebas JVM**, **72 pruebas Flutter**,
+análisis Flutter y el guard de compatibilidad JSON sobre **129 clases**. En el
+dispositivo se verificaron el inicio en cursor libre, la ventana del cursor
+visible con alpha 1, el cursor propio del editor y la exportación real por SAF
+a Descargas. Una copia temporal con ID nuevo se importó desde el explorador y
+se eliminó después; los perfiles originales y su selección quedaron idénticos.
+El APK instalado coincide por SHA-256 con el compilado. La recuperación nueva
+de DOWN rechazado tiene regresiones automáticas; el bloqueo observado antes de
+instalarla se cerró mediante la ruta existente de recuperación de huérfanos,
+con comprobación independiente de ausencia de contactos. Esa recuperación no
+se presenta como una cancelación admitida por Android.

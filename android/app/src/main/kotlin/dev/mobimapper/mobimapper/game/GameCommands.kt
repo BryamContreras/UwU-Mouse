@@ -7,7 +7,7 @@ import dev.mobimapper.mobimapper.session.SessionController
 object GameCommands {
     fun startProfile(id: String, displayId: Int) {
         check(!LocalActivation.busy) { "Espera a que termine la activación" }
-        GameCoordinator.startProfile(id, displayId = displayId)
+        GameCoordinator.startProfile(id, cursor = true, displayId = displayId)
     }
 
     fun openEditor(id: String, displayId: Int) {

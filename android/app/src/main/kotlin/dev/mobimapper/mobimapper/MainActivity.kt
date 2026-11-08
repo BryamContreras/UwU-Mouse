@@ -23,6 +23,7 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    private var profileFileResult:MethodChannel.Result?=null
     companion object {
         var latest=java.lang.ref.WeakReference<MainActivity>(null)
         @Volatile var createdCount=0
@@ -74,6 +75,14 @@ class MainActivity : FlutterActivity() {
                     "selectProfile" -> result.success(GameCoordinator.select(requireNotNull(call.argument<String>("id"))))
                     "renameProfile" -> result.success(GameCoordinator.rename(requireNotNull(call.argument<String>("id")),requireNotNull(call.argument<String>("name"))))
                     "deleteProfile" -> { GameCoordinator.delete(requireNotNull(call.argument<String>("id"))); result.success(null) }
+                    "exportProfileFile", "importProfileFile" -> {
+                        check(profileFileResult==null) { "Termina la selección de archivo anterior" }
+                        profileFileResult=result
+                        val picker=Intent(this,ProfileFileActivity::class.java)
+                        if(call.method=="exportProfileFile") picker.putExtra("exportId",requireNotNull(call.argument<String>("id")))
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(picker,73)
+                    }
                     "openEditor" -> { GameCommands.openEditor(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
                     "startProfile" -> { GameCommands.startProfile(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
                     "pause" -> { GameCommands.pause(); result.success(null) }
@@ -106,12 +115,23 @@ class MainActivity : FlutterActivity() {
                 }
             } catch(e: ExternalOverlayPermissionRequiredException) {
                 result.error("EXTERNAL_OVERLAY_PERMISSION_REQUIRED",e.message,mapOf("displayId" to e.displayId))
-            } catch(e: Exception) { result.error("NATIVE_STATE", e.message, null) }
+            } catch(e: Exception) {
+                if(profileFileResult===result) profileFileResult=null
+                result.error("NATIVE_STATE", e.message, null)
+            }
         }
     }
     override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray) {
         super.onRequestPermissionsResult(requestCode,permissions,grantResults)
         if(requestCode==42) dev.mobimapper.mobimapper.activation.ActivationService.instance?.refresh()
+    }
+    @Deprecated("Android activity result bridge")
+    override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
+        super.onActivityResult(requestCode,resultCode,data)
+        if(requestCode!=73) return
+        val callback=profileFileResult;profileFileResult=null
+        val error=data?.getStringExtra("error")
+        if(error!=null) callback?.error("PROFILE_FILE",error,null) else callback?.success(resultCode==RESULT_OK)
     }
     private fun launchLab(displayId:Int=display?.displayId ?: 0) {
         val intent = packageManager.getLaunchIntentForPackage(SessionController.TARGET) ?: error("Instala el APK MobiMapper Input Lab")

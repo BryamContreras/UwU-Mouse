@@ -37,12 +37,11 @@ class PrecisionAimFilterTest {
             assertTrue(abs(output)<=abs(dx))
             outputMagnitude+=abs(output.toDouble())
         }
-        assertTrue(outputMagnitude<90.0)
-        assertTrue(outputMagnitude>60.0) // Modest damping instead of locking horizontal aim.
+        assertEquals(60.0,outputMagnitude,.0001)
         assertEquals(99L,filter.snapshot()["reversals"])
     }
 
-    @Test fun intentionalFineDriftConvergesInBothDirectionsWithoutADeadZone() {
+    @Test fun steadyFineIntentKeepsItsReducedGainInBothDirectionsWithoutADeadZone() {
         for(sign in listOf(1f,-1f)) {
             val filter=firing()
             var last=0f
@@ -53,8 +52,8 @@ class PrecisionAimFilterTest {
                 assertTrue(abs(last)<=1f)
                 total+=abs(last.toDouble())
             }
-            assertTrue(abs(last)>.99f)
-            assertTrue(total>30.0)
+            assertEquals(.6f,abs(last),.000001f)
+            assertEquals(19.2,total,.0001)
         }
     }
 
@@ -157,8 +156,7 @@ class PrecisionAimFilterTest {
         }
         val at125=traverse(8_000_000L)
         val at250=traverse(4_000_000L)
-        assertTrue(at125>38.0)
-        assertTrue(at250>38.0)
-        assertEquals(at125,at250,.5)
+        assertEquals(24.0,at125,.0001)
+        assertEquals(24.0,at250,.0001)
     }
 }

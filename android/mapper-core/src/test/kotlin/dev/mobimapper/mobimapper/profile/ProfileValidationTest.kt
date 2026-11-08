@@ -12,7 +12,7 @@ class ProfileValidationTest {
         assertEquals(24,ProfileCompiler.prepare(p.copy(additionalActions=extras),2400,1080,1).bindings.touches.size)
         rejects { ProfileCompiler.prepare(p.copy(additionalActions=extras+ActionSpec(.5f,.5f,"key",123)),2400,1080,1) }
         rejects { ProfileCompiler.prepare(p.copy(additionalActions=listOf(ActionSpec(.5f,.5f,"key",0))),2400,1080,1) }
-        rejects { ProfileCompiler.prepare(p.copy(additionalActions=listOf(p.action)),2400,1080,1) }
+        rejects { ProfileCompiler.prepare(p.copy(additionalActions=listOf(p.action.copy(behavior=ActionSpec.REPEAT))),2400,1080,1) }
     }
     private fun macro(id:String="macro-a",code:Int=35) = MacroSpec(id,"Macro",.5f,.5f,code=code,steps=listOf(MacroStep(.4f,.6f)))
     private fun profile(): GameProfile = GameProfile.create("com.dts.freefireth", "Entrenamiento", 2400, 1080, 1)
@@ -167,13 +167,15 @@ class ProfileValidationTest {
         rejects { ProfileCompiler.prepare(p.copy(action = p.action.copy(triggerKind = "mouse", code = 3)), 2400, 1080, 1) }
     }
 
-    @Test fun newProfilesDefaultContinuousButAnExplicitBoundedProfileKeepsItsCalibratedControls() {
-        assertEquals(CameraSpec.CONTINUOUS,confirmed().camera.mode)
-        assertEquals(CameraSpec.CONTINUOUS,GameProfile.create("com.example.othergame","Otro",2400,1080,1).camera.mode)
+    @Test fun newProfilesDefaultSmoothButAnExplicitBoundedProfileKeepsItsCalibratedControls() {
+        assertEquals(CameraSpec.SMOOTH,confirmed().camera.mode)
+        assertEquals(CameraSpec.SMOOTH,GameProfile.create("com.example.othergame","Otro",2400,1080,1).camera.mode)
         val original=confirmed().let { it.copy(camera=it.camera.copy(mode=CameraSpec.BOUNDED)) }
         assertEquals(CameraSpec.BOUNDED,original.camera.mode)
         val bounded=ProfileCompiler.prepare(original,2400,1080,1)
-        assertFalse(bounded.bindings.continuousCamera)
+        assertTrue(bounded.bindings.continuousCamera)
+        assertEquals(CameraSpec.SMOOTH,bounded.profile.camera.mode)
+        assertNotNull(bounded.bindings.ggCameraPolicy)
         val chosen=original.copy(camera=original.camera.copy(mode=CameraSpec.CONTINUOUS))
         val continuous=ProfileCompiler.prepare(chosen,2400,1080,1)
         assertTrue(continuous.bindings.continuousCamera)
@@ -197,7 +199,8 @@ class ProfileValidationTest {
     }
 
     @Test fun configuredCapacityNeverExpandsTheLiveTenContactStreamOrStealsCameraIdNine() {
-        val p=confirmed().copy(additionalActions=(100..122).map { ActionSpec(.5f,.6f,"key",it) })
+        val p=confirmed().let { it.copy(camera=it.camera.copy(mode=CameraSpec.CONTINUOUS),
+            additionalActions=(100..122).map { ActionSpec(.5f,.6f,"key",it) }) }
         val prepared=ProfileCompiler.prepare(p,2400,1080,1)
         var delivered=0
         val composer=TouchComposer({100L},{ delivered++;true },continuousCamera=true)
@@ -223,11 +226,11 @@ class ProfileValidationTest {
 
     @Test fun cameraRateAndVisualMarkerValidationAreIndependentOfTouchGeometry() {
         val original=confirmed()
-        assertEquals(0,original.camera.updateRateHz)
+        assertEquals(250,original.camera.updateRateHz)
         assertEquals(52f,original.camera.markerSizeDp,0f)
         assertEquals(52f,original.action.markerSizeDp,0f)
         val geometry=ProfileCompiler.prepare(original,2400,1080,1).geometry
-        for(rate in listOf(0,60,90,100,120,144,240,500,1000)) {
+        for(rate in listOf(0,60,90,100,120,125,144,240,250,500,1000)) {
             val changed=original.copy(camera=original.camera.copy(updateRateHz=rate,markerSizeDp=120f),
                 action=original.action.copy(markerSizeDp=24f))
             val prepared=ProfileCompiler.prepare(changed,2400,1080,1)
