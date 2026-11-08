@@ -6,6 +6,8 @@ import org.junit.Test
 
 class DispatcherTouchStateParserTest {
     private val empty = "  TouchStates: <no displays touched>"
+    private val modernTouchEmpty = "  TouchStatesByDisplay: <no displays touched>"
+    private val modernCursorEmpty = "  CursorStatesByDisplay: <no displays touched by cursor>"
     private val header = "  TouchStatesByDisplay:"
     private val mouseDisplay = "    0 :     deviceId=41, source=MOUSE"
     private val noWindows = "    2 :     deviceId=38, source=TOUCHSCREEN | MOUSE\n      Windows: <none>"
@@ -25,6 +27,37 @@ class DispatcherTouchStateParserTest {
             "Input Dispatcher State:\n  DispatchEnabled: true\n$empty\n  FocusedDisplayId: 0\n",
         ))
         assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched("$empty\r\n"))
+    }
+
+    @Test fun android16And17RequireBothAuditedEmptyTouchAndCursorMaps() {
+        // InputDispatcher::DispatcherTouchState::dump() uses the same empty markers in
+        // android16-release and android17-release, independent of device/OEM identity.
+        val dump = "Input Dispatcher State:\n$modernTouchEmpty\n$modernCursorEmpty\n  Display: 17\n"
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("\n", "\r\n")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$modernTouchEmpty\n"))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$modernCursorEmpty\n"))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$modernCursorEmpty\n$modernTouchEmpty\n"))
+    }
+
+    @Test fun modernEmptyTouchMapNeverHidesAnActiveOrUnknownCursorStream() {
+        val activeCursor = "  CursorStatesByDisplay:\n    LogicalDisplayId 17:\n" +
+            "      TouchedWindows:\n        0: name='game', mDeviceStates=pointerIds=1\n"
+        for (tail in listOf(activeCursor, "  CursorStatesByDisplay: <unknown>\n",
+            "  cursorstatesbydisplay: <no displays touched by cursor>\n",
+            "  Display: 17\n$modernCursorEmpty\n", "$modernCursorEmpty extra\n")) {
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$modernTouchEmpty\n$tail"))
+        }
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(
+            "  TouchStatesByDisplay:\n    LogicalDisplayId 17:\n      TouchedWindows: active\n$modernCursorEmpty\n"))
+    }
+
+    @Test fun duplicateAndMixedLegacyModernStateSectionsRemainAmbiguous() {
+        val modern = "$modernTouchEmpty\n$modernCursorEmpty\n"
+        for (dump in listOf(modern + modernTouchEmpty, modern + modernCursorEmpty,
+            modern + empty, modern + header, "$empty\n$modern", "$empty\n$modernCursorEmpty\n")) {
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump))
+        }
     }
 
     @Test fun missingLineOrPermissionFailureDoesNotEstablishAnEmptyDispatcher() {

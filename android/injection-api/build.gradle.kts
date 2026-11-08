@@ -1,11 +1,11 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
 }
 android {
     namespace = "dev.mobimapper.injection.api"
-    compileSdk = 36
-    defaultConfig { minSdk = 34 }
+    compileSdk = uwu.versions.compileSdk.get().toInt()
+    buildToolsVersion = uwu.versions.buildTools.get()
+    defaultConfig { minSdk = uwu.versions.minSdk.get().toInt() }
     buildFeatures { aidl = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

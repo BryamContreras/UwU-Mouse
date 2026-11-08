@@ -54,6 +54,7 @@ app.*.map.json
 /docs/*
 !/docs/CI_ANDROID.md
 !/docs/PUBLIC_ARCHITECTURE.md
+!/docs/ANDROID_COMPATIBILITY.md
 !/docs/ACTIVAR_PC.md
 !/docs/ACTIVAR_TELEFONO.md
 /attachments/

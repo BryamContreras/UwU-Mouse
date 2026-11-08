@@ -1,16 +1,16 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "dev.mobimapper.inputlab"
-    compileSdk = 36
+    compileSdk = uwu.versions.compileSdk.get().toInt()
+    buildToolsVersion = uwu.versions.buildTools.get()
 
     defaultConfig {
         applicationId = "dev.mobimapper.inputlab"
-        minSdk = 34
-        targetSdk = 36
+        minSdk = uwu.versions.minSdk.get().toInt()
+        targetSdk = uwu.versions.targetSdk.get().toInt()
         versionCode = 2
         versionName = "0.1.1"
     }

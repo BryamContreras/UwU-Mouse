@@ -28,22 +28,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Java 17
+      - name: Read and validate shared toolchain
+        id: toolchain
+        run: python3 tools/check_toolchain.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Java from shared toolchain
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: ${{ steps.toolchain.outputs.java }}
           cache: gradle
           cache-dependency-path: |
             android/**/*.gradle.kts
             android/**/gradle.properties
             android/gradle/wrapper/gradle-wrapper.properties
+            android/toolchain.properties
 
-      - name: Flutter 3.47.2
+      - name: Flutter stable from shared toolchain
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
-          flutter-version: '3.47.2'
+          flutter-version: ${{ steps.toolchain.outputs.flutter }}
           cache: true
 
       - name: Check toolchain and install Android SDK components
@@ -51,16 +56,13 @@ jobs:
           set -euo pipefail
           flutter config --no-analytics --jdk-dir "$JAVA_HOME"
           flutter --version --machine > "$RUNNER_TEMP/flutter-version.json"
-          python3 - <<'PY'
-          import json, os
-          with open(os.path.join(os.environ['RUNNER_TEMP'], 'flutter-version.json')) as source:
-              version = json.load(source)
-          assert version['frameworkVersion'] == '3.47.2', version
-          assert version['frameworkRevision'] == 'd3b14c876900e553bc736ca19295fc09e3853e8e', version
-          assert version['dartSdkVersion'] == '3.13.2', version
-          PY
+          python3 tools/check_toolchain.py --flutter-json "$RUNNER_TEMP/flutter-version.json"
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install \
-            'platforms;android-36' 'build-tools;35.0.0' 'build-tools;36.0.0' 'ndk;28.2.13676358' 'cmake;3.22.1'
+            'cmdline-tools;${{ steps.toolchain.outputs.commandLineTools }}'
+          "$ANDROID_HOME/cmdline-tools/${{ steps.toolchain.outputs.commandLineTools }}/bin/sdkmanager" --install \
+            'platforms;android-${{ steps.toolchain.outputs.sdkPlatform }}' \
+            'build-tools;${{ steps.toolchain.outputs.buildTools }}' \
+            'ndk;${{ steps.toolchain.outputs.ndk }}' 'cmake;${{ steps.toolchain.outputs.cmake }}'
 
       - name: Dependencies, analysis and Flutter tests
         run: |
@@ -101,6 +103,9 @@ jobs:
       - name: Build development release APKs by architecture
         run: flutter build apk --release --split-per-abi --android-project-arg=force-version-code-ignoring-abi=true
 
+      - name: Verify native libraries on 16 KB memory pages
+        run: python3 tools/check_android_native_alignment.py 'build/app/outputs/flutter-apk/*-release.apk' --json
+
       - name: Tests and lint for every Android module, independent InputLab
         working-directory: android
         run: |
@@ -120,13 +125,14 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import hashlib, os, pathlib, re, shutil, subprocess, zipfile
+          from tools.check_toolchain import load_toolchain
           text = pathlib.Path('pubspec.yaml').read_text(encoding='utf-8')
           match = re.search(r'^version:\s*(\d+\.\d+\.\d+\+\d+)\s*$', text, re.M)
           if match is None:
               raise SystemExit('Missing numeric version in pubspec.yaml')
           version = match.group(1)
           version_code = version.split('+')[1]
-          aapt = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools' / '36.0.0' / 'aapt'
+          aapt = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools' / load_toolchain()['buildTools'] / 'aapt2'
           apksigner = aapt.with_name('apksigner')
           keystore = os.environ.get('UWU_ANDROID_DEBUG_KEYSTORE')
           expected_certificate = None
@@ -146,8 +152,8 @@ jobs:
               if f"versionCode='{version_code}'" not in badging.splitlines()[0]:
                   raise SystemExit(f'{source}: versionCode differs from local universal build')
               signing = subprocess.check_output([str(apksigner), 'verify', '--print-certs', str(source)], text=True)
-              signer = re.search(r'^Signer #1 certificate SHA-256 digest:\s*([a-fA-F0-9]{64})\s*$', signing, re.M)
-              if signer is None or (expected_certificate and signer.group(1).lower() != expected_certificate):
+              signers = re.findall(r'^(?:Signer #\d+:?|V\d+ Signer:) certificate SHA-256 digest:\s*([a-fA-F0-9]{64})\s*$', signing, re.M)
+              if not signers or len({value.lower() for value in signers}) != 1 or (expected_certificate and any(value.lower() != expected_certificate for value in signers)):
                   raise SystemExit(f'{source}: APK signing certificate differs from the restored key')
               with zipfile.ZipFile(source) as apk:
                   packaged = {name.split('/')[1] for name in apk.namelist()

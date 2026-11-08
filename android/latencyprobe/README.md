@@ -3,7 +3,7 @@
 App auxiliar `dev.mobimapper.latencyprobe`, separada del mapeador instalado. No es
 una implementación alternativa del mapeador ni mide su cola, conversión o inyector.
 No modifica ni reemplaza la app original ni sus perfiles o permisos.
-Compila el archivo real `InputLatencyProbe.kt` mediante un sourceSet filtrado.
+Compila el archivo real `InputLatencyProbe.kt` mediante una tarea de fuente generada de AGP, sin incluir el resto del motor.
 
 Los modos `native` y `accessibility` actualizan la misma Activity y el mismo View.
 El primero recibe mouse mediante los callbacks normales de la Activity; el segundo

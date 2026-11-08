@@ -1,6 +1,25 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+function Get-ProjectFlutter([string]$ProjectRoot) {
+    if ($env:FLUTTER_ROOT) {
+        $candidate = Join-Path $env:FLUTTER_ROOT 'bin\flutter.bat'
+        if (Test-Path -LiteralPath $candidate) { return $candidate }
+    }
+    $command = Get-Command flutter -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+    $localFile = Join-Path $ProjectRoot 'android\local.properties'
+    if (Test-Path -LiteralPath $localFile) {
+        $line = Get-Content -LiteralPath $localFile | Where-Object { $_ -match '^flutter\.sdk=' } | Select-Object -First 1
+        if ($line) {
+            $sdk = $line.Substring('flutter.sdk='.Length).Replace('\:', ':').Replace('\\', '\')
+            $candidate = Join-Path $sdk 'bin\flutter.bat'
+            if (Test-Path -LiteralPath $candidate) { return $candidate }
+        }
+    }
+    throw 'Flutter SDK not found. Set FLUTTER_ROOT, configure android/local.properties, or put flutter on PATH.'
+}
+
 function Get-ProjectAdb {
     $command = Get-Command adb -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }

@@ -1,13 +1,13 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
 }
 android {
     namespace = "dev.mobimapper.activation.transport"
-    compileSdk = 36
-    ndkVersion = "28.2.13676358"
+    compileSdk = uwu.versions.compileSdk.get().toInt()
+    buildToolsVersion = uwu.versions.buildTools.get()
+    ndkVersion = uwu.versions.ndk.get()
     defaultConfig {
-        minSdk = 34
+        minSdk = uwu.versions.minSdk.get().toInt()
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
     }
     compileOptions {
@@ -15,13 +15,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures { prefab = true }
-    externalNativeBuild { cmake { path = file("src/main/cpp/adb/CMakeLists.txt"); version = "3.22.1" } }
+    externalNativeBuild { cmake { path = file("src/main/cpp/adb/CMakeLists.txt"); version = uwu.versions.cmake.get() } }
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
 dependencies {
-    implementation("androidx.annotation:annotation:1.9.1")
-    implementation("org.conscrypt:conscrypt-android:2.5.3")
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
-    implementation("io.github.vvb2060.ndk:boringssl:20250114")
+    implementation("androidx.annotation:annotation:${uwu.versions.androidxAnnotation.get()}")
+    implementation("org.conscrypt:conscrypt-android:${uwu.versions.conscrypt.get()}")
+    implementation("org.bouncycastle:bcpkix-jdk18on:${uwu.versions.bouncyCastle.get()}")
+    // The published non-LTO Prefab remains compatible with the selected NDK compiler.
+    implementation("io.github.vvb2060.ndk:boringssl:${uwu.versions.boringSsl.get()}")
     testImplementation("junit:junit:4.13.2")
 }

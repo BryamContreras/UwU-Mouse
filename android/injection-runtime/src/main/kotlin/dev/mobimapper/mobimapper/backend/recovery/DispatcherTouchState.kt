@@ -19,10 +19,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * AOSP Android 14 InputDispatcher::dumpDispatchStateLocked emits the accepted empty line only
  * when mTouchStatesByDisplay is empty. That map can also contain mouse hover without down
  * pointers: TouchState::isDown() checks window.pointerIds, separately from hovering pointers.
- * The parser additionally accepts the complete, bounded hover-only/empty-window section
- * observed on this Samsung; every touching/pilfered bit must be zero and downTime unset.
+ * The parser additionally accepts the complete, bounded Android 14 hover-only/empty-window
+ * section; every touching/pilfered bit must be zero and downTime unset. Android 16–17 split
+ * touch/cursor states, so reconciliation requires both explicitly empty maps there.
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/InputDispatcher.cpp
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/TouchState.cpp
+ * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/inputflinger/dispatcher/InputDispatcher.cpp
+ * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android17-release/services/inputflinger/dispatcher/InputDispatcher.cpp
  * This text is an implementation detail, not an SDK contract. Unknown OEM/version output fails
  * closed. A dispatcher snapshot does not establish that a receiver processed UP/CANCEL.
  * The dump is parsed in memory, never logged, persisted, returned or exposed through status.

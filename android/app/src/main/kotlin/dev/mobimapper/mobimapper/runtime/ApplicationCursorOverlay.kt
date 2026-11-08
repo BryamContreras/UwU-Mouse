@@ -12,14 +12,15 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import dev.mobimapper.mobimapper.editor.OverlayWindows
+import dev.mobimapper.mobimapper.backend.VisualCursorRenderer
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
 /** App-owned cursor window. Unlike a shell process, this PID is registered with WindowManager. */
-internal class ApplicationCursorOverlay(private val context:Context) {
+internal class ApplicationCursorOverlay(private val context:Context):VisualCursorRenderer {
     private val main=Handler(Looper.getMainLooper())
     private var windows:WindowManager?=null
-    private var view:CursorView?=null
+    @Volatile private var view:CursorView?=null
     private var params:WindowManager.LayoutParams?=null
     @Volatile private var x=0f
     @Volatile private var y=0f
@@ -35,8 +36,11 @@ internal class ApplicationCursorOverlay(private val context:Context) {
         catch(failure:Exception) { task.cancel(false);throw IllegalStateException("No se pudo actualizar el cursor",failure) }
     }
 
-    fun show(newX:Float,newY:Float,sizeDp:Float):Boolean = onMain {
+    override fun show(displayId:Int,newX:Float,newY:Float,sizeDp:Float):Boolean = onMain {
         if(!valid(newX,newY,sizeDp)) return@onMain false
+        if(context.display?.displayId!=displayId) { error="Pantalla del cursor no disponible";return@onMain false }
+        val windowAlpha=OverlayWindows.cursorWindowAlpha(context)
+        if(!windowAlpha.isFinite() || windowAlpha<=0f) { error="No se pudo consultar el límite de opacidad de Android";return@onMain false }
         x=newX;y=newY;size=sizeDp
         if(view!=null) { view?.postInvalidateOnAnimation();return@onMain true }
         runCatching {
@@ -46,7 +50,7 @@ internal class ApplicationCursorOverlay(private val context:Context) {
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT).apply {
-                alpha=OverlayWindows.cursorWindowAlpha(context)
+                alpha=windowAlpha
                 gravity=Gravity.TOP or Gravity.START
                 title="UwU Mouse Cursor"
                 packageName=context.packageName
@@ -63,7 +67,7 @@ internal class ApplicationCursorOverlay(private val context:Context) {
         }
     }
 
-    fun move(newX:Float,newY:Float,sizeDp:Float) {
+    override fun move(newX:Float,newY:Float,sizeDp:Float) {
         if(!valid(newX,newY,sizeDp)) return
         onMain {
             x=newX;y=newY;size=sizeDp
@@ -71,7 +75,7 @@ internal class ApplicationCursorOverlay(private val context:Context) {
         }
     }
 
-    fun refreshWindowOpacity() = onMain {
+    override fun refreshWindowOpacity() = onMain {
         val cursor=view ?: return@onMain
         val layout=params ?: return@onMain
         val alpha=OverlayWindows.cursorWindowAlpha(context)
@@ -81,10 +85,16 @@ internal class ApplicationCursorOverlay(private val context:Context) {
         }
     }
 
-    fun hide() = onMain {
+    override fun hide() = onMain {
         val cursor=view
+        if(cursor!=null) try { windows?.removeViewImmediate(cursor) }
+        catch(failure:RuntimeException) {
+            if(failure !is IllegalArgumentException || cursor.isAttachedToWindow) {
+                error=failure.message ?: failure.javaClass.simpleName
+                throw failure // Retain the owner so a later cleanup can retry the same window.
+            }
+        }
         view=null;params=null
-        if(cursor!=null) runCatching { windows?.removeViewImmediate(cursor) }
         windows=null
         error=""
     }

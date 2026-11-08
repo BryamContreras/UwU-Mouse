@@ -141,43 +141,47 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var lastOverlayContext:Map<String,Any?>?=null
     private var cursorInstance:GameCursorOverlay?=null
     private var cursorInstanceDisplay=-1
+    private var cursorInstanceBackend:android.os.IBinder?=null
+    private var cursorRouter:dev.mobimapper.mobimapper.backend.VisualCursorRouter?=null
+    val cursorRenderer:String get()=cursorRouter?.route ?: "none"
+    val cursorRendererError:String get()=cursorRouter?.error ?: ""
+    val trustedCursorAdmissionError:String get()=cursorRouter?.trustedError ?: ""
     private val cursorOverlay:GameCursorOverlay get() {
         val displayId=SessionController.targetDisplayId
-        if(cursorInstance==null || cursorInstanceDisplay!=displayId) {
+        val backend=BackendRegistry.injector
+        val binder=backend?.asBinder()
+        if(cursorInstance==null || cursorInstanceDisplay!=displayId || cursorInstanceBackend!==binder) {
             cursorInstance?.hide()
             setCursorOpacityActive(cursorInstanceDisplay,false)
             val overlayContext=overlayContextFor(displayId)
             val renderer=ApplicationCursorOverlay(overlayContext)
-            var appOwnedCursor=android.os.Build.VERSION.SDK_INT>=36
             var backendCursorToken=0L
-            cursorInstance=GameCursorOverlay(this,overlayContext,object:dev.mobimapper.mobimapper.editor.VisualCursorHost {
+            val trusted=object:dev.mobimapper.mobimapper.editor.VisualCursorHost {
                 override fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean {
-                    if(appOwnedCursor) return renderer.show(x,y,sizeDp) && renderer.visible
-                    backendCursorToken=runCatching {
-                        BackendRegistry.injector?.showVisualCursor(displayId,x,y,sizeDp) ?: 0L
-                    }.getOrDefault(0L)
-                    if(backendCursorToken>0L) return true
-                    // New WindowManager releases no longer accept an app_process PID as a
-                    // trusted-window owner. Use UwU's registered application PID instead.
-                    appOwnedCursor=true
-                    return renderer.show(x,y,sizeDp) && renderer.visible
+                    backendCursorToken=backend?.showVisualCursor(displayId,x,y,sizeDp) ?: 0L
+                    return backendCursorToken>0L
                 }
                 override fun move(x:Float,y:Float,sizeDp:Float) {
-                    if(appOwnedCursor) renderer.move(x,y,sizeDp)
-                    else if(backendCursorToken>0L) runCatching {
-                        BackendRegistry.injector?.moveVisualCursor(backendCursorToken,x,y,sizeDp)
-                    }
+                    check(backendCursorToken>0L && binder?.isBinderAlive==true) { "Motor del cursor desconectado" }
+                    backend?.moveVisualCursor(backendCursorToken,x,y,sizeDp)
                 }
-                override fun refreshWindowOpacity() { if(appOwnedCursor) renderer.refreshWindowOpacity() }
                 override fun hide() {
-                    if(appOwnedCursor) renderer.hide()
-                    else {
-                        val token=backendCursorToken;backendCursorToken=0L
-                        if(token>0L) runCatching { BackendRegistry.injector?.hideVisualCursor(token) }
+                    val token=backendCursorToken;backendCursorToken=0L
+                    if(binder?.isBinderAlive!=true) return // Android removes windows with their dead process.
+                    backend?.hideVisualCursor(token)
+                    if(token==0L) check(backend?.status()?.getBoolean("trustedCursorVisible")!=true) {
+                        "El motor anterior no pudo cerrar el cursor; reactívalo"
                     }
                 }
-            }).apply { setSizeDp(cursorSizeDp) }
+            }
+            val router=dev.mobimapper.mobimapper.backend.VisualCursorRouter(trusted,renderer)
+            cursorRouter=router
+            cursorInstance=GameCursorOverlay(this,overlayContext,router) { failure ->
+                SessionController.pause(failure.message ?: "Se perdió el cursor")
+                forceMouseOff("cursor_renderer_lost")
+            }.apply { setSizeDp(cursorSizeDp) }
             cursorInstanceDisplay=displayId
+            cursorInstanceBackend=binder
         }
         return requireNotNull(cursorInstance)
     }
@@ -204,7 +208,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     fun discardDisplayContext(displayId:Int) {
         if(editingPresentation?.anchor?.frame?.displayId==displayId) endEditorPresentation("display_unavailable")
         if(cursorInstanceDisplay==displayId) {
-            clearCursorInteraction();cursorInstance=null;cursorInstanceDisplay=-1
+            clearCursorInteraction();cursorInstance=null;cursorInstanceDisplay=-1;cursorInstanceBackend=null;cursorRouter=null
         }
         overlayContexts.remove(displayId)
     }
@@ -951,7 +955,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                     forceMouseOff("cursor_opacity_budget");return
                 }
                 overlay.refreshWindowOpacity()
-                overlay.moveTo(cursorX,cursorY);overlay.show()
+                if(!overlay.moveTo(cursorX,cursorY)) return
+                overlay.show()
             } catch (failure:WindowManager.BadTokenException) {
                 GameCoordinator.presentationUnavailable(failure,"cursor")
                 forceMouseOff("cursor_bad_token")
@@ -959,6 +964,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 // The display can disappear in WindowManager before its listener reaches us.
                 GameCoordinator.presentationUnavailable(failure,"cursor")
                 forceMouseOff("cursor_display_removed")
+            } catch (failure:SecurityException) {
+                GameCoordinator.presentationUnavailable(failure,"cursor_permission")
+                forceMouseOff("cursor_permission_revoked")
             } catch (_:IllegalArgumentException) {
                 // A context can reject a display removed during cursor publication.
                 GameCoordinator.displayUnavailable(SessionController.targetDisplayId)
@@ -1001,7 +1009,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(!cursorPresentationActive || !cursorPresentationForMenu) updateCursorPresentation()
         if(!cursorPresentationActive || !cursorPresentationForMenu) return
         cursorPosition.moveInput(dx,dy,cursorSensitivity);cursorX=cursorPosition.x;cursorY=cursorPosition.y;cursorSamples++
-        cursorOverlay.moveTo(cursorX,cursorY)
+        if(!cursorOverlay.moveTo(cursorX,cursorY)) return
         val changed=mouseButtons.transitions(buttons)
         if(buttons!=0) { menuHoverPending=false;GameCoordinator.clearMenuPointerHover() }
         if(cursorBlocked.any { it.contains(cursorX,cursorY) }) {
@@ -1040,7 +1048,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     fun hideCursorForTransition() { clearCursorInteraction() }
     private fun handleCursorMotion(event:MotionEvent, latencyReceiptToken:Long) {
         cursorSamples++
-        cursorOverlay.moveTo(cursorX,cursorY,latencyReceiptToken)
+        if(!cursorOverlay.moveTo(cursorX,cursorY,latencyReceiptToken)) return
         if(event.actionMasked==MotionEvent.ACTION_CANCEL) {
             cursorSystemGesture=false;cursorOpenNotifications=false
             SessionController.pause("Gesto del cursor cancelado");return

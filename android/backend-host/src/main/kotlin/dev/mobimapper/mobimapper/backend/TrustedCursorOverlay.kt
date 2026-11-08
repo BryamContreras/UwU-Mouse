@@ -72,7 +72,9 @@ internal class TrustedCursorOverlay(private val context:Context,private val allo
         }
     }
     fun hide() { onMain { hideOnMain() } }
-    fun hide(cursorToken:Long) { onMain { if(cursorToken!=0L && cursorToken==token) hideOnMain() } }
+    // Zero is an explicit owner-only cleanup after an ambiguous show Binder reply.
+    // SupervisedInjector authenticates the application UID before reaching this method.
+    fun hide(cursorToken:Long) { onMain { if(cursorToken==0L || cursorToken==token) hideOnMain() } }
     private fun hideOnMain() {
         main.removeCallbacks(verify)
         view?.let { cursor -> runCatching { windows?.removeViewImmediate(cursor) } }

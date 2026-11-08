@@ -21,13 +21,21 @@ try {
     $python=Get-Command python -ErrorAction SilentlyContinue
     if(!$python) { $python=Get-Command python3 -ErrorAction SilentlyContinue }
     if(!$python) { throw 'Python 3 is required for architecture and compiled Android JSON ABI checks' }
+    $flutter=Get-ProjectFlutter $projectRoot
+    $versionFile=Join-Path $env:TEMP 'uwu-build-flutter-version.json'
+    Invoke-BuildStep { & $flutter --version --machine | Set-Content -LiteralPath $versionFile -Encoding UTF8 } 'Flutter version query failed'
+    Invoke-BuildStep { & $python.Source (Join-Path $projectRoot 'tools\check_toolchain.py') --flutter-json $versionFile } 'Shared toolchain differs from installed tools'
     Invoke-BuildStep { & $python.Source (Join-Path $projectRoot 'tools\check_architecture.py') --json } 'Architecture check failed'
     Invoke-BuildStep { & $python.Source -m unittest discover -s tools/tests -v } 'Build helper tests failed'
-    Invoke-BuildStep { & flutter pub get --enforce-lockfile } 'pub get falló'
-    Invoke-BuildStep { & flutter analyze } 'analyze falló'
-    Invoke-BuildStep { & flutter test } 'flutter test falló'
-    if ($Release) { Invoke-BuildStep { & flutter build apk --release } 'APK falló' }
-    else { Invoke-BuildStep { & flutter build apk --debug } 'APK falló' }
+    Invoke-BuildStep { & $flutter pub get --enforce-lockfile } 'pub get falló'
+    Invoke-BuildStep { & $flutter analyze } 'analyze falló'
+    Invoke-BuildStep { & $flutter test } 'flutter test falló'
+    if ($Release) { Invoke-BuildStep { & $flutter build apk --release } 'APK falló' }
+    else { Invoke-BuildStep { & $flutter build apk --debug } 'APK falló' }
+    $builtApk=if($Release) { 'build\app\outputs\flutter-apk\app-release.apk' } else { 'build\app\outputs\flutter-apk\app-debug.apk' }
+    Invoke-BuildStep {
+        & $python.Source (Join-Path $projectRoot 'tools\check_android_native_alignment.py') (Join-Path $projectRoot $builtApk) --json
+    } 'Native libraries are incompatible with 16 KB memory pages'
     # Java Properties accepts forward slashes; escaping the drive colon also satisfies Android Lint.
     $localFile = Join-Path $projectRoot 'android\local.properties'
     $propertyLines = Get-Content -LiteralPath $localFile | ForEach-Object {

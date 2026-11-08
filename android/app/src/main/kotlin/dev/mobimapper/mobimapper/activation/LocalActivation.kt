@@ -48,6 +48,8 @@ object LocalActivation {
             phase="idle";message="Motor apagado · reactiva para jugar"
         }
         return mapOf("phase" to phase,"message" to message,"busy" to busy,
+            "localNetworkPermissionRequired" to ActivationNetworkPermission.required(app),
+            "localNetworkPermissionGranted" to ActivationNetworkPermission.granted(app),
             "paired" to app.getSharedPreferences("uwu_local_activation",Context.MODE_PRIVATE).getBoolean("paired",false),
             "pairingPort" to pairPort,"connectPort" to connectPort,"host" to "127.0.0.1","failureType" to failureType,
             "bootstrapOutput" to bootstrapOutput)
@@ -65,6 +67,7 @@ object LocalActivation {
     }
     fun startDiscovery() {
         check(Looper.myLooper()==Looper.getMainLooper())
+        ActivationNetworkPermission.requireGranted(app)
         idle()
         val epoch=synchronized(this) {
             if(busy || discovering) return
@@ -72,7 +75,17 @@ object LocalActivation {
             discovering=true
             pairPort=null;connectPort=null;lost.clear();++discoveryEpoch
         }
-        app.startForegroundService(Intent(app,ActivationService::class.java))
+        try { app.startForegroundService(Intent(app,ActivationService::class.java)) }
+        catch(failure:RuntimeException) {
+            synchronized(this) {
+                if(discoveryEpoch==epoch) {
+                    discovering=false;++discoveryEpoch;phase="error"
+                    message="Vuelve a UwU Mouse para iniciar la activación"
+                }
+            }
+            notifyChanged()
+            throw IllegalStateException("Vuelve a UwU Mouse para iniciar la activación",failure)
+        }
         val nsd=app.getSystemService(NsdManager::class.java)
         for(type in listOf("_adb-tls-pairing._tcp.","_adb-tls-connect._tcp.")) {
             val listener=object:NsdManager.DiscoveryListener {
@@ -173,6 +186,7 @@ object LocalActivation {
     }
     private fun begin(next:String,text:String,run:(Long)->Unit) {
         check(Looper.myLooper()==Looper.getMainLooper())
+        ActivationNetworkPermission.requireGranted(app)
         idle()
         val ticket=synchronized(this) {
             check(!busy) { "Espera a que termine la activación" }

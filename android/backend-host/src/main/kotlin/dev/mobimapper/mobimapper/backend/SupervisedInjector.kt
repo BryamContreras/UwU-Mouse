@@ -106,9 +106,9 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private val motionDisplayMethod=InputEvent::class.java.getMethod("getDisplayId")
     private var expiry:Runnable?=null
     private val pointer = PointerPresentation { type ->
-        // Android 16+ keeps this hidden compatibility method as a no-op. Report the
+        // AOSP Android 15+ keeps this hidden compatibility method as a no-op. Report the
         // limitation instead of marking the system cursor hidden when it is still visible.
-        if(android.os.Build.VERSION.SDK_INT>=36)
+        if(android.os.Build.VERSION.SDK_INT>=35)
             throw UnsupportedOperationException("setPointerIconType is unsupported on Android ${android.os.Build.VERSION.SDK_INT}")
         val identity=Binder.clearCallingIdentity()
         try {
@@ -910,6 +910,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("nativeCaptureRateSupported",nativeCapture!=null)
             putBoolean("nativeMotionBatchSupported",nativeCapture!=null)
             putBoolean("trustedCursorSupported",true);putBoolean("trustedCursorVisible",visualCursor.visible)
+            putBoolean("trustedCursorCleanupWithoutTokenSupported",true)
             putString("trustedCursorError",visualCursor.error)
             putString("captureProvider","native-evdev")
             putString("captureError",captureFailure)

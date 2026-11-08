@@ -39,5 +39,6 @@ interface IInjector {
     // Passive, trusted cursor surface; never receives input or injects events.
     long showVisualCursor(int displayId, float x, float y, float sizeDp);
     oneway void moveVisualCursor(long cursorToken, float x, float y, float sizeDp);
+    // Zero closes this authorized client's cursor after an ambiguous show reply.
     void hideVisualCursor(long cursorToken);
 }

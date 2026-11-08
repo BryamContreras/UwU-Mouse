@@ -1,14 +1,14 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "dev.mobimapper.mobimapper"
-    compileSdk = 36
-    ndkVersion = flutter.ndkVersion
+    compileSdk = uwu.versions.compileSdk.get().toInt()
+    buildToolsVersion = uwu.versions.buildTools.get()
+    ndkVersion = uwu.versions.ndk.get()
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -20,14 +20,15 @@ android {
         applicationId = "dev.mobimapper.mobimapper"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 34
-        targetSdk = 36
+        minSdk = uwu.versions.minSdk.get().toInt()
+        targetSdk = uwu.versions.targetSdk.get().toInt()
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
         // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
         // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     // CI restores the existing development certificate at an explicit path. Local builds
@@ -71,4 +72,6 @@ dependencies {
     implementation(project(":activation-transport"))
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+    androidTestImplementation("androidx.test:runner:${uwu.versions.androidxTestRunner.get()}")
+    androidTestImplementation("androidx.test.ext:junit:${uwu.versions.androidxTestJunit.get()}")
 }

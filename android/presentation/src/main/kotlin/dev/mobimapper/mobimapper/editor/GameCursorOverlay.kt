@@ -2,16 +2,11 @@ package dev.mobimapper.mobimapper.editor
 
 import android.content.Context
 
-/** The application composes this port with the privileged passive visual renderer. */
-interface VisualCursorHost {
-    fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean
-    fun move(x:Float,y:Float,sizeDp:Float)
-    fun refreshWindowOpacity() {}
-    fun hide()
-}
+typealias VisualCursorHost = dev.mobimapper.mobimapper.backend.VisualCursorRenderer
 
 /** Display-coordinate hotspot; rendering has no touch target and follows the overlay opacity budget. */
-class GameCursorOverlay(private val service:Context,private val overlayContext:Context=service,private val host:VisualCursorHost) {
+class GameCursorOverlay(private val service:Context,private val overlayContext:Context=service,
+    private val host:VisualCursorHost,private val onMoveFailure:(Exception)->Unit) {
     private var sizeDp=BubbleSettings.DEFAULT_CURSOR_SIZE_DP
     private var x=0f
     private var y=0f
@@ -19,18 +14,20 @@ class GameCursorOverlay(private val service:Context,private val overlayContext:C
     fun setSizeDp(sizeDp:Float) {
         require(sizeDp.isFinite() && sizeDp in BubbleSettings.MIN_CURSOR_SIZE_DP..BubbleSettings.MAX_CURSOR_SIZE_DP)
         this.sizeDp=sizeDp
-        if(visible) host.move(x,y,sizeDp)
+        if(visible) moveTo(x,y)
     }
     fun refreshWindowOpacity() { if(visible) host.refreshWindowOpacity() }
     @Suppress("UNUSED_PARAMETER")
-    fun moveTo(x:Float,y:Float,latencyReceiptToken:Long=0L) {
-        if(!x.isFinite() || !y.isFinite()) return
+    fun moveTo(x:Float,y:Float,latencyReceiptToken:Long=0L):Boolean {
+        if(!x.isFinite() || !y.isFinite()) return false
         this.x=x;this.y=y
-        if(visible) host.move(x,y,sizeDp)
+        if(visible) try { host.move(x,y,sizeDp) }
+        catch(failure:Exception) { hide();onMoveFailure(failure);return false }
+        return true
     }
     fun show() {
         if(visible) return
-        check(host.show(overlayContext.display?.displayId ?: 0,x,y,sizeDp)) { "No se pudo mostrar el cursor opaco; actualiza o reactiva el motor" }
+        check(host.show(overlayContext.display?.displayId ?: 0,x,y,sizeDp)) { "No se pudo mostrar el cursor; comprueba el permiso de superposición o reactiva el motor" }
         visible=true
     }
     fun hide() {

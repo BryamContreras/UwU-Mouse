@@ -301,14 +301,14 @@ object GameCoordinator {
         matchingProfile(id,displayId)?.let { return it }
         val original=requireNotNull(store().get(id))
         val (width,height,rotation)=geometry(displayId)
-        val base=original.name.take(65)+(if(displayId==0) " · teléfono" else " · DeX")
+        val base=original.name.take(65)+(if(displayId==0) " · teléfono" else " · pantalla externa")
         val names=store().list().filter { it.packageName==original.packageName }.map { it.name }.toSet()
         val name=if(base !in names) base else generateSequence(2){it+1}.map { "$base $it" }.first { it !in names }
         val copy=original.copy(id=java.util.UUID.randomUUID().toString(),name=name,switchKey=0,
             calibration=Calibration(width,height,rotation,GameArea(0f,0f,width.toFloat(),height.toFloat()),false,displayScope(displayId)))
         val bounded=EditorDraft(copy,width,height,rotation).value
         store().save(bounded)
-        message(if(displayId==0) "Coloca los controles para el teléfono" else "Coloca los controles para DeX y guarda")
+        message(if(displayId==0) "Coloca los controles para el teléfono" else "Coloca los controles para la pantalla externa y guarda")
         return bounded
     }
     fun openEditor(id:String,displayId:Int=SessionController.targetDisplayId) {
@@ -614,17 +614,19 @@ object GameCoordinator {
         try { action() }
         catch(failure:WindowManager.BadTokenException) { presentationUnavailable(failure,phase) }
         catch(failure:WindowManager.InvalidDisplayException) { presentationUnavailable(failure,phase) }
+        catch(failure:SecurityException) { presentationUnavailable(failure,phase) }
     }
     private fun fail(failure:Exception,fallback:String,phase:String) {
         when(failure) {
             is WindowManager.BadTokenException -> presentationUnavailable(failure,phase)
             is WindowManager.InvalidDisplayException -> presentationUnavailable(failure,phase)
+            is SecurityException -> presentationUnavailable(failure,phase)
             else -> fail(failure.message ?: fallback)
         }
     }
     /** A failed own window must not trigger another addView from pause/presentation callbacks. */
     fun presentationUnavailable(failure:RuntimeException,phase:String="overlay") {
-        require(failure is WindowManager.BadTokenException || failure is WindowManager.InvalidDisplayException)
+        require(failure is WindowManager.BadTokenException || failure is WindowManager.InvalidDisplayException || failure is SecurityException)
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { presentationUnavailable(failure,phase) };return }
         val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
         val oldEditor=editor;val oldBubble=bubble;val oldControls=controls
@@ -636,7 +638,9 @@ object GameCoordinator {
         lastPresentationFailure=mapOf("phase" to phase,"displayId" to displayId,
             "type" to failure.javaClass.simpleName,"uptimeMs" to SystemClock.uptimeMillis())
         Log.e("MobiMapperWindow","presentation_unavailable phase=$phase display=$displayId",failure)
-        SessionController.pause("No se pudo abrir la interfaz en esta pantalla; vuelve a abrir el juego")
+        SessionController.pause(if(failure is SecurityException)
+            "Permite mostrar UwU Mouse sobre otras aplicaciones y vuelve a abrir el juego"
+            else "No se pudo abrir la interfaz en esta pantalla; vuelve a abrir el juego")
         SessionController.targetChanged(false)
         disposeFailedPresentation { oldEditor?.close() }
         disposeFailedPresentation { oldBubble?.close() }
@@ -651,6 +655,7 @@ object GameCoordinator {
         try { close() }
         catch(failure:WindowManager.BadTokenException) { Log.w("MobiMapperWindow","failed_window_cleanup",failure) }
         catch(failure:WindowManager.InvalidDisplayException) { Log.w("MobiMapperWindow","removed_display_cleanup",failure) }
+        catch(failure:SecurityException) { Log.w("MobiMapperWindow","overlay_permission_cleanup",failure) }
         catch(failure:IllegalArgumentException) {
             // A rejected addView may leave an unattached View in an older presentation object.
             // Do not suppress other argument errors or normal-path lifecycle defects.

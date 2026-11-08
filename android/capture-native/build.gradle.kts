@@ -1,14 +1,14 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "dev.mobimapper.capture.nativeinput"
-    compileSdk = 36
-    ndkVersion = "28.2.13676358"
+    compileSdk = uwu.versions.compileSdk.get().toInt()
+    buildToolsVersion = uwu.versions.buildTools.get()
+    ndkVersion = uwu.versions.ndk.get()
     defaultConfig {
-        minSdk = 34
+        minSdk = uwu.versions.minSdk.get().toInt()
         consumerProguardFiles("consumer-rules.pro")
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_static" } }
     }
@@ -16,7 +16,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1" } }
+    externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = uwu.versions.cmake.get() } }
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
 dependencies {

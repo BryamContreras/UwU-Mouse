@@ -1,8 +1,16 @@
 package dev.mobimapper.mobimapper.backend.recovery
 
-/** Recognizes only the Android 14/Samsung diagnostic format observed on the test phone. */
+/**
+ * Recognizes explicit empty-dispatcher markers from AOSP Android 14–17 and the bounded
+ * Android 14 hover-only form. Dump text is not an SDK contract; unknown forms fail closed.
+ */
 object DispatcherTouchStateParser {
     private const val EMPTY_TOUCH_STATE = "  TouchStates: <no displays touched>"
+    // Android 16 splits touch and cursor streams. Neither empty map alone proves that
+    // the dispatcher is untouched: a held mouse button can belong to the cursor map.
+    // InputDispatcher::DispatcherTouchState::dump(), android16-release/android17-release.
+    private const val EMPTY_MODERN_TOUCH_STATE = "  TouchStatesByDisplay: <no displays touched>"
+    private const val EMPTY_CURSOR_STATE = "  CursorStatesByDisplay: <no displays touched by cursor>"
     private const val TOUCH_STATES = "  TouchStatesByDisplay:"
     private const val MAX_DISPLAYS = 8
     private const val MAX_WINDOWS = 128
@@ -25,6 +33,8 @@ object DispatcherTouchStateParser {
         var found = false
         var inSection = false
         var completed = false
+        var modernTouchEmpty = false
+        var modernCursorEmpty = false
         val displays = mutableSetOf<Int>()
         var deviceId: Int? = null
         var source: String? = null
@@ -34,6 +44,15 @@ object DispatcherTouchStateParser {
         var totalWindows = 0
         fun displayComplete() = deviceId != null && !expectingWindows && (emptyWindows || windowCount > 0)
         for (line in lines) {
+            if (modernTouchEmpty && !modernCursorEmpty) {
+                // The audited producer emits these two exact markers consecutively.
+                // Any cursor payload, missing marker or altered format is ambiguous.
+                if (line != EMPTY_CURSOR_STATE) return false
+                modernCursorEmpty = true
+                completed = true
+                continue
+            }
+            if (line.contains("CursorState", ignoreCase = true)) return false
             if (inSection) {
                 // A known next section is mandatory: an EOF or an unknown line could be a
                 // truncated diagnostic hiding another display/window with a pointer down.
@@ -79,10 +98,11 @@ object DispatcherTouchStateParser {
             found = true
             when (line) {
                 EMPTY_TOUCH_STATE -> completed = true
+                EMPTY_MODERN_TOUCH_STATE -> modernTouchEmpty = true
                 TOUCH_STATES -> inSection = true
                 else -> return false
             }
         }
-        return found && completed && !inSection
+        return found && completed && !inSection && (!modernTouchEmpty || modernCursorEmpty)
     }
 }

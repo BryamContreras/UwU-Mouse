@@ -1,0 +1,172 @@
+name: Android 14–17 compatibility
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-compatibility-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-once:
+    name: Build one x86_64 application and instrumentation APK pair
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Read and validate shared toolchain
+        id: toolchain
+        run: python3 tools/check_toolchain.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Java from shared toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.toolchain.outputs.java }}
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle.kts
+            android/**/gradle.properties
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/toolchain.properties
+
+      - name: Flutter stable from shared toolchain
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: ${{ steps.toolchain.outputs.flutter }}
+          cache: true
+
+      - name: Install and check the shared toolchain
+        run: |
+          set -euo pipefail
+          flutter config --no-analytics --jdk-dir "$JAVA_HOME"
+          flutter --version --machine > "$RUNNER_TEMP/flutter-version.json"
+          python3 tools/check_toolchain.py --flutter-json "$RUNNER_TEMP/flutter-version.json"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'cmdline-tools;${{ steps.toolchain.outputs.commandLineTools }}'
+          "$ANDROID_HOME/cmdline-tools/${{ steps.toolchain.outputs.commandLineTools }}/bin/sdkmanager" --install \
+            'platforms;android-${{ steps.toolchain.outputs.sdkPlatform }}' \
+            'build-tools;${{ steps.toolchain.outputs.buildTools }}' \
+            'ndk;${{ steps.toolchain.outputs.ndk }}' 'cmake;${{ steps.toolchain.outputs.cmake }}'
+
+      - name: Build the application and instrumentation once
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          flutter build apk --debug --target-platform android-x64
+          (cd android && bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:assembleDebugAndroidTest -Ptarget-platform=android-x64)
+          mkdir -p compatibility-apks
+          cp build/app/outputs/flutter-apk/app-debug.apk compatibility-apks/app.apk
+          cp build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk compatibility-apks/tests.apk
+          python3 - <<'PY'
+          import hashlib, pathlib, zipfile
+          folder = pathlib.Path('compatibility-apks')
+          with zipfile.ZipFile(folder / 'app.apk') as apk:
+              abis = {name.split('/')[1] for name in apk.namelist() if name.startswith('lib/') and name.endswith('.so')}
+              assert abis == {'x86_64'}, abis
+          (folder / 'SHA256SUMS.txt').write_text(''.join(
+              f'{hashlib.sha256((folder / name).read_bytes()).hexdigest()}  {name}\n'
+              for name in ('app.apk', 'tests.apk')), encoding='utf-8')
+          PY
+          python3 tools/check_android_native_alignment.py compatibility-apks/app.apk --json
+
+      - name: Upload the identical APK pair for all four Android versions
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-compatibility-apks
+          path: compatibility-apks/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  framework-compatibility:
+    name: Framework checks on Android API ${{ matrix.api }}
+    needs: build-once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 34
+            sdk-package: '34'
+          - api: 35
+            sdk-package: '35'
+          - api: 36
+            sdk-package: '36'
+          - api: 37
+            sdk-package: '37.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Read and validate shared toolchain
+        id: toolchain
+        run: python3 tools/check_toolchain.py --github-output "$GITHUB_OUTPUT"
+
+      - name: Java from shared toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.toolchain.outputs.java }}
+
+      - name: Download the shared APK pair
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-compatibility-apks
+          path: compatibility-apks
+
+      - name: Prepare current SDK tools for the emulator runner
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'cmdline-tools;${{ steps.toolchain.outputs.commandLineTools }}'
+          # The action invokes latest/bin explicitly; preserve the runner's preinstalled tools.
+          mv "$ANDROID_HOME/cmdline-tools/latest" "$RUNNER_TEMP/preinstalled-commandline-tools"
+          ln -s "$ANDROID_HOME/cmdline-tools/${{ steps.toolchain.outputs.commandLineTools }}" "$ANDROID_HOME/cmdline-tools/latest"
+
+      - name: Enable hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install the same APKs and exercise actual Android APIs
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.sdk-package }}
+          target: google_apis
+          arch: x86_64
+          cores: 2
+          ram-size: 2048M
+          emulator-boot-timeout: 600
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot -camera-back none
+          script: python3 tools/run_android_compatibility.py --artifacts compatibility-apks --expected-api ${{ matrix.api }} --output-dir build/compatibility-results
+
+      - name: Upload compatibility results and emulator diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: android-api-${{ matrix.api }}-compatibility-results
+          path: build/compatibility-results/
+          if-no-files-found: warn
+          retention-days: 7

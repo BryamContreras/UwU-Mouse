@@ -25,7 +25,8 @@ data class ParsedWindowSnapshot(
 )
 
 /**
- * Android 14 WMS text is not a public API. Only complete, recognized metadata is accepted.
+ * WMS text is not a public API. Android 14–17 retain the consumed metadata fields;
+ * only complete, recognized metadata is accepted and unknown formats fail closed.
  * Window enumeration is top-first; the larger derived layer is above a smaller layer.
  */
 object WindowDumpParser {

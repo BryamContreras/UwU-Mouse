@@ -43,6 +43,9 @@ private class AndroidSessionEnvironment : SessionEnvironment {
         return SessionEnvironmentDiagnostics(host != null, "native-evdev", host?.nativeCaptureError ?: "", mapOf(
             "mouseCaptured" to host?.mouseCaptured,
             "cursorVisible" to host?.cursorVisible,
+            "cursorRenderer" to host?.cursorRenderer,
+            "cursorRendererError" to host?.cursorRendererError,
+            "trustedCursorAdmissionError" to host?.trustedCursorAdmissionError,
             "cursorX" to host?.cursorX,
             "cursorY" to host?.cursorY,
             "cursorSamples" to host?.cursorSamples,

@@ -1,6 +1,6 @@
 # UwU Mouse
 
-Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.2.0+37**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
+Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.1+39**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
 
 ## Empezar
 
@@ -31,11 +31,13 @@ Cada juego admite varios perfiles locales con mapeos independientes. **Perfiles*
 
 Una misma tecla puede activar varios puntos de toque a la vez; los comandos, macros y direcciones mantienen sus reservas para evitar conflictos. **Exportar** guarda el perfil elegido como `.uwumouse.json` y **Importar perfil**, debajo de **Nuevo perfil**, abre el explorador de Android. El archivo contiene el perfil y su calibración, sin permisos generales de almacenamiento.
 
-Abrir un juego inicia con el cursor libre de UwU Mouse; el atajo activa la cámara. El cursor es opaco tanto en el juego como en el editor. Los interruptores distinguen claramente sus estados y las ventanas siguen siendo arrastrables sin los indicadores de seis puntos.
+Abrir un juego inicia con el cursor libre de UwU Mouse; el atajo activa la cámara. El cursor confiable es opaco cuando Android admite esa ventana; si se necesita una ventana del proceso de la app, se respeta el límite de opacidad del sistema para permitir los toques en el juego. El editor dibuja su cursor opaco dentro de su propia ventana. Los interruptores distinguen claramente sus estados y las ventanas siguen siendo arrastrables sin los indicadores de seis puntos.
 
 En **DeX**, el perfil de pantalla externa se separa del perfil del teléfono. Su calibración incluye el marco de la ventana; cambiar su tamaño, posición u orientación exige recalibrar. La sesión se pausa al salir del contexto autorizado. Pausar, editar o recuperar el inyector no reproduce teclas o botones que seguían mantenidos.
 
 ## Compatibilidad y alcance de la migración
+
+Android 14, 15, 16 y 17 usan el mismo APK por arquitectura, con selección de capacidades y diagnósticos de plataforma. Las restricciones de las API públicas, los cambios revisados y la matriz de comprobación figuran en [Compatibilidad Android](docs/ANDROID_COMPATIBILITY.md). Las pruebas automáticas no certifican todos los firmwares ni periféricos.
 
 La arquitectura separa interfaz, dominio, captura, ventanas, presentación, activación e inyección mediante contratos reemplazables. Hay 13 proyectos Gradle: diez de producción, dos laboratorios independientes y un host de validación. [Mapa de módulos y contratos](ARCHITECTURE.md). El código del motor y los perfiles mantienen sus formatos; la captura nativa exige dispositivos externos compatibles y rechaza adquirir entradas mantenidas. Su lease devuelve los dispositivos si el consumidor muere o deja de renovar.
 
@@ -59,7 +61,7 @@ Esta prueba no acredita Wireless DeX, DeX para PC, ventanas movidas o redimensio
 
 **Actions → Android APKs** genera APK para **arm64-v8a**, **armeabi-v7a** y **x86_64**, más sumas SHA-256. Descarga los artifacts de una ejecución terminada o usa **Run workflow**. Los builds de `main` y manuales usan el certificado de desarrollo persistente del repositorio; los pull requests sin ese secreto usan firma efímera. [CI, herramientas y firma](docs/CI_ANDROID.md).
 
-Base fijada: Flutter **3.47.2**, Dart **3.13.2**, SDK **36**, NDK **28.2.13676358**, AGP **8.13.1**, Kotlin **2.2.20**, Gradle **8.14.3** y bytecode Java **17**. Conserva `pubspec.lock` y el wrapper. En Windows:
+Base compartida: Flutter **3.47.9**, Dart **3.13.7**, Android SDK **37** (mínimo **34**), AGP **9.3.3**, Kotlin **2.4.21**, Gradle **9.5.0**, NDK LTS **30.0.16248370**, CMake **4.1.2** y bytecode Java **17**. Las versiones proceden de [android/toolchain.properties](android/toolchain.properties); los builds locales y CI comprueban el mismo Flutter y wrapper. Conserva `pubspec.lock`. En Windows:
 
 ```powershell
 .\scripts\Build.ps1 -Release

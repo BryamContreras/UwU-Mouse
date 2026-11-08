@@ -17,6 +17,9 @@ $resultPath=Join-Path $destination 'integration-check.json'
 $python=Get-Command python -ErrorAction SilentlyContinue
 if(!$python) { $python=Get-Command python3 -ErrorAction SilentlyContinue }
 if(!$python) { throw 'Python 3 is required for architecture and Android JSON ABI verification' }
+$toolchainJson=@(& $python.Source (Join-Path $projectRoot 'tools\check_toolchain.py'))
+if($LASTEXITCODE -ne 0) { throw 'Shared toolchain configuration is inconsistent' }
+$toolchain=($toolchainJson -join "`n" | ConvertFrom-Json).toolchain
 $staticOutput=@(& $python.Source (Join-Path $projectRoot 'tools\check_architecture.py') --root $projectRoot --json)
 $staticExitCode=$LASTEXITCODE
 $staticOutput | Set-Content -LiteralPath (Join-Path $destination 'static-check.json') -Encoding UTF8
@@ -47,7 +50,7 @@ if(!$AndroidSdk) {
     else { $AndroidSdk=Join-Path $env:LOCALAPPDATA 'Android\Sdk' }
 }
 $AndroidSdk=(Resolve-Path -LiteralPath $AndroidSdk).Path
-if(!(Test-Path -LiteralPath (Join-Path $AndroidSdk 'platforms\android-36\android.jar'))) { throw 'Android platform 36 not found' }
+if(!(Test-Path -LiteralPath (Join-Path $AndroidSdk "platforms\android-$($toolchain.sdkPlatform)\android.jar"))) { throw "Android platform $($toolchain.sdkPlatform) not found" }
 if(!$env:JAVA_HOME) {
     $studioJdk=Join-Path $env:ProgramFiles 'Android\Android Studio\jbr'
     if(Test-Path -LiteralPath (Join-Path $studioJdk 'bin\java.exe')) { $env:JAVA_HOME=$studioJdk }
@@ -61,12 +64,17 @@ if(!$FlutterRoot) {
     }
 }
 $FlutterRoot=(Resolve-Path -LiteralPath $FlutterRoot).Path
+$versionFile=Join-Path $destination 'flutter-version.json'
+& (Join-Path $FlutterRoot 'bin\flutter.bat') --version --machine | Set-Content -LiteralPath $versionFile -Encoding UTF8
+if($LASTEXITCODE -ne 0) { throw 'Flutter version query failed' }
+& $python.Source (Join-Path $projectRoot 'tools\check_toolchain.py') --flutter-json $versionFile
+if($LASTEXITCODE -ne 0) { throw 'Installed Flutter differs from the shared toolchain' }
 if(!(Test-Path -LiteralPath (Join-Path $FlutterRoot 'bin\cache\artifacts\engine\android-arm64\flutter.jar'))) { throw 'Cached Flutter Android embedding jar not found' }
 # Machine-specific configuration belongs only to the standalone build.
 $sdkProperty=$AndroidSdk.Replace('\','/').Replace(':','\:')
 "sdk.dir=$sdkProperty" | Set-Content -LiteralPath (Join-Path $platformRoot 'local.properties') -Encoding ASCII
 $arguments=@('-p',$platformRoot,'--console=plain','-Pandroid.useAndroidX=true',"-Puwu.flutterRoot=$FlutterRoot")
-$aapt2=Join-Path $AndroidSdk 'build-tools\36.0.0\aapt2.exe'
+$aapt2=Join-Path $AndroidSdk "build-tools\$($toolchain.buildTools)\aapt2.exe"
 if(Test-Path -LiteralPath $aapt2) { $arguments+="-Pandroid.aapt2FromMavenOverride=$aapt2" }
 $arguments+=@(':mapper-core:test',':capture-api:test',':capture-native:testDebugUnitTest',':window-context:testDebugUnitTest',':injection-runtime:testDebugUnitTest',':activation-transport:testDebugUnitTest',':host:testDebugUnitTest',':inputlab:testDebugUnitTest',':host:compileDebugKotlin')
 $started=[DateTime]::UtcNow
