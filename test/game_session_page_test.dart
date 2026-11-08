@@ -3,9 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobimapper/main.dart';
+import 'package:mobimapper/app/mapper_app.dart';
 
-import 'native_api_test.dart' show displayProfileWire, profileWire;
+import 'support/profile_fixtures.dart' show displayProfileWire, profileWire;
 
 void main() {
   const channel = MethodChannel('dev.mobimapper/control.v1');
@@ -13,7 +13,7 @@ void main() {
   Map<String, Object?> status({
     bool blocked = false,
     bool backend = true,
-    bool accessibility = true,
+    bool captureReady = true,
     int uiDisplayId = 0,
     bool drawOverlays = true,
   }) => {
@@ -21,7 +21,10 @@ void main() {
     'mode': blocked ? 'blocked' : 'paused',
     'state': blocked ? 'Bloqueada' : 'Pausada',
     'error': blocked ? 'Cancelación anterior no verificada' : '',
-    'accessibility': accessibility,
+    'accessibility': false,
+    'captureReady': captureReady,
+    'captureBackend': 'native-evdev',
+    'captureError': '',
     'backend': backend,
     'active': false,
     'contacts': blocked ? 3 : 0,
@@ -38,6 +41,7 @@ void main() {
     'devices': <Object?>[],
     'uiDisplayId': uiDisplayId,
     'drawOverlays': drawOverlays,
+    'overlayPermission': drawOverlays,
   };
 
   for (final displayId in [0, 2]) {
@@ -463,12 +467,12 @@ void main() {
       final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
       await tester.tap(game);
       await tester.pumpAndSettle();
-      expect(find.text('Ventanas de DeX'), findsOneWidget);
+      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
       expect(find.text('Listo para abrir tu juego'), findsNothing);
       expect(calls, isNot(contains('startProfile')));
       expect(calls, isNot(contains('openEditor')));
       expect(calls, isNot(contains('activationStartDiscovery')));
-      final allow = find.text('Permitir ventanas');
+      final allow = find.text('Permitir superposición');
       await tester.ensureVisible(allow);
       await tester.pumpAndSettle();
       await tester.tap(allow);
@@ -483,8 +487,8 @@ void main() {
       allowed = true;
       tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
       await tester.pumpAndSettle();
-      expect(find.text('Permitidas'), findsOneWidget);
-      expect(find.text('Permitir ventanas'), findsNothing);
+      expect(find.text('Permitido'), findsOneWidget);
+      expect(find.text('Permitir superposición'), findsNothing);
       expect(calls, isNot(contains('startProfile')));
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
@@ -512,8 +516,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(edit);
     await tester.pumpAndSettle();
-    expect(find.text('Ventanas de DeX'), findsOneWidget);
-    expect(find.text('Permitir ventanas'), findsOneWidget);
+    expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+    expect(find.text('Permitir superposición'), findsOneWidget);
     expect(calls, isNot(contains('openEditor')));
     expect(calls, isNot(contains('startProfile')));
     expect(tester.takeException(), isNull);
@@ -527,7 +531,7 @@ void main() {
       final calls = <String>[];
       mockActivation(
         calls,
-        () => status(uiDisplayId: displayId, drawOverlays: displayId != 0),
+        () => status(uiDisplayId: displayId, drawOverlays: true),
       );
       await tester.pumpWidget(const MobiMapperApp());
       await tester.pumpAndSettle();
@@ -548,10 +552,10 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('connection-settings')));
       await tester.pumpAndSettle();
       expect(
-        find.text('Ventanas de DeX'),
-        displayId == 0 ? findsNothing : findsOneWidget,
+        find.text('Mostrar sobre otras apps'),
+        findsOneWidget,
       );
-      expect(find.text('Permitir ventanas'), findsNothing);
+      expect(find.text('Permitir superposición'), findsNothing);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -594,8 +598,8 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
-    expect(find.text('Ventanas de DeX'), findsOneWidget);
-    expect(find.text('Permitir ventanas'), findsOneWidget);
+    expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+    expect(find.text('Permitir superposición'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -621,7 +625,7 @@ void main() {
       );
       await tester.pumpWidget(const MobiMapperApp());
       await tester.pump();
-      expect(find.text('Accesibilidad: Comprobando'), findsOneWidget);
+      expect(find.text('Captura nativa: Comprobando'), findsOneWidget);
       expect(find.text('Motor de toques: Comprobando'), findsOneWidget);
       expect(find.textContaining('Desactivad'), findsNothing);
       final settings = find.byKey(const ValueKey('connection-settings'));
@@ -632,7 +636,7 @@ void main() {
       expect(find.text('Activar motor'), findsNothing);
       pending.complete(status());
       await tester.pumpAndSettle();
-      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Captura nativa: Activada'), findsOneWidget);
       expect(find.text('Motor de toques: Activado'), findsOneWidget);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
@@ -644,30 +648,28 @@ void main() {
     'connection settings expose only missing services and update while open',
     (tester) async {
       final calls = <String>[];
-      var accessibility = false, backend = false;
+      var captureReady = false, backend = false;
       mockActivation(
         calls,
-        () => status(accessibility: accessibility, backend: backend),
+        () => status(captureReady: captureReady, backend: backend),
       );
       await tester.pumpWidget(const MobiMapperApp());
       await tester.pumpAndSettle();
-      expect(find.text('Accesibilidad: Desactivada'), findsOneWidget);
+      expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
       expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
       expect(find.text('Preparar conexión'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('connection-settings')));
       await tester.pumpAndSettle();
       expect(find.text('Ajustes de conexión'), findsWidgets);
-      expect(find.text('Activar accesibilidad'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsOneWidget);
       expect(find.text('Iniciar en laboratorio'), findsNothing);
-      await tester.tap(find.text('Activar accesibilidad'));
-      await tester.pumpAndSettle();
-      expect(calls.where((c) => c == 'accessibilitySettings'), hasLength(1));
+      expect(calls, isNot(contains('accessibilitySettings')));
       expect(calls, isNot(contains('activationStartDiscovery')));
-      accessibility = true;
+      captureReady = true;
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Captura nativa: Activada'), findsOneWidget);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsOneWidget);
       backend = true;
@@ -691,18 +693,19 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final calls = <String>[];
-      mockActivation(calls, () => status(accessibility: false, backend: false));
+      mockActivation(calls, () => status(captureReady: false, backend: false, drawOverlays: false));
       await tester.pumpWidget(const MobiMapperApp());
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       await tester.tap(find.byKey(const ValueKey('connection-settings')));
       await tester.pumpAndSettle();
-      final accessibility = find.text('Activar accesibilidad');
-      await tester.ensureVisible(accessibility);
+      final overlay = find.text('Permitir superposición');
+      await tester.ensureVisible(overlay);
       await tester.pumpAndSettle();
-      await tester.tap(accessibility);
+      await tester.tap(overlay);
       await tester.pumpAndSettle();
-      expect(calls, contains('accessibilitySettings'));
+      expect(calls, contains('openOverlaySettings'));
+      expect(calls, isNot(contains('accessibilitySettings')));
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     },
@@ -721,7 +724,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pump(const Duration(milliseconds: 300));
       await tester.pumpAndSettle();
-      expect(find.text('Accesibilidad: Activada'), findsOneWidget);
+      expect(find.text('Captura nativa: Activada'), findsOneWidget);
       expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
       expect(find.text('Activar motor'), findsOneWidget);
       expect(find.text('Activar accesibilidad'), findsNothing);
@@ -1103,30 +1106,24 @@ void main() {
     );
   }
 
-  testWidgets('missing accessibility is distinguished from a ready motor', (
+  testWidgets('missing native capture is distinguished from a ready motor', (
     tester,
   ) async {
     final calls = <String>[];
-    mockActivation(calls, () => status(accessibility: false));
+    mockActivation(calls, () => status(captureReady: false));
     await tester.pumpWidget(const MobiMapperApp());
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
-    expect(find.text('Accesibilidad: Desactivada'), findsOneWidget);
+    expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
     expect(find.text('Motor de toques: Activado'), findsOneWidget);
     expect(find.text('Activar motor'), findsNothing);
     expect(find.textContaining('Activar-UwU-Mouse.cmd'), findsNothing);
     expect(calls, isNot(contains('accessibilitySettings')));
     expect(calls, isNot(contains('startProfile')));
-    final accessibility = find.text('Activar accesibilidad');
-    await tester.ensureVisible(accessibility);
-    await tester.tap(accessibility);
-    await tester.pumpAndSettle();
-    expect(
-      calls.where((method) => method == 'accessibilitySettings'),
-      hasLength(1),
-    );
-    expect(calls, isNot(contains('startProfile')));
+    expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
+    expect(find.text('Activar accesibilidad'), findsNothing);
+    expect(calls, isNot(contains('accessibilitySettings')));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

@@ -18,7 +18,7 @@ jobs:
   validate-and-build:
     name: Validate and build three development APKs
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash
@@ -35,8 +35,8 @@ jobs:
           java-version: '17'
           cache: gradle
           cache-dependency-path: |
-            android/*.gradle.kts
-            android/*/build.gradle.kts
+            android/**/*.gradle.kts
+            android/**/gradle.properties
             android/gradle/wrapper/gradle-wrapper.properties
 
       - name: Flutter 3.47.2
@@ -65,6 +65,8 @@ jobs:
       - name: Dependencies, analysis and Flutter tests
         run: |
           set -euo pipefail
+          python3 tools/check_architecture.py --json
+          python3 -m unittest discover -s tools/tests -v
           flutter pub get --enforce-lockfile
           flutter analyze
           flutter test
@@ -99,9 +101,18 @@ jobs:
       - name: Build development release APKs by architecture
         run: flutter build apk --release --split-per-abi --android-project-arg=force-version-code-ignoring-abi=true
 
-      - name: Kotlin tests, Android lint and independent InputLab
+      - name: Tests and lint for every Android module, independent InputLab
         working-directory: android
-        run: bash ./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :inputlab:testDebugUnitTest :inputlab:assembleDebug :inputlab:lintDebug
+        run: |
+          set -euo pipefail
+          mapfile -t check_tasks < ../tools/android-check-tasks.txt
+          bash ./gradlew --no-daemon --max-workers=2 --console=plain "${check_tasks[@]}"
+
+      - name: Check compiled Android JSON ABI
+        run: python3 tools/check_android_json_abi.py --classes build/mapper-core/classes/kotlin/main --json
+
+      - name: Native capture rate and device capability tests
+        run: python3 tools/test_capture_policy.py
 
       - name: Name and verify architecture artifacts
         id: apk
@@ -143,8 +154,9 @@ jobs:
                               if name.startswith('lib/') and name.endswith('.so')}
                   if packaged != {abi}:
                       raise SystemExit(f'{source}: unexpected packaged ABIs {packaged}')
-                  if f'lib/{abi}/libapp.so' not in apk.namelist():
-                      raise SystemExit(f'{source}: missing Flutter application binary')
+                  for library in ('libapp.so', 'libflutter.so', 'libuwu_capture.so', 'libuwu_adb.so'):
+                      if f'lib/{abi}/{library}' not in apk.namelist():
+                          raise SystemExit(f'{source}: missing required application/native binary {library}')
               target = output / f'UwU-Mouse-{version}-{abi}-dev.apk'
               shutil.copyfile(source, target)
               checksums.append(f'{hashlib.sha256(target.read_bytes()).hexdigest()}  {target.name}')
@@ -194,9 +206,7 @@ jobs:
         with:
           name: android-reports-${{ github.run_id }}
           path: |
-            build/app/reports/
-            build/app/test-results/
-            build/inputlab/reports/
-            build/inputlab/test-results/
+            build/*/reports/
+            build/*/test-results/
           if-no-files-found: ignore
           retention-days: 7

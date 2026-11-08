@@ -1,5 +1,7 @@
 package dev.mobimapper.mobimapper.session
 
+import dev.mobimapper.mobimapper.runtime.NativeSessionHost
+
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
@@ -26,22 +28,23 @@ class SessionService : Service(), DisplayManager.DisplayListener {
             if(id==0 || locked || target?.state!=android.view.Display.STATE_ON) {
                 SessionController.pause("Pantalla apagada o bloqueada")
                 SessionController.targetChanged(false)
-                CaptureService.instance?.captureMouse(false)
-            } else CaptureService.instance?.refreshContext()
+                NativeSessionHost.instance?.captureMouse(false)
+            } else NativeSessionHost.instance?.refreshContext()
         }
     }
     override fun onCreate() {
         super.onCreate()
+        NativeSessionHost.initialize(this)
         dev.mobimapper.mobimapper.game.GameCoordinator.initialize(this)
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel("mapping", "UwU Mouse · sesión", NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 2, Intent(this, SessionService::class.java).setAction("stop"), PendingIntent.FLAG_IMMUTABLE)
-        val notification = Notification.Builder(this, "mapping").setSmallIcon(dev.mobimapper.mobimapper.R.drawable.mm_notification)
+        val notification = Notification.Builder(this, "mapping").setSmallIcon(dev.mobimapper.presentation.R.drawable.mm_notification)
             .setColor(android.graphics.Color.rgb(42,126,238))
             .setContentTitle("UwU Mouse · sesión local").setContentText("Controles en la burbuja")
             .setContentIntent(open).setOngoing(true).addAction(Notification.Action.Builder(
-                android.graphics.drawable.Icon.createWithResource(this,dev.mobimapper.mobimapper.R.drawable.mm_close),
+                android.graphics.drawable.Icon.createWithResource(this,dev.mobimapper.presentation.R.drawable.mm_close),
                 "Detener", stop).build()).build()
         startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         registerReceiver(lockReceiver, IntentFilter(Intent.ACTION_SCREEN_OFF), RECEIVER_NOT_EXPORTED)
@@ -55,13 +58,13 @@ class SessionService : Service(), DisplayManager.DisplayListener {
     }
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onDisplayAdded(displayId: Int) {
-        dev.mobimapper.mobimapper.session.CaptureService.instance?.refreshContext()
+        dev.mobimapper.mobimapper.runtime.NativeSessionHost.instance?.refreshContext()
         if(SessionController.active) SessionController.pause("Cambió la conexión de pantallas; reanuda manualmente")
     }
     override fun onDisplayRemoved(displayId: Int) {
         if (displayId == SessionController.targetDisplayId)
             dev.mobimapper.mobimapper.game.GameCoordinator.displayUnavailable(displayId)
-        else dev.mobimapper.mobimapper.session.CaptureService.instance?.refreshContext()
+        else dev.mobimapper.mobimapper.runtime.NativeSessionHost.instance?.refreshContext()
     }
     override fun onDisplayChanged(displayId: Int) {
         if (displayId != SessionController.targetDisplayId) return
@@ -72,9 +75,9 @@ class SessionService : Service(), DisplayManager.DisplayListener {
             // Cancel pending arms/diagnostics too, even when no contact has started yet.
             SessionController.pause("Pantalla apagada o desconectada; inicia manualmente")
             SessionController.targetChanged(false)
-            CaptureService.instance?.captureMouse(false)
+            NativeSessionHost.instance?.captureMouse(false)
         }
-        CaptureService.instance?.refreshContext()
+        NativeSessionHost.instance?.refreshContext()
     }
     override fun onDestroy() {
         SessionController.sessionServiceDestroyed()

@@ -44,7 +44,11 @@ class InputLabActivity : Activity() {
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        observer = ObserverView(this, observationId, activityId)
+        observer = ObserverView(
+            this, observationId, activityId,
+            intent.getBooleanExtra("latencyProbe", false),
+            intent.getIntExtra("latencyProbeSeconds", 30).coerceIn(1, 60),
+        )
         setContentView(observer)
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
@@ -161,11 +165,118 @@ private data class LifecycleEntry(val state: String, val uptime: Long, val resum
     }
 }
 
+/** Main-thread-only, bounded observation. Drawing timestamps describe CPU recording, not display. */
+private class ReceiverLatencyProbe(private val enabled: Boolean, durationSeconds: Int) {
+    private class Entry(
+        val sequence: Long,
+        val kind: String,
+        val eventTimeNanos: Long,
+        val receiptNanos: Long,
+        val action: Int,
+        val source: Int,
+        val deviceId: Int,
+        val historySize: Int,
+        val touchSequence: Long?,
+    ) {
+        var drawCpuCompleteNanos = 0L
+        var supersededBySequence = 0L
+    }
+
+    private val startedNanos = if (enabled) System.nanoTime() else 0L
+    private val deadlineNanos = if (enabled) startedNanos + durationSeconds * 1_000_000_000L else 0L
+    private val entries = ArrayList<Entry>(if (enabled) MAX_ENTRIES else 0)
+    private var pendingTouch: Entry? = null
+    private var pendingMouse: Entry? = null
+    private var limitReached = false
+
+    fun receiptNanos(): Long = if (enabled) System.nanoTime() else 0L
+
+    fun received(event: MotionEvent, receiptNanos: Long, kind: String, touchSequence: Long? = null) {
+        if (!enabled || receiptNanos < startedNanos || receiptNanos > deadlineNanos || limitReached) return
+        val entry = Entry(
+            entries.size.toLong() + 1L, kind, event.eventTimeNanos, receiptNanos,
+            event.action, event.source, event.deviceId, event.historySize, touchSequence,
+        )
+        val previous = if (kind == "mouse") pendingMouse else pendingTouch
+        previous?.supersededBySequence = entry.sequence
+        if (kind == "mouse") pendingMouse = entry else pendingTouch = entry
+        entries.add(entry)
+        if (entries.size == MAX_ENTRIES) limitReached = true
+    }
+
+    fun drawComplete() {
+        if (!enabled || (pendingTouch == null && pendingMouse == null)) return
+        // Timestamp after all drawing commands, once per frame and with no per-frame allocation.
+        val completed = System.nanoTime()
+        if (completed <= deadlineNanos) {
+            pendingTouch?.drawCpuCompleteNanos = completed
+            pendingMouse?.drawCpuCompleteNanos = completed
+        }
+        pendingTouch = null
+        pendingMouse = null
+    }
+
+    fun snapshot(includeActiveSamples: Boolean): JSONObject {
+        val now = if (enabled) System.nanoTime() else 0L
+        val collecting = enabled && now <= deadlineNanos && !limitReached
+        // Avoid repeatedly serializing thousands of entries during the timed interval.
+        val includeSamples = !collecting || includeActiveSamples
+        return JSONObject().apply {
+            put("enabled", enabled)
+            put("collecting", collecting)
+            put("startedMonotonicNanos", startedNanos)
+            put("deadlineMonotonicNanos", deadlineNanos)
+            put("snapshotMonotonicNanos", now)
+            put("maxSamples", MAX_ENTRIES)
+            put("recordedSamples", entries.size)
+            put("sampleLimitReached", limitReached)
+            put("samplesIncluded", includeSamples)
+            put("clock", "System.nanoTime and MotionEvent.eventTimeNanos; CLOCK_MONOTONIC, excludes suspend")
+            put("unit", "one current MotionEvent per callback; history is counted but not timed separately")
+            put("drawAttribution", "latest touch and latest mouse state in each frame; earlier callbacks of that kind are superseded")
+            put("limitations", "CPU onDraw completion only, not RenderThread/GPU/compositor/presentation/photon. Physical or injected origin is not inferred. Event timestamps of injected touches do not retain the mapper's original mouse timestamp. Existing observer snapshots, drawing and transition logs add overhead. Full samples are deferred during passive snapshots while collecting.")
+            put("samples", JSONArray().apply {
+                if (includeSamples) entries.forEach { entry ->
+                    put(JSONObject().apply {
+                        put("sequence", entry.sequence)
+                        put("kind", entry.kind)
+                        put("touchSequence", entry.touchSequence ?: JSONObject.NULL)
+                        put("eventTimeMonotonicNanos", entry.eventTimeNanos)
+                        put("receiptMonotonicNanos", entry.receiptNanos)
+                        put("action", entry.action)
+                        put("source", entry.source)
+                        put("deviceId", entry.deviceId)
+                        put("historySize", entry.historySize)
+                        put("eventToReceiptMs", (entry.receiptNanos - entry.eventTimeNanos) / 1e6)
+                        put("drawStatus", when {
+                            entry.drawCpuCompleteNanos != 0L -> "drawn_latest_state"
+                            entry.supersededBySequence != 0L -> "superseded_before_draw"
+                            now > deadlineNanos -> "window_ended_without_draw"
+                            else -> "pending_draw"
+                        })
+                        put("supersededBySequence", entry.supersededBySequence.takeIf { it != 0L } ?: JSONObject.NULL)
+                        put("drawCpuCompleteMonotonicNanos", entry.drawCpuCompleteNanos.takeIf { it != 0L } ?: JSONObject.NULL)
+                        put("receiptToDrawCpuMs", if (entry.drawCpuCompleteNanos == 0L) JSONObject.NULL
+                            else (entry.drawCpuCompleteNanos - entry.receiptNanos) / 1e6)
+                        put("eventToDrawCpuMs", if (entry.drawCpuCompleteNanos == 0L) JSONObject.NULL
+                            else (entry.drawCpuCompleteNanos - entry.eventTimeNanos) / 1e6)
+                    })
+                }
+            })
+        }
+    }
+
+    private companion object { const val MAX_ENTRIES = 4096 }
+}
+
 private class ObserverView(
     context: Context,
     private val observationId: String,
     private val activityId: String,
+    latencyProbeEnabled: Boolean,
+    latencyProbeSeconds: Int,
 ) : View(context) {
+    private val latencyProbe = ReceiverLatencyProbe(latencyProbeEnabled, latencyProbeSeconds)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val active = linkedMapOf<Int, Contact>()
     private val sequenceValidator = TouchSequenceValidator()
@@ -244,10 +355,12 @@ private class ObserverView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        val receiptNanos = latencyProbe.receiptNanos()
         val receipt = SystemClock.uptimeMillis()
-        if (event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)) {
-            observeMouse(event)
-        }
+        val mouse = event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)
+        // Mouse clicks also enter this touch observer; time them once as mouse, not again as touch.
+        if (mouse) observeMouse(event, receiptNanos)
+        else latencyProbe.received(event, receiptNanos, "touch", sequence + 1L)
         // Copy values during callback. Never retain a recyclable MotionEvent.
         val contacts = (0 until event.pointerCount).map { index ->
             Contact(event.getPointerId(index), event.getX(index), event.getY(index), event.getPressure(index))
@@ -327,7 +440,8 @@ private class ObserverView(
         postInvalidateOnAnimation()
     }
 
-    fun observeMouse(event: MotionEvent) {
+    fun observeMouse(event: MotionEvent, receiptNanos: Long = latencyProbe.receiptNanos()) {
+        latencyProbe.received(event, receiptNanos, "mouse")
         dirty = true
         mouseEvents++
         if (event.actionMasked == MotionEvent.ACTION_SCROLL) wheelEvents++
@@ -454,6 +568,7 @@ private class ObserverView(
             put("omittedTransitions", touchTransitions - transitions.size)
             put("lastReceivedEvent", samples.peekLast()?.json() ?: JSONObject.NULL)
             put("lastReceivedTransition", transitions.peekLast()?.json() ?: JSONObject.NULL)
+            put("latencyProbe", latencyProbe.snapshot(includeActiveSamples = reason != "passive"))
             put("limitations", "Event-to-receipt timing only. Origin physical/injected not inferred. No mapper communication.")
         }
         val payload = summary.toString(2)
@@ -563,6 +678,7 @@ private class ObserverView(
         paint.color = Color.WHITE
         paint.textSize = 23f * unit
         canvas.drawText("Guardar resumen de esta prueba", margin + 24f * unit, saveButton.centerY() + 8f * unit, paint)
+        latencyProbe.drawComplete()
     }
 
     companion object {

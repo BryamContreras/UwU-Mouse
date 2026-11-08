@@ -1,6 +1,7 @@
 package dev.mobimapper.mobimapper.game
 
-import android.accessibilityservice.AccessibilityService
+import dev.mobimapper.mobimapper.runtime.NativeSessionHost
+
 import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.Context
@@ -15,6 +16,8 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import dev.mobimapper.mobimapper.editor.ControllerBubble
+import dev.mobimapper.mobimapper.editor.BubbleSettingsStore
+import dev.mobimapper.mobimapper.editor.BubbleSettings
 import dev.mobimapper.mobimapper.editor.NativeEditor
 import dev.mobimapper.mobimapper.editor.MappedControlsOverlay
 import dev.mobimapper.mobimapper.editor.EditorDraft
@@ -29,7 +32,7 @@ object GameCoordinator {
     private val main=Handler(Looper.getMainLooper())
     private lateinit var app:Context
     private var repository:ProfileStore?=null
-    private var service:CaptureService?=null
+    private var service:NativeSessionHost?=null
     private var editor:NativeEditor?=null
     private var bubble:ControllerBubble?=null
     private var controls:MappedControlsOverlay?=null
@@ -66,6 +69,7 @@ object GameCoordinator {
     val bubbleMenuVisible:Boolean get()=bubble?.menuVisible==true
     val controlsVisible:Boolean get()=controls?.visible==true
     val bubbleAppearance:Map<String,Any>? get()=bubble?.appearance()
+    val cursorSettings:BubbleSettings get()=bubble?.settingsSnapshot ?: BubbleSettings()
     val ownOverlayVisible:Boolean get()=editorVisible || bubbleVisible || controlsVisible || service?.cursorVisible==true
     val sessionOpen:Boolean get()=toolsRequested
     fun cameraResumeKey():Int? = if(cameraShortcut>0 && toolsRequested && !editorVisible && SessionController.targetConfirmed &&
@@ -81,6 +85,18 @@ object GameCoordinator {
         return bubble?.containsCursorPoint(x,y)==true
     }
     fun cursorBubbleTouch(action:Int,x:Float,y:Float)=bubble?.dispatchCursorTouch(action,x,y)==true
+    val menuPointerAvailable:Boolean get()=toolsRequested && bubbleMenuVisible && !editorVisible &&
+        presentationDisplayId==SessionController.targetDisplayId
+    fun menuPointerTarget(x:Float,y:Float):LocalPointerTarget =
+        if(menuPointerAvailable) bubble?.localPointerTarget(x,y) ?: LocalPointerTarget.NONE else LocalPointerTarget.NONE
+    fun menuPointerTouch(target:LocalPointerTarget,action:Int,x:Float,y:Float):Boolean = when(target) {
+        LocalPointerTarget.MENU -> bubble?.dispatchMenuCursorTouch(action,x,y)==true
+        LocalPointerTarget.BUBBLE -> bubble?.dispatchCursorTouch(action,x,y)==true
+        LocalPointerTarget.NONE -> false
+    }
+    fun menuPointerScroll(x:Float,y:Float,vertical:Float)=bubble?.dispatchMenuCursorScroll(x,y,vertical)==true
+    fun menuPointerHover(x:Float,y:Float)=bubble?.dispatchMenuCursorHover(x,y)==true
+    fun clearMenuPointerHover() { bubble?.clearMenuCursorHover() }
     @Synchronized fun initialize(context:Context) {
         if(repository==null) { app=context.applicationContext; repository=ProfileStore(app) }
     }
@@ -156,9 +172,9 @@ object GameCoordinator {
         val cursor=if(SessionController.active) SessionController.cursorMode else profileMenuCursor
         startProfile(id,cursor,requireCurrentContext=true)
     }
-    fun attach(capture:CaptureService) {
+    fun attach(capture:NativeSessionHost) {
         initialize(capture);service=capture
-        // Binding accessibility alone creates no display contexts or presentation objects.
+        // Initializing the native host alone creates no presentation windows.
         // Explicit editing/playing configures the selected display after its release barrier.
     }
     private fun configurePresentation(displayId:Int) {
@@ -166,10 +182,12 @@ object GameCoordinator {
         val capture=requireNotNull(service)
         capture.hideCursorForTransition();editor?.close();bubble?.close();controls?.hide()
         val context=capture.overlayContextFor(displayId)
-        editor=NativeEditor(capture,context);bubble=ControllerBubble(capture,context);controls=MappedControlsOverlay(capture,context)
+        val settings=BubbleSettingsStore(capture)
+        editor=NativeEditor(capture,context,capture);bubble=ControllerBubble(capture,context,settings);controls=MappedControlsOverlay(capture,context)
         presentationDisplayId=displayId;activeWindow=null;settledTarget=null
+        capture.applyCursorSettings(settings.value)
     }
-    fun detach(capture:CaptureService) {
+    fun detach(capture:NativeSessionHost) {
         if(service===capture) { operation++; waiting=false; toolsRequested=false; settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); editor?.close(); bubble?.close();controls?.hide(); editor=null; bubble=null;controls=null;presentationDisplayId=-1; service=null }
     }
     fun profiles()=store().list().map { wire(ProfileCodec.toJson(it)) }
@@ -185,7 +203,7 @@ object GameCoordinator {
         check(Looper.myLooper()==Looper.getMainLooper()) { "La restauración necesita el hilo principal" }
         check(SessionController.mode==SessionMode.STOPPED && !SessionController.active && !SessionController.isTransitioning() &&
             SessionController.contacts==0 && !SessionController.releaseUnverified && !waiting && !startPending &&
-            !toolsRequested && !editorVisible && !bubbleVisible && CaptureService.instance?.mouseCaptured!=true) {
+            !toolsRequested && !editorVisible && !bubbleVisible && NativeSessionHost.instance?.mouseCaptured!=true) {
             "Detén la sesión y cierra el editor antes de restaurar perfiles"
         }
         val backend=requireNotNull(dev.mobimapper.mobimapper.backend.BackendRegistry.injector) { "Activa el motor antes de restaurar perfiles" }
@@ -279,7 +297,7 @@ object GameCoordinator {
         geometry(displayId)
         startPending=false
         controls?.hide()
-        check(service!=null) { "Activa la accesibilidad de MobiMapper" }
+        check(service!=null) { "Abre UwU Mouse para preparar la captura nativa" }
         GameCatalog.requireLaunchable(app,requested.packageName)
         val ticket=++operation; waiting=true; toolsRequested=true; currentId=id
         refreshProfileLibrary(requested.packageName,displayId)
@@ -324,7 +342,7 @@ object GameCoordinator {
         if(requireCurrentContext) check(displayId==SessionController.targetDisplayId && SessionController.targetConfirmed && service?.currentApplicationPackage==p.packageName) { "Vuelve al juego antes de cambiar el perfil" }
         cameraShortcut=if(p.camera.enabled) p.shortcuts.cameraToggle else 0
         require(p.calibration.confirmed) { "Coloca los controles y guarda en el editor primero" }
-        check(service!=null) { "Activa la accesibilidad de MobiMapper" }
+        check(service!=null) { "Abre UwU Mouse para preparar la captura nativa" }
         GameCatalog.requireLaunchable(app,p.packageName)
         val ticket=++operation; currentId=p.id; waiting=true; toolsRequested=true
         refreshProfileLibrary(p.packageName,displayId)
@@ -464,6 +482,19 @@ object GameCoordinator {
     fun refreshControls() {
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { refreshControls() }; return }
         guardPresentation("controls") { refreshControlsOnMain() }
+        service?.refreshMenuPointerSources()
+    }
+    /** Must finish lowering passive windows before the native host shows a stronger cursor. */
+    fun refreshPassiveWindowOpacity(displayId:Int):Boolean {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        if(presentationDisplayId!=displayId) return true
+        var refreshed=false
+        guardPresentation("opacity") {
+            bubble?.refreshWindowOpacity()
+            controls?.refreshWindowOpacity()
+            refreshed=true
+        }
+        return refreshed
     }
     private fun refreshControlsOnMain() {
         if(!toolsRequested || editorVisible || SessionController.mode==SessionMode.STOPPED || SessionController.targetPackage==SessionController.TARGET || !SessionController.targetConfirmed) { bubble?.hide();controls?.hide(); return }
@@ -487,6 +518,7 @@ object GameCoordinator {
         }
         val profile=store().get(id)
         val presentation=bubble?.settingsSnapshot
+        presentation?.let { service?.applyCursorSettings(it) }
         if(!waiting && profile!=null && presentation?.showControls==true && !geometryInvalidated && !recovering && !blocked && profile.calibration.confirmed) {
             controls?.show(profile,presentation.controlsOpacity)
             if(bubble?.copyMenuBounds(menuBounds)==true) controls?.avoid(menuBounds) else controls?.avoid(null)
@@ -508,7 +540,7 @@ object GameCoordinator {
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
             onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)})
     }
-    private fun openControlsMenu() {
+    fun openControlsMenu() {
         if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed) return
         if(SessionController.mode==SessionMode.RECOVERING || SessionController.mode==SessionMode.BLOCKED || SessionController.releaseUnverified) {
             refreshControls();guardPresentation("menu") { bubble?.openMenu() };return
@@ -538,7 +570,8 @@ object GameCoordinator {
     fun geometryChanged() {
         geometryInvalidated=true;settledTarget=null;controls?.hide()
         if(editorVisible) { recordEditorClose("geometry_changed"); editor?.close(); SessionController.editorClosed() }
-        if(SessionController.active || SessionController.activeProfileId!=null) SessionController.pause("Geometría cambiada; recalibra el perfil")
+        if(SessionController.active || SessionController.activeProfileId!=null)
+            SessionController.pause("Cambió la pantalla; vuelve a iniciar para verificar el perfil")
     }
     fun displayUnavailable(displayId:Int) {
         if(displayId!=SessionController.targetDisplayId) return

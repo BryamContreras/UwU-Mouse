@@ -1,0 +1,1 @@
+-keep class dev.mobimapper.capture.nativeinput.ShellEvdevCapture { *; }

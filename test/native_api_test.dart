@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:mobimapper/native_api.dart';
+import 'package:mobimapper/application/ports/mapper_gateway.dart';
+import 'package:mobimapper/platform/android/method_channel_mapper_gateway.dart';
+
+import 'support/profile_fixtures.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -28,6 +33,33 @@ void main() {
     expect(decoded.releaseUnverified, isTrue);
     expect(decoded.contacts, 3);
     expect(decoded.backend, isFalse);
+  });
+  test('native capture readiness is independent from legacy accessibility', () {
+    expect(NativeStatus.fromWire(status()).captureReady, isFalse);
+    for (final value in [null, false, 1, 'true']) {
+      expect(
+        NativeStatus.fromWire(status()..['captureReady'] = value).captureReady,
+        isFalse,
+      );
+    }
+    final decoded = NativeStatus.fromWire(
+      status()
+        ..['accessibility'] = false
+        ..['captureReady'] = true
+        ..['captureBackend'] = 'native-evdev'
+        ..['captureError'] = '',
+    );
+    expect(decoded.captureReady, isTrue);
+    expect(decoded.captureBackend, 'native-evdev');
+    expect(decoded.accessibility, isFalse);
+  });
+  test('explicit overlay denial overrides a legacy granted status', () {
+    final wire = status()..['drawOverlays'] = true;
+    expect(NativeStatus.fromWire(wire).overlayPermission, isTrue);
+    wire['overlayPermission'] = false;
+    expect(NativeStatus.fromWire(wire).overlayPermission, isFalse);
+    wire['overlayPermission'] = true;
+    expect(NativeStatus.fromWire(wire).overlayPermission, isTrue);
   });
   test('incompatible native protocol is rejected', () {
     expect(
@@ -125,7 +157,9 @@ void main() {
       () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null),
     );
-    await const NativeApi().execute(NativeCommand.openOverlaySettings);
+    await const MethodChannelMapperGateway().execute(
+      NativeCommand.openOverlaySettings,
+    );
     expect(calls.single.method, 'openOverlaySettings');
     expect(calls.single.arguments, isNull);
   });
@@ -177,31 +211,169 @@ void main() {
     wire.remove('switchKey');
     expect(() => LocalProfile.fromWire(wire), throwsFormatException);
   });
-  test('schema 3 continuous mode is read without changing legacy profiles', () {
-    final wire = profileWire()..['schemaVersion'] = 3;
-    (wire['camera']! as Map)['mode'] = 'continuous';
-    final current = LocalProfile.fromWire(wire);
-    expect(current.schemaVersion, 3);
-    expect(current.cameraMode, 'continuous');
-    expect(current.packageName, 'com.dts.freefireth');
-    expect(current.cameraToggle, 138);
-    for (final legacy in [1, 2]) {
-      expect(
-        LocalProfile.fromWire({...wire, 'schemaVersion': legacy}).cameraMode,
-        'bounded',
-      );
-    }
-  });
+  test(
+    'camera modes retain their identity without changing legacy profiles',
+    () {
+      for (final entry in const {
+        'continuous': 'Continua',
+        'smooth': 'Región suave',
+        'bounded': 'Modo anterior',
+      }.entries) {
+        final wire = profileWire()..['schemaVersion'] = 3;
+        (wire['camera']! as Map)['mode'] = entry.key;
+        final current = LocalProfile.fromWire(wire);
+        expect(current.schemaVersion, 3);
+        expect(current.cameraMode, entry.key);
+        expect(current.cameraModeLabel, entry.value);
+        expect(current.packageName, 'com.dts.freefireth');
+        expect(current.cameraToggle, 138);
+        for (final legacy in [1, 2]) {
+          final decoded = LocalProfile.fromWire({
+            ...wire,
+            'schemaVersion': legacy,
+          });
+          expect(decoded.cameraMode, 'bounded');
+          expect(decoded.cameraModeLabel, 'Modo anterior');
+        }
+        expect((wire['camera']! as Map)['mode'], entry.key);
+      }
+    },
+  );
+  test(
+    'smooth mode preserves independent camera settings in the current schema',
+    () {
+      final wire = displayProfileWire('external', 'smooth-dex');
+      final camera = wire['camera']! as Map;
+      camera
+        ..['mode'] = 'smooth'
+        ..['sensitivityX'] = 2.5
+        ..['sensitivityY'] = .75
+        ..['updateRateHz'] = 100
+        ..['suspendKey'] = 0
+        ..['suspendMouseButton'] = 16;
+      final before = Map<Object?, Object?>.from(camera);
+      final decoded = LocalProfile.fromWire(wire);
+      expect(decoded.schemaVersion, 9);
+      expect(decoded.cameraMode, 'smooth');
+      expect(decoded.cameraModeLabel, 'Región suave');
+      expect(decoded.sensitivityX, 2.5);
+      expect(decoded.sensitivityY, .75);
+      expect(decoded.cameraUpdateRateHz, 100);
+      expect(decoded.cameraSuspendKey, 0);
+      expect(decoded.cameraSuspendMouseButton, 16);
+      expect(camera, before);
+    },
+  );
   test('schema 3 requires a known camera mode', () {
     final missing = profileWire()..['schemaVersion'] = 3;
     (missing['camera']! as Map).remove('mode');
     expect(() => LocalProfile.fromWire(missing), throwsFormatException);
-    final invalid = profileWire()..['schemaVersion'] = 3;
-    (invalid['camera']! as Map)['mode'] = 'unknown';
-    expect(() => LocalProfile.fromWire(invalid), throwsFormatException);
+    for (final mode in ['unknown', 'deferred', 'SMOOTH', 'smooth ', '']) {
+      final invalid = profileWire()..['schemaVersion'] = 3;
+      (invalid['camera']! as Map)['mode'] = mode;
+      expect(() => LocalProfile.fromWire(invalid), throwsFormatException);
+    }
+  });
+  test('cadence fields are optional and preserve signed M1 intensity', () {
+    for (final schema in [1, 2, 3, 4, 5, 6, 7, 8, 9]) {
+      final wire = displayProfileWire('external', 'cadence-$schema')
+        ..['schemaVersion'] = schema;
+      final defaults = LocalProfile.fromWire(wire);
+      expect(defaults.actionCadenceEnabled, isFalse);
+      expect(defaults.actionCadenceYPercent, 0);
+      final action = wire['action']! as Map;
+      for (final percent in [-100, -1, 0, 1, 100]) {
+        action
+          ..['cadenceEnabled'] = true
+          ..['cadenceYPercent'] = percent;
+        final before = Map<Object?, Object?>.from(action);
+        final decoded = LocalProfile.fromWire(wire);
+        expect(decoded.actionCadenceEnabled, isTrue);
+        expect(decoded.actionCadenceYPercent, percent);
+        expect(decoded.actionBehavior, 'tap');
+        expect(action, before);
+      }
+      action['cadenceEnabled'] = false;
+      final disabled = LocalProfile.fromWire(wire);
+      expect(disabled.actionCadenceEnabled, isFalse);
+      expect(disabled.actionCadenceYPercent, 100);
+      action.remove('cadenceYPercent');
+      expect(LocalProfile.fromWire(wire).actionCadenceYPercent, 0);
+      action
+        ..remove('cadenceEnabled')
+        ..['cadenceYPercent'] = -35;
+      final partial = LocalProfile.fromWire(wire);
+      expect(partial.actionCadenceEnabled, isFalse);
+      expect(partial.actionCadenceYPercent, -35);
+    }
+  });
+  test('cadence metadata rejects malformed base and additional actions', () {
+    for (final field in ['cadenceEnabled', 'cadenceYPercent']) {
+      final invalidValues = field == 'cadenceEnabled'
+          ? [null, 0, 1, 'true']
+          : [null, true, '10', 1.5, -101, 101];
+      for (final value in invalidValues) {
+        for (final additional in [false, true]) {
+          final wire = profileWire();
+          final action = Map<Object?, Object?>.from(wire['action']! as Map)
+            ..[field] = value;
+          if (additional) {
+            wire['additionalActions'] = [action];
+          } else {
+            wire['action'] = action;
+          }
+          expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+        }
+      }
+    }
   });
   test(
-    'schema 4 reads dispatch and marker settings while legacy stays compatible',
+    'cadence requires an enabled M1 tap and cannot hide on another action',
+    () {
+      for (final invalidAction in [
+        {'triggerKind': 'key', 'code': 35},
+        {'code': 2},
+        {'behavior': 'repeat'},
+        {'behavior': 'cursorToggle'},
+        {'enabled': false},
+      ]) {
+        for (final additional in [false, true]) {
+          for (final cadence in [
+            {'cadenceEnabled': true, 'cadenceYPercent': 0},
+            {'cadenceEnabled': false, 'cadenceYPercent': 1},
+          ]) {
+            final wire = profileWire();
+            final action = <Object?, Object?>{
+              ...Map<Object?, Object?>.from(wire['action']! as Map),
+              ...invalidAction,
+              ...cadence,
+            };
+            if (additional) {
+              wire['additionalActions'] = [action];
+            } else {
+              wire['action'] = action;
+            }
+            expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+          }
+        }
+      }
+      final wire = profileWire();
+      final fire = Map<Object?, Object?>.from(wire['action']! as Map)
+        ..['cadenceEnabled'] = true
+        ..['cadenceYPercent'] = -25;
+      wire['additionalActions'] = [fire];
+      (wire['action']! as Map)
+        ..['enabled'] = false
+        ..['code'] = 0;
+      final before = Map<Object?, Object?>.from(fire);
+      final decoded = LocalProfile.fromWire(wire);
+      expect(decoded.actionCount, 1);
+      expect(decoded.actionCadenceEnabled, isFalse);
+      expect(fire, before);
+    },
+  );
+  test(
+    'schema 4 reads capture and marker settings while legacy stays compatible',
     () {
       final wire = profileWire()..['schemaVersion'] = 4;
       (wire['camera']! as Map)
@@ -229,12 +401,12 @@ void main() {
   test(
     'schema 4 rejects unsupported rates, missing style, and out of range sizes',
     () {
-      for (final rate in [0, 60, 90, 120, 144, 240]) {
+      for (final rate in [0, 60, 90, 100, 120, 144, 240, 500, 1000]) {
         final wire = profileWire();
         (wire['camera']! as Map)['updateRateHz'] = rate;
         expect(LocalProfile.fromWire(wire).cameraUpdateRateHz, rate);
       }
-      for (final rate in [-1, 30, 61, 1000, '120']) {
+      for (final rate in [-1, 30, 61, 999, 1001, '120']) {
         final wire = profileWire();
         (wire['camera']! as Map)['updateRateHz'] = rate;
         expect(() => LocalProfile.fromWire(wire), throwsFormatException);
@@ -353,6 +525,49 @@ void main() {
       throwsFormatException,
     );
   });
+  test('legacy suspend key 125 stays a key when mouse metadata is absent', () {
+    final wire = profileWire();
+    final camera = wire['camera']! as Map;
+    camera['suspendKey'] = 125;
+    camera.remove('suspendMouseButton');
+    final decoded = LocalProfile.fromWire(
+      jsonDecode(jsonEncode(wire)) as Map<String, dynamic>,
+    );
+    expect(decoded.cameraSuspendKey, 125);
+    expect(decoded.cameraSuspendMouseButton, 0);
+  });
+  test('mouse suspend button survives the profile JSON round trip', () {
+    final wire = profileWire();
+    (wire['camera']! as Map)
+      ..['suspendKey'] = 0
+      ..['suspendMouseButton'] = 16;
+    final decoded = LocalProfile.fromWire(
+      jsonDecode(jsonEncode(wire)) as Map<String, dynamic>,
+    );
+    expect(decoded.cameraSuspendKey, 0);
+    expect(decoded.cameraSuspendMouseButton, 16);
+  });
+  test(
+    'optional mouse suspend metadata accepts only supported button masks',
+    () {
+      for (final button in [0, 1, 2, 4, 8, 16]) {
+        final wire = profileWire();
+        (wire['camera']! as Map)['suspendMouseButton'] = button;
+        expect(LocalProfile.fromWire(wire).cameraSuspendMouseButton, button);
+      }
+      for (final value in [null, true, 16.0, '16', -1, 3, 32]) {
+        final wire = profileWire();
+        wire['camera'] = Map<Object?, Object?>.from(wire['camera']! as Map)
+          ..['suspendMouseButton'] = value;
+        expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+      }
+      for (final schema in [1, 2, 3, 4, 5]) {
+        final wire = profileWire()..['schemaVersion'] = schema;
+        (wire['camera']! as Map)['suspendMouseButton'] = 'ignored';
+        expect(LocalProfile.fromWire(wire).cameraSuspendMouseButton, 0);
+      }
+    },
+  );
   test('schema 6 rejects malformed or unbounded macro sequences', () {
     final exact = macroWire(0)
       ..['steps'] = List.generate(
@@ -395,75 +610,82 @@ void main() {
       );
     }
   });
-  test('schema 7 preserves action behavior and excludes the disabled base from the budget', () {
-    final wire = profileWire();
-    (wire['joystick']! as Map)['enabled'] = false;
-    (wire['camera']! as Map)['enabled'] = false;
-    (wire['action']! as Map)
-      ..['enabled'] = false
-      ..['code'] = 0;
-    final repeat = Map<Object?, Object?>.from(wire['action']! as Map)
-      ..['enabled'] = true
-      ..['triggerKind'] = 'key'
-      ..['code'] = 35
-      ..['behavior'] = 'repeat'
-      ..['repeatIntervalMs'] = 50;
-    final cursor = Map<Object?, Object?>.from(repeat)
-      ..['code'] = 36
-      ..['behavior'] = 'cursorToggle';
-    wire['additionalActions'] = [repeat, cursor];
-    final decoded = LocalProfile.fromWire(wire);
-    expect(decoded.schemaVersion, 7);
-    expect(decoded.joystickEnabled, isFalse);
-    expect(decoded.cameraEnabled, isFalse);
-    expect(decoded.actionEnabled, isFalse);
-    expect(decoded.actionCount, 2);
-    wire['additionalActions'] = <Object?>[];
-    expect(LocalProfile.fromWire(wire).actionCount, 0);
-    wire['additionalActions'] = List.generate(
-      24,
-      (index) => Map<Object?, Object?>.from(repeat)..['code'] = 100 + index,
-    );
-    expect(LocalProfile.fromWire(wire).actionCount, 24);
-    (wire['additionalActions']! as List).add(cursor);
-    expect(() => LocalProfile.fromWire(wire), throwsFormatException);
-  });
-  test('schema 7 metadata is typed and legacy metadata cannot silently activate new behavior', () {
-    for (final version in [1, 2, 3, 4, 5, 6]) {
-      final wire = profileWire()..['schemaVersion'] = version;
+  test(
+    'schema 7 preserves action behavior and excludes the disabled base from the budget',
+    () {
+      final wire = profileWire();
       (wire['joystick']! as Map)['enabled'] = false;
       (wire['camera']! as Map)['enabled'] = false;
       (wire['action']! as Map)
         ..['enabled'] = false
+        ..['code'] = 0;
+      final repeat = Map<Object?, Object?>.from(wire['action']! as Map)
+        ..['enabled'] = true
+        ..['triggerKind'] = 'key'
+        ..['code'] = 35
         ..['behavior'] = 'repeat'
         ..['repeatIntervalMs'] = 50;
-      final legacy = LocalProfile.fromWire(wire);
-      expect(legacy.joystickEnabled, isTrue);
-      expect(legacy.cameraEnabled, isTrue);
-      expect(legacy.actionEnabled, isTrue);
-      expect(legacy.actionBehavior, 'tap');
-      expect(legacy.repeatIntervalMs, 100);
-      expect(legacy.actionCount, 1);
-    }
-    for (final section in ['joystick', 'camera', 'action']) {
-      final missing = profileWire();
-      (missing[section]! as Map).remove('enabled');
-      expect(() => LocalProfile.fromWire(missing), throwsFormatException);
-      for (final invalidValue in [null, 0, 'true']) {
-        final wire = profileWire();
-        wire[section] = Map<Object?, Object?>.from(wire[section]! as Map)
-          ..['enabled'] = invalidValue;
-        expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+      final cursor = Map<Object?, Object?>.from(repeat)
+        ..['code'] = 36
+        ..['behavior'] = 'cursorToggle';
+      wire['additionalActions'] = [repeat, cursor];
+      final decoded = LocalProfile.fromWire(wire);
+      expect(decoded.schemaVersion, 7);
+      expect(decoded.joystickEnabled, isFalse);
+      expect(decoded.cameraEnabled, isFalse);
+      expect(decoded.actionEnabled, isFalse);
+      expect(decoded.actionCount, 2);
+      wire['additionalActions'] = <Object?>[];
+      expect(LocalProfile.fromWire(wire).actionCount, 0);
+      wire['additionalActions'] = List.generate(
+        24,
+        (index) => Map<Object?, Object?>.from(repeat)..['code'] = 100 + index,
+      );
+      expect(LocalProfile.fromWire(wire).actionCount, 24);
+      (wire['additionalActions']! as List).add(cursor);
+      expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+    },
+  );
+  test(
+    'schema 7 metadata is typed and legacy metadata cannot silently activate new behavior',
+    () {
+      for (final version in [1, 2, 3, 4, 5, 6]) {
+        final wire = profileWire()..['schemaVersion'] = version;
+        (wire['joystick']! as Map)['enabled'] = false;
+        (wire['camera']! as Map)['enabled'] = false;
+        (wire['action']! as Map)
+          ..['enabled'] = false
+          ..['behavior'] = 'repeat'
+          ..['repeatIntervalMs'] = 50;
+        final legacy = LocalProfile.fromWire(wire);
+        expect(legacy.joystickEnabled, isTrue);
+        expect(legacy.cameraEnabled, isTrue);
+        expect(legacy.actionEnabled, isTrue);
+        expect(legacy.actionBehavior, 'tap');
+        expect(legacy.repeatIntervalMs, 100);
+        expect(legacy.actionCount, 1);
       }
-    }
-    final extra = Map<Object?, Object?>.from(profileWire()['action']! as Map)
-      ..['enabled'] = false;
-    expect(
-      () =>
-          LocalProfile.fromWire(profileWire()..['additionalActions'] = [extra]),
-      throwsFormatException,
-    );
-  });
+      for (final section in ['joystick', 'camera', 'action']) {
+        final missing = profileWire();
+        (missing[section]! as Map).remove('enabled');
+        expect(() => LocalProfile.fromWire(missing), throwsFormatException);
+        for (final invalidValue in [null, 0, 'true']) {
+          final wire = profileWire();
+          wire[section] = Map<Object?, Object?>.from(wire[section]! as Map)
+            ..['enabled'] = invalidValue;
+          expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+        }
+      }
+      final extra = Map<Object?, Object?>.from(profileWire()['action']! as Map)
+        ..['enabled'] = false;
+      expect(
+        () => LocalProfile.fromWire(
+          profileWire()..['additionalActions'] = [extra],
+        ),
+        throwsFormatException,
+      );
+    },
+  );
   test(
     'schema 7 action behavior and interval reject missing or unsafe metadata',
     () {
@@ -507,7 +729,7 @@ void main() {
       () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, null),
     );
-    const api = NativeApi();
+    const api = MethodChannelMapperGateway();
     final created = await api.createProfile(
       'com.dts.freefireth',
       'Entrenamiento',
@@ -549,7 +771,7 @@ void main() {
         () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(channel, null),
       );
-      const api = NativeApi();
+      const api = MethodChannelMapperGateway();
       final status = await api.activationStatus();
       expect(status.paired, isTrue);
       expect(status.host, '127.0.0.1');
@@ -581,84 +803,3 @@ void main() {
     },
   );
 }
-
-Map<Object?, Object?> macroWire(int index) => {
-  'id': 'macro-$index',
-  'name': 'Macro ${index + 1}',
-  'x': .5,
-  'y': .5,
-  'triggerKind': 'key',
-  'code': 200 + index,
-  'markerSizeDp': 52.0,
-  'steps': [
-    <Object?, Object?>{'x': .4, 'y': .6, 'waitMs': 100},
-  ],
-};
-
-Map<Object?, Object?> displayProfileWire(String scope, String id) {
-  final wire = profileWire()
-    ..['schemaVersion'] = 9
-    ..['switchKey'] = 0
-    ..['id'] = id
-    ..['name'] = scope == 'external' ? 'Perfil DeX' : 'Perfil teléfono';
-  wire['calibration'] = <Object?, Object?>{
-    ...Map<Object?, Object?>.from(wire['calibration']! as Map),
-    'displayScope': scope,
-    'windowFrame': scope == 'external'
-        ? {'left': 0.0, 'top': 0.0, 'right': 2316.0, 'bottom': 1080.0}
-        : null,
-  };
-  return wire;
-}
-
-Map<Object?, Object?> profileWire({bool calibrated = true}) => {
-  'schemaVersion': 7,
-  'id': 'profile-1',
-  'name': 'Entrenamiento',
-  'packageName': 'com.dts.freefireth',
-  'orientation': 'landscape',
-  'calibration': {
-    'screenWidth': 2316,
-    'screenHeight': 1080,
-    'rotation': 1,
-    'confirmed': calibrated,
-    'area': {'left': 75.0, 'top': 0.0, 'right': 2241.0, 'bottom': 1080.0},
-  },
-  'joystick': {
-    'x': .2,
-    'y': .7,
-    'radius': .12,
-    'upKey': 51,
-    'downKey': 47,
-    'leftKey': 29,
-    'rightKey': 32,
-    'enabled': true,
-  },
-  'camera': {
-    'x': .68,
-    'y': .45,
-    'width': .3,
-    'height': .3,
-    'sensitivityX': 1.0,
-    'sensitivityY': 1.25,
-    'mode': 'continuous',
-    'updateRateHz': 0,
-    'markerSizeDp': 52.0,
-    'precisionAim': false,
-    'suspendKey': 0,
-    'enabled': true,
-  },
-  'action': {
-    'x': .85,
-    'y': .75,
-    'triggerKind': 'mouse',
-    'code': 1,
-    'markerSizeDp': 52.0,
-    'enabled': true,
-    'behavior': 'tap',
-    'repeatIntervalMs': 100,
-  },
-  'additionalActions': <Object?>[],
-  'macros': <Object?>[],
-  'shortcuts': {'cameraToggle': 138, 'stop': 139, 'edit': 137},
-};

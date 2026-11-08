@@ -1,4 +1,6 @@
-# Arquitectura de UwU Mouse
+# Arquitectura histórica de UwU Mouse 0.2.0+37
+
+> Referencia anterior a la migración nativa. La estructura y los contratos actuales están en [ARCHITECTURE.md](../ARCHITECTURE.md). Las secciones de accesibilidad de este documento describen únicamente el APK anterior.
 
 Esta descripción corresponde a **0.2.0+37**. Flutter gestiona juegos, perfiles, ajustes y estado. Kotlin procesa la entrada, el editor nativo, las transiciones y la composición multitáctil. El paquete Android histórico se conserva para permitir actualizaciones con los mismos datos y autorizaciones cuando la firma coincide.
 
@@ -78,3 +80,41 @@ Una muestra estable de 10.464 s con editor cerrado, sin grabación y con entrada
 La suma fue 28.19% de un núcleo; los procesos del juego se excluyeron. Hubo 896 muestras relativas y 897 inyecciones, sin nuevos bordes de teclado durante el intervalo. La cola tuvo máximo 2 y terminó en 0. Los percentiles internos rodantes del mismo SID fueron p95 de cola 0.574 ms e IPC 6.568 ms; no se limitan al intervalo de CPU. El ruteo de 897 eventos costó una media de 0.563 ms por RPC en una ventana diagnóstica de 12.164 s, distinta de la muestra de CPU.
 
 Estas cifras incluyen instrumentación y observación ADB, no son latencia hasta imagen ni FPS y no permiten comparar causalmente con 0.1.1. Una referencia de reposo sin entradas se mantiene separada; cero ticks observados a la resolución del muestreo no significa coste cero. La medición breve tampoco acredita rendimiento sostenido o compatibilidad universal.
+
+### Instrumentación opcional de entrada
+
+`InputLatencyProbe` registra en memoria la llegada a `onMotionEvent`/`onKeyEvent`,
+la recepción de la muestra más reciente en el worker y la terminación CPU del
+dibujo del cursor. Conserva los tiempos originales del mouse; las etapas de
+inyección etiquetadas `syntheticComposition` parten del timestamp táctil nuevo y
+no se presentan como latencia desde el mouse físico. Los históricos se separan de
+la muestra actual. El modo está apagado por defecto, dura hasta 60 s y conserva
+hasta 4096 registros, indicando cuántos se sobrescribieron.
+
+El provider existente, restringido a ADB autorizado, acepta `latencyStart`
+(`durationMs:i:30000`), `latencyStop` y `latencySnapshot` (`offset:i:0`,
+`limit:i:512`). Se detiene antes de paginar para mantener offsets estables.
+`scripts/Measure-InputLatency.ps1 -Serial SERIAL -Instrumented` recoge las etapas;
+sin ese switch observa las métricas ya disponibles en el APK instalado. Sus
+percentiles de cola/IPC siguen describiendo los buffers rodantes de la sesión.
+
+`tools/probes/Correlate-MouseLatency.ps1` correlaciona clics aislados del registro
+kernel con las transiciones del receptor independiente. Rechaza conteos distintos
+o correspondencias ambiguas. Mide hasta el callback receptor; no separa por sí solo
+la entrega de accesibilidad ni acredita dibujo.
+
+El módulo independiente `android/latencyprobe` compara la entrega de mouse a una
+Activity con la entrega a un servicio de accesibilidad usando el mismo View.
+`scripts/Measure-CapturePaths.ps1` repite el orden directo/accesibilidad y después
+accesibilidad/directo. Es un benchmark auxiliar, no una medición del callback del
+APK original ni una implementación alternativa de captura global. La sonda C++
+`tools/probes/NativeMouseLatencyProbe.cpp` mide lectura de un nodo de mouse como
+shell, con reloj monotónico y sin captura exclusiva o inyección. Esa lectura no
+demuestra supresión de la entrada original ni compatibilidad con juegos.
+
+Los relojes de origen y recepción usan la base monotónica de Android, no el tiempo
+de llegada por ADB Wi-Fi. `onDraw` registra comandos de CPU y un ACK solo la vuelta
+de la llamada: ninguno acredita presentación física. No se suman percentiles de
+etapas ni se comparan ventanas como si fueran el mismo conjunto de eventos. Las
+evidencias físicas y los informes de cada dispositivo permanecen en `evidence/`,
+excluido del repositorio público.

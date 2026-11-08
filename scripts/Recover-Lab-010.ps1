@@ -17,4 +17,4 @@ Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','force-stop','dev.mobima
 Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','start','-W','-n','dev.mobimapper.mobimapper/.MainActivity')
 & "$PSScriptRoot\Activate.ps1" -Serial $targetSerial
 Write-Host 'The old laboratory window and mapper process were stopped. This resets the test; it does not prove delivery of the lost releases.'
-Write-Host 'Android may have disabled only MobiMapper accessibility after force-stop. Re-enable that service in the phone settings before a new session.'
+Write-Host 'Reopen UwU Mouse to initialize its native host. Verify the backend and overlay permission before starting a new session.'

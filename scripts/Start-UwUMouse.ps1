@@ -45,6 +45,10 @@ function Read-UwUStatus {
 function Test-UwUReady($Status) {
     return $Status.backend -and $Status.backendUid -eq 2000 -and $Status.injectPermission
 }
+function Test-UwUCaptureReady($Status) {
+    $property=$Status.PSObject.Properties['captureReady']
+    return $null -ne $property -and [bool]$property.Value
+}
 
 function Test-UwUBusy($Status) {
     return $Status.active -or $Status.editorVisible -or $Status.releaseUnverified -or $Status.mouseCaptured -or
@@ -56,7 +60,7 @@ function Assert-UwUIdleOrPreserved($Status) {
         throw 'Hay una liberacion pendiente. Recupera la sesion desde UwU Mouse antes de volver a activar.'
     }
     if (!(Test-UwUBusy $Status)) { return $false }
-    if (($Status.active -or $Status.editorVisible) -and (Test-UwUReady $Status) -and $Status.accessibility) {
+    if (($Status.active -or $Status.editorVisible) -and (Test-UwUReady $Status) -and (Test-UwUCaptureReady $Status)) {
         Write-Host 'Servicio ya activo; sesion en curso conservada. No se abrio otra pantalla.'
         return $true
     }
@@ -98,8 +102,11 @@ Write-Host 'Motor de toques activo y verificado.'
 if (!$CheckOnly) {
     Invoke-ProjectAdb $adbPath $targetSerial @('shell', 'am', 'start', '-n', 'dev.mobimapper.mobimapper/.MainActivity')
 }
-if (!$status.accessibility) {
-    throw 'Falta activar UwU Mouse - entrada local: en la app abre Ajustes de accesibilidad, Aplicaciones instaladas, y activa solo ese servicio. Despues vuelve a UwU Mouse.'
+if (!(Test-UwUCaptureReady $status)) {
+    throw 'La captura nativa no esta preparada. Instala el APK actualizado y reinicia el motor desde UwU Mouse; revisa su mensaje de captura.'
 }
-Write-Host 'Accesibilidad activa. En UwU Mouse toca el circulo de tu juego para empezar.'
+if (!$status.overlayPermission) {
+    throw 'En Ajustes de conexion permite Mostrar sobre otras apps, tambien para usar el telefono sin DeX.'
+}
+Write-Host 'Captura nativa preparada. En UwU Mouse toca el circulo de tu juego para empezar.'
 Write-Host 'Este activador no inicia el juego ni una sesion de mapeo y no cambia tus perfiles.'

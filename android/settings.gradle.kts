@@ -20,8 +20,12 @@ pluginManagement {
 plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.13.1" apply false
+    id("com.android.library") version "8.13.1" apply false
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    id("org.jetbrains.kotlin.jvm") version "2.2.20" apply false
 }
 
 include(":app")
 include(":inputlab")
+include(":mapper-core", ":capture-api", ":capture-native", ":injection-api", ":injection-runtime", ":presentation")
+include(":activation-transport", ":window-context", ":backend-host")

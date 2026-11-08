@@ -1,12 +1,12 @@
 # Activar UwU Mouse desde la PC
 
-UwU Mouse necesita dos componentes activos: **Accesibilidad** y **Motor de toques**. Desde +34 puedes iniciar el motor en el propio teléfono mediante Depuración inalámbrica y un emparejamiento visible de Android: [activar sin PC](ACTIVAR_TELEFONO.md). Este documento describe la alternativa desde Windows. Encender Depuración inalámbrica y accesibilidad no inicia el motor por sí solo; debes completar una de las dos rutas de activación.
+UwU Mouse necesita **Motor de toques**, **Captura nativa** y el permiso **Mostrar sobre otras apps**. Puedes iniciar el motor en el propio teléfono mediante Depuración inalámbrica y un emparejamiento visible de Android: [activar sin PC](ACTIVAR_TELEFONO.md). Este documento describe la alternativa desde Windows. Encender Depuración inalámbrica no inicia el motor por sí solo; debes completar una de las dos rutas de activación. La aplicación actual no requiere accesibilidad.
 
 ## Pasos
 
 1. Desbloquea el teléfono y activa **Opciones de desarrollador → Depuración inalámbrica**. El teléfono y la PC deben estar en la misma red Wi-Fi y tener el emparejamiento ADB autorizado.
-2. En Windows, abre el acceso directo **Activar UwU Mouse** si está preparado en esa PC. También puedes hacer doble clic en **Activar-UwU-Mouse.cmd**, dentro de la carpeta del proyecto. Espera los mensajes **Motor de toques activo y verificado** y **Accesibilidad activa**. El activador abre UwU Mouse.
-3. En la app, entra en **Ajustes → Conexión → Comprobar servicio**. Debe mostrar **Accesibilidad: activa**, **Motor de toques: activo** y **Listo para abrir tu juego**. Si falta accesibilidad, usa **Abrir ajustes de accesibilidad** y activa únicamente **UwU Mouse · entrada local**. **Comprobar servicio solo consulta el estado; no arranca el motor ni inicia una sesión.**
+2. En Windows, abre el acceso directo **Activar UwU Mouse** si está preparado en esa PC. También puedes hacer doble clic en **Activar-UwU-Mouse.cmd**, dentro de la carpeta del proyecto. Espera **Motor de toques activo y verificado** y **Captura nativa preparada**. El activador abre UwU Mouse.
+3. En **Ajustes → Conexión → Comprobar servicio**, verifica motor, captura nativa y **Mostrar sobre otras apps**, también en el teléfono. Si el APK se acaba de actualizar, cierra el backend anterior y vuelve a activarlo. **Comprobar servicio solo consulta el estado; no arranca el motor ni inicia una sesión.**
 4. Vuelve a la biblioteca y toca **Free Fire**, o el juego que tengas configurado. Se utilizará el perfil seleccionado; si aún no tiene calibración, se abrirá el editor para configurarlo.
 
 El motor corre localmente en el teléfono; la PC se utiliza para arrancarlo. No hace falta repetir la activación cada vez que conectas el teclado o el ratón. Repítela cuando el servicio esté apagado, por ejemplo después de un reinicio o si el proceso se pierde.

@@ -10,12 +10,14 @@ import android.os.Handler
 import android.os.Looper
 import android.net.Uri
 import android.provider.Settings
+import dev.mobimapper.mobimapper.runtime.NativeSessionHost
 import dev.mobimapper.mobimapper.editor.ExternalOverlayPermissionRequiredException
 import dev.mobimapper.mobimapper.activation.LocalActivation
 import dev.mobimapper.mobimapper.session.SessionController
 import dev.mobimapper.mobimapper.session.SessionService
 import dev.mobimapper.mobimapper.game.GameCoordinator
 import dev.mobimapper.mobimapper.game.GameCatalog
+import dev.mobimapper.mobimapper.game.GameCommands
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -29,6 +31,7 @@ class MainActivity : FlutterActivity() {
     }
     override fun onCreate(savedInstanceState:android.os.Bundle?) {
         super.onCreate(savedInstanceState); latest=java.lang.ref.WeakReference(this)
+        NativeSessionHost.initialize(this)
         createdCount++; lastInstance=System.identityHashCode(this)
         android.util.Log.i("MobiActivity","created instance=${System.identityHashCode(this)} pid=${android.os.Process.myPid()} uptime=${android.os.SystemClock.uptimeMillis()}")
     }
@@ -71,10 +74,11 @@ class MainActivity : FlutterActivity() {
                     "selectProfile" -> result.success(GameCoordinator.select(requireNotNull(call.argument<String>("id"))))
                     "renameProfile" -> result.success(GameCoordinator.rename(requireNotNull(call.argument<String>("id")),requireNotNull(call.argument<String>("name"))))
                     "deleteProfile" -> { GameCoordinator.delete(requireNotNull(call.argument<String>("id"))); result.success(null) }
-                    "openEditor" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.openEditor(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
-                    "startProfile" -> { check(!LocalActivation.busy) { "Espera a que termine la activación" };GameCoordinator.startProfile(requireNotNull(call.argument<String>("id")),displayId=display?.displayId ?: 0); result.success(null) }
-                    "pause" -> { SessionController.pause("Pausada por usuario"); result.success(null) }
-                    "accessibilitySettings" -> { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); result.success(null) }
+                    "openEditor" -> { GameCommands.openEditor(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
+                    "startProfile" -> { GameCommands.startProfile(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
+                    "pause" -> { GameCommands.pause(); result.success(null) }
+                    // Retain the command name for older clients; capture now needs an overlay grant.
+                    "accessibilitySettings" -> { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))); result.success(null) }
                     "openOverlaySettings" -> {
                         try { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))) }
                         catch(_:android.content.ActivityNotFoundException) { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)) }
@@ -96,7 +100,7 @@ class MainActivity : FlutterActivity() {
                         if (call.method == "probe") SessionController.probe(size.x,size.y,displayId)
                         result.success(null)
                     }
-                    "stop" -> { GameCoordinator.stop(); result.success(null) }
+                    "stop" -> { GameCommands.stop(); result.success(null) }
                     "shutdownBackend" -> { SessionController.shutdownBackend(); result.success(null) }
                     else -> result.notImplemented()
                 }

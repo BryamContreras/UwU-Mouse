@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(uwu_capture LANGUAGES CXX)
+add_library(uwu_capture SHARED shell_evdev_capture.cpp)
+target_compile_features(uwu_capture PRIVATE cxx_std_17)
+target_compile_options(uwu_capture PRIVATE -Wall -Wextra -Werror)

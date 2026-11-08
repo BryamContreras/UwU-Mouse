@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "production_entry": "app",
+  "modules": {
+    "app": {
+      "path": "android/app",
+      "role": "Ordinary-UID application composition, persistence adapters and session host",
+      "kind": "production-application",
+      "allowed_dependencies": ["mapper-core", "injection-api", "backend-host", "presentation", "activation-transport"]
+    },
+    "mapper-core": {
+      "path": "android/mapper-core",
+      "role": "Pure mapping, profiles, policies, queue storage and recovery models",
+      "kind": "jvm-library",
+      "allowed_dependencies": []
+    },
+    "capture-api": {
+      "path": "android/capture-api",
+      "role": "Provider lifecycle, physical input frames and capture leases",
+      "kind": "jvm-library",
+      "allowed_dependencies": []
+    },
+    "capture-native": {
+      "path": "android/capture-native",
+      "role": "Shell evdev/JNI provider and exclusive physical device ownership",
+      "kind": "android-library",
+      "allowed_dependencies": ["capture-api"]
+    },
+    "injection-api": {
+      "path": "android/injection-api",
+      "role": "Stable Binder injection, capture callback and control contract",
+      "kind": "android-library",
+      "allowed_dependencies": []
+    },
+    "injection-runtime": {
+      "path": "android/injection-runtime",
+      "role": "Isolated touch worker, bounded pipe transport and dispatcher reconciliation",
+      "kind": "android-library",
+      "allowed_dependencies": ["mapper-core", "injection-api"]
+    },
+    "window-context": {
+      "path": "android/window-context",
+      "role": "Leased shell WMS metadata cache and conservative parser",
+      "kind": "android-library",
+      "allowed_dependencies": []
+    },
+    "backend-host": {
+      "path": "android/backend-host",
+      "role": "Privileged composition of capture, window context and supervised injection",
+      "kind": "android-library",
+      "allowed_dependencies": ["injection-api", "mapper-core", "injection-runtime", "capture-api", "capture-native", "window-context"]
+    },
+    "presentation": {
+      "path": "android/presentation",
+      "role": "Native editor, cursor, menu and overlays through explicit host ports",
+      "kind": "android-library",
+      "allowed_dependencies": ["mapper-core"]
+    },
+    "activation-transport": {
+      "path": "android/activation-transport",
+      "role": "Local ADB pairing, TLS and fixed activation transport",
+      "kind": "android-library",
+      "allowed_dependencies": []
+    },
+    "inputlab": {
+      "path": "android/inputlab",
+      "role": "Independent receive-only observer with a separate application UID",
+      "kind": "benchmark-application",
+      "allowed_dependencies": []
+    },
+    "latencyprobe": {
+      "path": "android/latencyprobe",
+      "role": "Optional capture/draw experiment, never a production dependency",
+      "kind": "benchmark-application",
+      "allowed_dependencies": [],
+      "borrowed_sources": ["android/mapper-core/src/main/kotlin/dev/mobimapper/mobimapper/session/InputLatencyProbe.kt"]
+    },
+    "host": {
+      "path": "android/platform-build/host",
+      "role": "Platform-only validation host, not a distributable mapper APK",
+      "kind": "validation-application",
+      "allowed_dependencies": ["mapper-core", "injection-api", "backend-host", "presentation", "activation-transport"]
+    }
+  },
+  "compatibility": {
+    "production_application_id": "dev.mobimapper.mobimapper",
+    "control_channel": "dev.mobimapper/control.v1",
+    "control_status_protocol": 1,
+    "backend_protocol": 4,
+    "profile_file": "profiles-v1.json",
+    "profile_schema": 9,
+    "shell_entrypoint": "dev.mobimapper.mobimapper.backend.ShellMain",
+    "worker_entrypoint": "dev.mobimapper.mobimapper.backend.InjectionWorkerMain"
+  },
+  "aidl_contract": {
+    "path": "android/injection-api/src/main/aidl/dev/mobimapper/mobimapper/backend/IInjector.aidl",
+    "package": "dev.mobimapper.mobimapper.backend",
+    "interface": "IInjector",
+    "append_methods_allowed": true,
+    "preserved_prefix": [
+      "Bundle status()",
+      "long begin(IBackendEvents,int,int)",
+      "boolean inject(long,int,long,long,in int[],in float[],in float[])",
+      "boolean release(long)",
+      "long recoverOrphan(IBackendEvents,int,int,long,in int[],in float[],in float[],int)",
+      "void armTestFault(int,int)",
+      "void shutdown()",
+      "long beginTarget(IBackendEvents,int,int,String)",
+      "long recoverTargetOrphan(IBackendEvents,int,int,long,in int[],in float[],in float[],int,String)",
+      "long beginContinuousTarget(IBackendEvents,int,int,String)",
+      "long recoverContinuousTargetOrphan(IBackendEvents,int,int,long,in int[],in float[],in float[],int,String)",
+      "long beginTargetOnDisplay(IBackendEvents,int,int,String,int,boolean)",
+      "long recoverTargetOrphanOnDisplay(IBackendEvents,int,int,long,in int[],in float[],in float[],int,String,int,boolean)",
+      "int motionDisplayId(in MotionEvent)",
+      "Bundle focusedApplication()"
+    ]
+  }
+}

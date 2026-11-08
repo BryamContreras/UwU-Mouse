@@ -41,10 +41,10 @@ Downloaded Maven Central AAR SHA-256 references:
 Full license texts are packaged in the APK under `assets/licenses` and retained
 in this repository:
 
-- [Apache 2.0](android/app/src/main/assets/licenses/Apache-2.0.txt)
-- [Conscrypt notice](android/app/src/main/assets/licenses/Conscrypt-NOTICE.txt)
-- [BoringSSL notices](android/app/src/main/assets/licenses/BoringSSL.txt)
-- [Bouncy Castle license](android/app/src/main/assets/licenses/Bouncy-Castle.html)
+- [Apache 2.0](android/activation-transport/src/main/assets/licenses/Apache-2.0.txt)
+- [Conscrypt notice](android/activation-transport/src/main/assets/licenses/Conscrypt-NOTICE.txt)
+- [BoringSSL notices](android/activation-transport/src/main/assets/licenses/BoringSSL.txt)
+- [Bouncy Castle license](android/activation-transport/src/main/assets/licenses/Bouncy-Castle.html)
 
 The OpenSSL acknowledgment required by its license is reproduced here:
 “This product includes software developed by the OpenSSL Project for use in the

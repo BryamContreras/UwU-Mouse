@@ -12,7 +12,7 @@ import dev.mobimapper.mobimapper.activation.adb.AdbKey
 import dev.mobimapper.mobimapper.activation.adb.AdbPairingClient
 import dev.mobimapper.mobimapper.backend.BackendRegistry
 import dev.mobimapper.mobimapper.game.GameCoordinator
-import dev.mobimapper.mobimapper.session.CaptureService
+import dev.mobimapper.mobimapper.runtime.NativeSessionHost
 import dev.mobimapper.mobimapper.session.SessionController
 import java.net.InetAddress
 import java.net.NetworkInterface
@@ -55,7 +55,7 @@ object LocalActivation {
     private fun idle() {
         ActivationPolicy.requireIdle(SessionController.mode,SessionController.active,
             SessionController.isTransitioning(),SessionController.contacts,SessionController.releaseUnverified,
-            GameCoordinator.sessionOpen,GameCoordinator.editorVisible,CaptureService.instance?.mouseCaptured==true)
+            GameCoordinator.sessionOpen,GameCoordinator.editorVisible,NativeSessionHost.instance?.mouseCaptured==true)
         BackendRegistry.injector?.takeIf { it.asBinder().isBinderAlive }?.status()?.let { state ->
             check(state.getInt("possibleContacts",-1)==0 && state.getInt("confirmedContacts",-1)==0 &&
                 !state.getBoolean("releaseUnverified",true) && state.getString("recoveryState") in setOf("READY","PAUSED","RECOVERED")) {
@@ -227,7 +227,7 @@ object LocalActivation {
             val output=StringBuilder()
             valid(ticket)
             try {
-                client.shellCommand(ActivationPolicy.bootstrap) { bytes ->
+                client.shellCommand(ActivationPolicy.bootstrapFor(app.packageName)) { bytes ->
                     check(output.length+bytes.size<=16384) { "Respuesta de activación demasiado larga" }
                     output.append(bytes.toString(Charsets.UTF_8))
                 }

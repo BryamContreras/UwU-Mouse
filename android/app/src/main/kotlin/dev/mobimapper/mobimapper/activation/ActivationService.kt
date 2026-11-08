@@ -16,7 +16,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import dev.mobimapper.mobimapper.MainActivity
-import dev.mobimapper.mobimapper.R
+import dev.mobimapper.presentation.R
 
 /** Keeps pairing available while Android's short-lived code dialog remains on screen. */
 class ActivationService:Service() {

@@ -8,7 +8,7 @@ Desde **0.2.0+34**, la app incorpora emparejamiento ADB y arranque del motor des
 2. Permite las notificaciones si Android lo solicita. Toca **Abrir Depuración inalámbrica**, actívala y acepta la autorización de red que muestre Android. En algunos Samsung se abre **Opciones de desarrollador**; entra desde allí en **Depuración inalámbrica**.
 3. En esa pantalla elige **Emparejar dispositivo con código**. Mantén abierta la ventana que muestra los seis dígitos y su puerto.
 4. Abre la notificación **UwU Mouse · activar sin PC**, toca **Introducir código**, escribe los seis dígitos actuales y envíalos. UwU Mouse detecta el puerto, empareja e inicia el motor local.
-5. Vuelve a UwU Mouse y espera **Motor activo**. En Conexión comprueba también **Accesibilidad: activa**. Si falta, abre sus ajustes y habilita únicamente **UwU Mouse · entrada local**.
+5. Vuelve a UwU Mouse y espera **Motor activo**. En Conexión comprueba **Captura nativa** y permite **Mostrar sobre otras apps** en el teléfono o en DeX. Esta versión no requiere activar accesibilidad. Si actualizaste el APK, reinicia el backend anterior antes de probar la captura nueva.
 6. Vuelve a la biblioteca y toca el juego. La activación por sí sola no inicia una sesión ni ejecuta controles.
 
 Si prefieres no usar la notificación, abre UwU Mouse y los ajustes de Android en **pantalla dividida**. Conserva visible la ventana del código, escribe sus seis dígitos y toca **Emparejar y activar** en el formulario de la app. Si el puerto no se detecta, copia **Puerto de emparejamiento** de esa misma ventana.

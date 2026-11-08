@@ -1,4 +1,4 @@
-﻿param([switch]$Release)
+﻿param([switch]$Release,[switch]$NativePolicyTests)
 . "$PSScriptRoot\AndroidTools.ps1"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 function Invoke-BuildStep([scriptblock]$Command, [string]$Failure) {
@@ -14,7 +14,16 @@ function Invoke-BuildStep([scriptblock]$Command, [string]$Failure) {
 }
 Push-Location $projectRoot
 try {
-    Invoke-BuildStep { & flutter pub get } 'pub get falló'
+    if (!$env:JAVA_HOME) {
+        $studioJdk = Join-Path $env:ProgramFiles 'Android\Android Studio\jbr'
+        if (Test-Path -LiteralPath "$studioJdk\bin\java.exe") { $env:JAVA_HOME = $studioJdk }
+    }
+    $python=Get-Command python -ErrorAction SilentlyContinue
+    if(!$python) { $python=Get-Command python3 -ErrorAction SilentlyContinue }
+    if(!$python) { throw 'Python 3 is required for architecture and compiled Android JSON ABI checks' }
+    Invoke-BuildStep { & $python.Source (Join-Path $projectRoot 'tools\check_architecture.py') --json } 'Architecture check failed'
+    Invoke-BuildStep { & $python.Source -m unittest discover -s tools/tests -v } 'Build helper tests failed'
+    Invoke-BuildStep { & flutter pub get --enforce-lockfile } 'pub get falló'
     Invoke-BuildStep { & flutter analyze } 'analyze falló'
     Invoke-BuildStep { & flutter test } 'flutter test falló'
     if ($Release) { Invoke-BuildStep { & flutter build apk --release } 'APK falló' }
@@ -29,12 +38,18 @@ try {
         } else { $_ }
     }
     $propertyLines | Set-Content -LiteralPath $localFile -Encoding ASCII
-    if (!$env:JAVA_HOME) {
-        $studioJdk = Join-Path $env:ProgramFiles 'Android\Android Studio\jbr'
-        if (Test-Path -LiteralPath "$studioJdk\bin\java.exe") { $env:JAVA_HOME = $studioJdk }
+    $checkTasks=@(Get-Content -LiteralPath (Join-Path $projectRoot 'tools\android-check-tasks.txt'))
+    if(!$checkTasks.Count -or @($checkTasks | Where-Object { $_ -notmatch '^:[a-z][a-z-]*:[A-Za-z]+$' }).Count) {
+        throw 'Invalid Android check task manifest'
     }
     Push-Location android
     try {
-        Invoke-BuildStep { & .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :inputlab:testDebugUnitTest :inputlab:assembleDebug :inputlab:lintDebug } 'Validación Android falló'
+        Invoke-BuildStep { & .\gradlew.bat --max-workers=2 --console=plain @checkTasks } 'Validación Android falló'
     } finally { Pop-Location }
+    if($NativePolicyTests) {
+        Invoke-BuildStep { & $python.Source (Join-Path $projectRoot 'tools\test_capture_policy.py') } 'Native capture policy tests failed'
+    }
+    Invoke-BuildStep {
+        & $python.Source (Join-Path $projectRoot 'tools\check_android_json_abi.py') --classes (Join-Path $projectRoot 'build\mapper-core\classes\kotlin\main') --json
+    } 'Android JSON ABI incompatible'
 } finally { Pop-Location }

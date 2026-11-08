@@ -3,6 +3,8 @@
 `dev.mobimapper.inputlab` tiene un UID distinto del mapeador. Solo observa lo que
 Android entrega a su propia ventana. No contiene IPC hacia MobiMapper, permisos de
 accesibilidad, inyección, red, captura de puntero ni reenvío de teclado/ratón.
+Es uno de los laboratorios independientes del [inventario de 13 proyectos
+Gradle](../../ARCHITECTURE.md); el APK de producción no depende de él.
 
 Compilar desde `android`: `./gradlew.bat :inputlab:assembleDebug`.
 Instalar usando siempre el serial confirmado:
@@ -31,7 +33,9 @@ Las teclas WASD/ESPACIO y los eventos de ratón recibidos se cuentan como posibl
 fugas solo si esos controles están asignados en la sesión. El laboratorio no
 conoce el estado del mapeador y no presupone si un evento es físico o sintético.
 Para evaluar fugas hay que delimitar la sesión y restar la línea base de eventos
-observados antes de activar el mapeador. El contador de ratón filtra exclusivamente
+observados antes de activar el mapeador. La ruta nativa puede reenviar de forma
+deliberada teclas sin asignación; recibirlas no demuestra una fuga de controles
+asignados. El contador de ratón filtra exclusivamente
 `SOURCE_MOUSE` y `SOURCE_MOUSE_RELATIVE`; no cuenta joystick ni stylus como ratón.
 
 Cada transición táctil escribe `MobiInputLab`: secuencia, acción, índice, IDs,
@@ -39,8 +43,15 @@ coordenadas, downTime, eventTime, receiptUptime, fuente y dispositivo. Los movim
 se retienen en memoria circular (256 muestras), sin disco ni log por movimiento.
 Los contadores y muestras representan callbacks recibidos. No desglosan el historial
 incluido en `MotionEvent`, y no permiten inferir Hz físicos del periférico.
-El botón **Guardar resumen** y `onPause` escriben solo el resumen propio y las últimas
-256 muestras en `files/input-lab-summary.json`. Se puede extraer del APK debug:
+Mientras la Activity está reanudada, solicita un snapshot cada 500 ms, incluso sin
+eventos nuevos. El botón **Guardar resumen** y `onPause` también solicitan uno.
+La escritura asíncrona mantiene solo una operación activa y una pendiente,
+sustituye resúmenes anteriores y publica el mismo contenido en
+`files/input-lab-live.json` y `files/input-lab-summary.json`. Incluye el resumen
+propio y las últimas 256 muestras; no es un historial completo de la sesión.
+`observationId`, `activityId`, `capturedUptimeMs`, `snapshotNumber`, el foco y el
+estado de Activity permiten comprobar que el archivo pertenece a la observación
+actual y sigue actualizándose. Se puede extraer del APK debug:
 
 ```powershell
 & $adb -s $serial shell run-as dev.mobimapper.inputlab cat files/input-lab-summary.json
@@ -51,3 +62,20 @@ monotónica en milisegundos. `receiptUptime-eventTime` mide únicamente entrega 
 evento a esta ventana; no mide latencia del periférico ni tiempo hasta el fotón.
 La pintura, las copias y los logs de transición de este observador añaden coste de
 instrumentación. No usar sus cifras como benchmark de juego sin comparar esa carga.
+El observador proporciona evidencia de recepción; su implementación y sus pruebas
+JVM no acreditan por sí solas el recorrido físico de la nueva captura nativa.
+
+## Medición opcional de dibujo
+
+Una compilación con instrumentación permite iniciar una Activity nueva con
+`--ez latencyProbe true --ei latencyProbeSeconds 30`. La ventana admite 1–60 s,
+retiene hasta 4096 callbacks y añade `latencyProbe` al resumen. Registra el timestamp
+actual del evento, su recepción y la terminación de los comandos CPU de `onDraw`.
+Solo el último estado táctil y de mouse usado en cada frame recibe un timestamp de
+dibujo; los callbacks reemplazados se identifican por separado. No es presentación
+de GPU, tiempo hasta pantalla ni latencia hasta el fotón.
+
+Las listas completas se publican al terminar la ventana o solicitar un resumen;
+los snapshots pasivos durante la captura conservan solo metadatos del probe para
+reducir el coste de serialización. El modo queda desactivado por defecto. Instalar
+una actualización requiere la misma firma que el laboratorio instalado.
