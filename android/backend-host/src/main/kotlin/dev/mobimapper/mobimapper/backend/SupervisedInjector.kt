@@ -106,6 +106,10 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private val motionDisplayMethod=InputEvent::class.java.getMethod("getDisplayId")
     private var expiry:Runnable?=null
     private val pointer = PointerPresentation { type ->
+        // Android 16+ keeps this hidden compatibility method as a no-op. Report the
+        // limitation instead of marking the system cursor hidden when it is still visible.
+        if(android.os.Build.VERSION.SDK_INT>=36)
+            throw UnsupportedOperationException("setPointerIconType is unsupported on Android ${android.os.Build.VERSION.SDK_INT}")
         val identity=Binder.clearCallingIdentity()
         try {
             val manager=context.getSystemService(Context.INPUT_SERVICE)

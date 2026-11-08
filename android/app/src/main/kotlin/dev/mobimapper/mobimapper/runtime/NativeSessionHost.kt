@@ -146,14 +146,36 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(cursorInstance==null || cursorInstanceDisplay!=displayId) {
             cursorInstance?.hide()
             setCursorOpacityActive(cursorInstanceDisplay,false)
-            cursorInstance=GameCursorOverlay(this,overlayContextFor(displayId),object:dev.mobimapper.mobimapper.editor.VisualCursorHost {
-                private var token=0L
+            val overlayContext=overlayContextFor(displayId)
+            val renderer=ApplicationCursorOverlay(overlayContext)
+            var appOwnedCursor=android.os.Build.VERSION.SDK_INT>=36
+            var backendCursorToken=0L
+            cursorInstance=GameCursorOverlay(this,overlayContext,object:dev.mobimapper.mobimapper.editor.VisualCursorHost {
                 override fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean {
-                    token=BackendRegistry.injector?.showVisualCursor(displayId,x,y,sizeDp) ?: 0L
-                    return token>0L
+                    if(appOwnedCursor) return renderer.show(x,y,sizeDp) && renderer.visible
+                    backendCursorToken=runCatching {
+                        BackendRegistry.injector?.showVisualCursor(displayId,x,y,sizeDp) ?: 0L
+                    }.getOrDefault(0L)
+                    if(backendCursorToken>0L) return true
+                    // New WindowManager releases no longer accept an app_process PID as a
+                    // trusted-window owner. Use UwU's registered application PID instead.
+                    appOwnedCursor=true
+                    return renderer.show(x,y,sizeDp) && renderer.visible
                 }
-                override fun move(x:Float,y:Float,sizeDp:Float) { if(token>0) BackendRegistry.injector?.moveVisualCursor(token,x,y,sizeDp) }
-                override fun hide() { val prior=token;token=0L;if(prior>0) BackendRegistry.injector?.hideVisualCursor(prior) }
+                override fun move(x:Float,y:Float,sizeDp:Float) {
+                    if(appOwnedCursor) renderer.move(x,y,sizeDp)
+                    else if(backendCursorToken>0L) runCatching {
+                        BackendRegistry.injector?.moveVisualCursor(backendCursorToken,x,y,sizeDp)
+                    }
+                }
+                override fun refreshWindowOpacity() { if(appOwnedCursor) renderer.refreshWindowOpacity() }
+                override fun hide() {
+                    if(appOwnedCursor) renderer.hide()
+                    else {
+                        val token=backendCursorToken;backendCursorToken=0L
+                        if(token>0L) runCatching { BackendRegistry.injector?.hideVisualCursor(token) }
+                    }
+                }
             }).apply { setSizeDp(cursorSizeDp) }
             cursorInstanceDisplay=displayId
         }

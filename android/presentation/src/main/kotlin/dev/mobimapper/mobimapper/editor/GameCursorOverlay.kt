@@ -6,10 +6,11 @@ import android.content.Context
 interface VisualCursorHost {
     fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean
     fun move(x:Float,y:Float,sizeDp:Float)
+    fun refreshWindowOpacity() {}
     fun hide()
 }
 
-/** Display-coordinate hotspot; rendering has no touch target and uses full opacity. */
+/** Display-coordinate hotspot; rendering has no touch target and follows the overlay opacity budget. */
 class GameCursorOverlay(private val service:Context,private val overlayContext:Context=service,private val host:VisualCursorHost) {
     private var sizeDp=BubbleSettings.DEFAULT_CURSOR_SIZE_DP
     private var x=0f
@@ -20,7 +21,7 @@ class GameCursorOverlay(private val service:Context,private val overlayContext:C
         this.sizeDp=sizeDp
         if(visible) host.move(x,y,sizeDp)
     }
-    fun refreshWindowOpacity() = Unit // The trusted visual surface always has alpha 1.
+    fun refreshWindowOpacity() { if(visible) host.refreshWindowOpacity() }
     @Suppress("UNUSED_PARAMETER")
     fun moveTo(x:Float,y:Float,latencyReceiptToken:Long=0L) {
         if(!x.isFinite() || !y.isFinite()) return
