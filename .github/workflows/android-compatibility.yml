@@ -67,10 +67,10 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile
-          flutter build apk --debug --target-platform android-x64
-          (cd android && bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:assembleDebugAndroidTest -Ptarget-platform=android-x64)
+          flutter build apk --debug --split-per-abi --target-platform android-x64
+          (cd android && bash ./gradlew --no-daemon --max-workers=2 --console=plain :app:assembleDebugAndroidTest -Ptarget-platform=android-x64 -Psplit-per-abi=true)
           mkdir -p compatibility-apks
-          cp build/app/outputs/flutter-apk/app-debug.apk compatibility-apks/app.apk
+          cp build/app/outputs/flutter-apk/app-x86_64-debug.apk compatibility-apks/app.apk
           cp build/app/outputs/apk/androidTest/debug/app-debug-androidTest.apk compatibility-apks/tests.apk
           python3 - <<'PY'
           import hashlib, pathlib, zipfile
