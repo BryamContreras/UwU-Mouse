@@ -44,4 +44,6 @@ La validación local del identificador nuevo aprobó **103 pruebas Flutter**, **
 
 En el teléfono se comprobó el bucle con un receptor InputLab independiente: continuación después de soltar, temporizador de un segundo, segunda pulsación y pausa; recibió **47 eventos táctiles**, con **cero errores de secuencia y cero contactos pendientes**. Es una prueba de entrada sintética sobre el recorrido real de inyección; no sustituye una prueba de teclado/ratón físico en todos los juegos. Los perfiles originales se conservaron.
 
+La prueba se repitió desde un arranque en frío con el identificador nuevo: **42 eventos válidos**, cero errores y cero contactos o repeticiones pendientes. El diagnóstico espera a que termine de prepararse la captura antes de enviar sus entradas sintéticas. La migración mantuvo exactamente los perfiles y el perfil seleccionado.
+
 GitHub Actions verifica los tres APK de desarrollo y la compatibilidad de framework en Android API 34, 35, 36 y 37. El release utiliza los APK y sus sumas SHA-256 de la ejecución del commit publicado; además de firma y arquitectura, se comprueban su identificador Android y versión.

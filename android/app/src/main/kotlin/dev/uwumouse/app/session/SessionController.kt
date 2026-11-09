@@ -1187,7 +1187,9 @@ object SessionController {
         syntheticProbe="Preparando repetición y dos acciones Map; entrada sintética"
         val await=object:Runnable { override fun run() {
             if(run!=generation) return
-            if(!active) {
+            // Synthetic input has no native-capture admission gate. Wait until the
+            // initial capture handoff finishes before it can create contacts.
+            if(!active || !environment.inputDispatchIdle()) {
                 if(SystemClock.uptimeMillis()<deadline) worker.postDelayed(this,20)
                 else pause("No inició la prueba de acciones")
                 return
