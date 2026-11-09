@@ -101,6 +101,30 @@ class NativeMotionDispatchGateTest {
         assertThrows(IllegalStateException::class.java) { gate.complete(route()) }
     }
 
+    @Test fun aRejectedClaimIsDiscardedInsteadOfBeingRelabeledForTheNewMode() {
+        val gate=NativeMotionDispatchGate()
+        gate.publish(route())
+        var submissions=0
+        val outcome=gate.dispatch(11,0) { previous ->
+            submissions++
+            gate.publish(route(generation=8)) // Lifecycle changes between claim and queue admission.
+            assertEquals(7L,previous.generation)
+            false
+        }
+        assertEquals(NativeMotionDispatchGate.Dispatch.STALE,outcome)
+        assertEquals(1,submissions)
+        assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,gate.dispatch(11,0) { current ->
+            assertEquals(8L,current.generation)
+            true
+        })
+        assertTrue(gate.defer())
+        assertEquals(NativeMotionDispatchGate.Dispatch.DEFERRED,gate.dispatch(11,0) {
+            fail("A prior edge must prevent direct admission")
+            true
+        })
+        gate.complete(null)
+    }
+
     @Test fun queuedMotionCannotCrossACompleteCursorRoundTripWithinTheSameSession() {
         val pointer=PointerTransitionGate().apply { begin(false) }
         val oldEpoch=requireNotNull(pointer.motionEpoch())

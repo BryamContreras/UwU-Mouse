@@ -31,6 +31,8 @@ edges. Cursor/menu/wheel input keeps its main-thread interaction path. Routes
 retain capture identity, session generation and pointer-mode epoch; the worker
 rejects movement from an earlier camera/cursor transition. The gate lock never
 encloses a queue offer, lifecycle callback or IPC.
+If admission rejects an already claimed route, the batch is discarded rather
+than being sent through main and reinterpreted for a newer mode.
 
 Original samples still reach precision filtering and nonlinear integration in
 order, before MOVE delivery coalesces. Fresh privileged focus checks, per-delivery

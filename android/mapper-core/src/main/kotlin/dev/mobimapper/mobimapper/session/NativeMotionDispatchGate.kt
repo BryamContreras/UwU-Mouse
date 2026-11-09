@@ -9,6 +9,7 @@ package dev.mobimapper.mobimapper.session
  * and enqueue that exact generation rather than relabeling a sample for a newer session.
  */
 class NativeMotionDispatchGate(private val capacity:Int=512) {
+    enum class Dispatch { DEFERRED, DIRECT, STALE }
     data class Route(val captureId:Long,val generation:Long,val buttons:Int,val pointerEpoch:Int) {
         init { require(captureId>0L && generation>=0L && buttons and 31.inv()==0) }
     }
@@ -38,5 +39,11 @@ class NativeMotionDispatchGate(private val capacity:Int=512) {
         if(pending!=0) return null
         val current=route ?: return null
         return if(current.captureId==captureId && current.buttons==buttons) current else null
+    }
+
+    /** A rejected claimed batch belongs to the old mode; never defer/relabel it for a new one. */
+    inline fun dispatch(captureId:Long,buttons:Int,submit:(Route)->Boolean):Dispatch {
+        val current=directRoute(captureId,buttons) ?: return Dispatch.DEFERRED
+        return if(submit(current)) Dispatch.DIRECT else Dispatch.STALE
     }
 }

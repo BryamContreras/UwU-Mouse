@@ -50,6 +50,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var receivedBatchedSamples=0L
     @Volatile private var directCameraBatches=0L
     @Volatile private var mainCameraBatches=0L
+    @Volatile private var staleCameraBatches=0L
     @Volatile private var ignoredUnknownKeys=0L
     @Volatile private var lastUnknownScanCode=-1
     private val keyMap=LinuxKeyMap.load()
@@ -76,12 +77,16 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             // oneway calls on this one Binder node arrive serially. A prior key,
             // button or UI callback blocks this lane until main has queued its work.
             // No lifecycle lock or UI/Binder call is made while reading the gate.
-            val route=if(wheel==0f && horizontalWheel==0f && !startingNativeCapture && captureId==nativeCaptureId)
-                motionDispatch.directRoute(captureId,buttonState) else null
-            if(route!=null && SessionController.tryNativeCameraBatch(batch,route)) {
-                receivedMotionBatches++;receivedBatchedSamples+=size;directCameraBatches++
-                recordNativeCameraMotion(batch,deviceIds.last())
-                if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_direct_dispatch",eventTimesNanos.last())
+            val dispatch=if(wheel==0f && horizontalWheel==0f && !startingNativeCapture && captureId==nativeCaptureId)
+                motionDispatch.dispatch(captureId,buttonState) { SessionController.tryNativeCameraBatch(batch,it) }
+                else NativeMotionDispatchGate.Dispatch.DEFERRED
+            if(dispatch!=NativeMotionDispatchGate.Dispatch.DEFERRED) {
+                receivedMotionBatches++;receivedBatchedSamples+=size
+                if(dispatch==NativeMotionDispatchGate.Dispatch.DIRECT) {
+                    directCameraBatches++
+                    recordNativeCameraMotion(batch,deviceIds.last())
+                    if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_direct_dispatch",eventTimesNanos.last())
+                } else staleCameraBatches++
                 return
             }
             if(pendingNativeSamples.addAndGet(size)>8192) {
@@ -765,6 +770,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             "motionTransport" to mapOf("nativeRateSupported" to nativeRateSupported,"appliedMouseRateHz" to appliedMouseRateHz,
                 "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
                 "cameraDirectBatches" to directCameraBatches,"cameraMainBatches" to mainCameraBatches,
+                "cameraStaleBatches" to staleCameraBatches,
                 "pendingSamples" to pendingNativeSamples.get()),
             "unknownKeys" to mapOf("ignored" to ignoredUnknownKeys,"lastScanCode" to lastUnknownScanCode),
             "keyLayouts" to keyMap.diagnostics(),
