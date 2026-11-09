@@ -145,13 +145,14 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private var cursorRouter:dev.mobimapper.mobimapper.backend.VisualCursorRouter?=null
     val cursorRenderer:String get()=cursorRouter?.route ?: "none"
     val cursorRendererError:String get()=cursorRouter?.error ?: ""
+    val cursorCleanupPending:Boolean get()=cursorInstance?.cleanupPending==true
     val trustedCursorAdmissionError:String get()=cursorRouter?.trustedError ?: ""
     private val cursorOverlay:GameCursorOverlay get() {
         val displayId=SessionController.targetDisplayId
         val backend=BackendRegistry.injector
         val binder=backend?.asBinder()
         if(cursorInstance==null || cursorInstanceDisplay!=displayId || cursorInstanceBackend!==binder) {
-            cursorInstance?.hide()
+            check(cursorInstance?.hide()!=false) { "No se pudo cerrar el cursor anterior" }
             setCursorOpacityActive(cursorInstanceDisplay,false)
             val overlayContext=overlayContextFor(displayId)
             val renderer=ApplicationCursorOverlay(overlayContext)
@@ -169,7 +170,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                     val token=backendCursorToken;backendCursorToken=0L
                     if(binder?.isBinderAlive!=true) return // Android removes windows with their dead process.
                     backend?.hideVisualCursor(token)
-                    if(token==0L) check(backend?.status()?.getBoolean("trustedCursorVisible")!=true) {
+                    check(backend?.status()?.getBoolean("trustedCursorVisible")!=true) {
                         "El motor anterior no pudo cerrar el cursor; reactívalo"
                     }
                 }
@@ -208,7 +209,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     fun discardDisplayContext(displayId:Int) {
         if(editingPresentation?.anchor?.frame?.displayId==displayId) endEditorPresentation("display_unavailable")
         if(cursorInstanceDisplay==displayId) {
-            clearCursorInteraction();cursorInstance=null;cursorInstanceDisplay=-1;cursorInstanceBackend=null;cursorRouter=null
+            if(clearCursorInteraction()) {
+                cursorInstance=null;cursorInstanceDisplay=-1;cursorInstanceBackend=null;cursorRouter=null
+            } else return // Keep the retained cursor's same-display opacity allocation until cleanup succeeds.
         }
         overlayContexts.remove(displayId)
     }
@@ -348,8 +351,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private val heartbeat=object:Runnable {
         override fun run() {
             if(instance!==this@NativeSessionHost) return
+            if(!cursorPresentationActive && cursorCleanupPending) clearCursorInteraction()
             val needsContext=GameCoordinator.sessionOpen || SessionController.active || GameCoordinator.editorVisible ||
-                SessionController.isTransitioning() || SessionController.needsRecoveryContext || SystemClock.uptimeMillis()<explicitContextUntil ||
+                SessionController.isTransitioning() || SessionController.needsRecoveryContext || cursorCleanupPending || SystemClock.uptimeMillis()<explicitContextUntil ||
                 dev.mobimapper.mobimapper.MainActivity.latest.get()?.hasWindowFocus()==true
             if(needsContext) refreshContext()
             if(captureFailure.isEmpty() && ((nativeCaptureId!=0L)!=wantsKeyboardCapture() || effectiveMouseCapture()!=appliedMouseCapture || desiredMouseRateHz()!=appliedMouseRateHz)) scheduleSourceChange()
@@ -627,9 +631,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         val previous=nativeCaptureId
         nativeCaptureId=0L
         appliedMouseRateHz=0
-        if(previous!=0L) runCatching { BackendRegistry.injector?.stopCapture(previous) }
+        val wasCaptured=appliedMouseCapture
+        appliedMouseCapture=false
+        // Remove our visual before a privileged stop/recovery IPC can stall the main thread.
         clearCursorInteraction()
-        if (appliedMouseCapture) {
+        if(previous!=0L) runCatching { BackendRegistry.injector?.stopCapture(previous) }
+        if (wasCaptured) {
             val pending = consumedKeys.size
             // A forced filter reset can bypass UP callbacks. Do not retain stale owners afterwards.
             consumedKeys.clear()
@@ -931,23 +938,35 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(!bound && SessionController.cursorMode && event.action==KeyEvent.ACTION_DOWN) nativeKeys.add(identity)
         return bound
     }
+    private class CursorGeometryUnavailable(message:String,cause:RuntimeException?=null):IllegalStateException(message,cause)
     private fun updateCursorPresentation() {
         val menuPointer=wantsMenuPointer()
         if(appliedMouseCapture && (menuPointer || SessionController.cursorMode) && SessionController.targetConfirmed) {
-            if(cursorPresentationActive && cursorPresentationForMenu!=menuPointer) clearCursorInteraction()
-            if(!cursorPresentationActive) {
-                val target=cursorTarget ?: return
-                val oldX=cursorX;val oldY=cursorY
-                val area=if(menuPointer) PointerBounds(0f,0f,SessionController.cursorDisplayWidth.toFloat(),SessionController.cursorDisplayHeight.toFloat())
-                    else SessionController.cursorEntryBounds(target)
-                if(!cursorPosition.begin(area,
-                        SessionController.cursorDisplayWidth,SessionController.cursorDisplayHeight)) return
-                if(menuPointer && cursorPositionKnown) cursorPosition.move(oldX-cursorPosition.x,oldY-cursorPosition.y)
-                cursorX=cursorPosition.x;cursorY=cursorPosition.y
-                cursorPresentationActive=true;cursorPresentationForMenu=menuPointer;cursorPositionKnown=true
-            }
-            // Position is initialized before addView: neither (0,0) nor a previous session can flash.
             try {
+                if(cursorPresentationActive && cursorPresentationForMenu!=menuPointer) clearCursorInteraction(hideVisual=false)
+                if(!cursorPresentationActive) {
+                    val target=cursorTarget ?: throw CursorGeometryUnavailable("No se pudo confirmar la ventana del cursor; vuelve a pulsar Jugar")
+                    // A menu can capture the mouse before the first profile has ever armed.
+                    // Its viewport belongs to this display's window context, not an engine
+                    // session's zero or stale calibration dimensions. Query on admission only.
+                    val viewport=try { overlayContextFor(SessionController.targetDisplayId)
+                        .getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
+                    catch(failure:WindowManager.InvalidDisplayException) { throw failure }
+                    catch(failure:WindowManager.BadTokenException) { throw failure }
+                    catch(failure:SecurityException) { throw failure }
+                    catch(failure:RuntimeException) {
+                        throw CursorGeometryUnavailable("No se pudo consultar el tamaño de la pantalla del cursor; vuelve a pulsar Jugar",failure)
+                    }
+                    val oldX=cursorX;val oldY=cursorY
+                    val area=if(menuPointer) PointerBounds(0f,0f,viewport.width().toFloat(),viewport.height().toFloat())
+                        else SessionController.cursorEntryBounds(target)
+                    if(!cursorPosition.begin(area,viewport.width(),viewport.height()))
+                        throw CursorGeometryUnavailable("El tamaño de la pantalla del cursor no es válido; vuelve a pulsar Jugar")
+                    if(menuPointer && cursorPositionKnown) cursorPosition.move(oldX-cursorPosition.x,oldY-cursorPosition.y)
+                    cursorX=cursorPosition.x;cursorY=cursorPosition.y
+                    cursorPresentationActive=true;cursorPresentationForMenu=menuPointer;cursorPositionKnown=true
+                }
+                // Position is initialized before addView: neither (0,0) nor a previous session can flash.
                 val overlay=cursorOverlay
                 // Lower the other passive windows before showing the higher-alpha cursor.
                 if(!setCursorOpacityActive(SessionController.targetDisplayId,true)) {
@@ -967,6 +986,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             } catch (failure:SecurityException) {
                 GameCoordinator.presentationUnavailable(failure,"cursor_permission")
                 forceMouseOff("cursor_permission_revoked")
+            } catch (failure:CursorGeometryUnavailable) {
+                // Preserve an actionable error and prevent the heartbeat from reacquiring
+                // exclusive input until the user explicitly starts a new session.
+                captureFailure=failure.message ?: "No se pudo preparar la pantalla del cursor"
+                SessionController.pause(captureFailure)
+                forceMouseOff("cursor_geometry_unavailable")
             } catch (_:IllegalArgumentException) {
                 // A context can reject a display removed during cursor publication.
                 GameCoordinator.displayUnavailable(SessionController.targetDisplayId)
@@ -976,7 +1001,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             }
         } else clearCursorInteraction()
     }
-    private fun clearCursorInteraction() {
+    private fun clearCursorInteraction(hideVisual:Boolean=true):Boolean {
         menuMovePending=false
         menuHoverPending=false
         GameCoordinator.clearMenuPointerHover()
@@ -989,9 +1014,11 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         cursorSystemGesture=false;cursorOpenNotifications=false
         cursorPresentationActive=false
         cursorPresentationForMenu=false
-        cursorInstance?.hide()
+        if(!hideVisual) return true
+        val hidden=cursorInstance?.hide()!=false
         // The higher-alpha cursor is gone before restoring the other windows' normal opacity.
-        setCursorOpacityActive(cursorInstanceDisplay,false)
+        if(hidden) setCursorOpacityActive(cursorInstanceDisplay,false)
+        return hidden
     }
     private fun flushMenuPointerMove() {
         if(!menuMovePending) return

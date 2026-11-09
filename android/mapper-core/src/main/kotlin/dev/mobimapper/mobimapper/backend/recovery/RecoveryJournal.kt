@@ -32,6 +32,8 @@ data class RecoverySnapshot(
     val focusLossReconciled: Boolean = false,
     val coordinatePolicy: TouchCoordinatePolicy = TouchCoordinatePolicy.STRICT,
     val rejectedDownReconciled: Boolean = false,
+    /** Original display disappeared; all old producers exited and Android retained no down. */
+    val removedDisplayReconciled: Boolean = false,
 ) {
     /** Last acknowledged post-event state; an unacknowledged DOWN is absent here. */
     val activeContacts: Int get() = activeFrame?.ids?.size ?: 0
@@ -75,6 +77,7 @@ class RecoveryJournal(
     private var rejectedFocusCancel: TouchFrame? = null
     private var focusReplacementGeneration = 0L
     private var focusLossReconciled = false
+    private var removedDisplayReconciled = false
     private var lastEventTime = 0L
     private var coordinatePolicy = TouchCoordinatePolicy.STRICT
 
@@ -93,6 +96,7 @@ class RecoveryJournal(
         lastConfirmed = null
         cancellationAccepted = false
         terminalReconciled = false
+        removedDisplayReconciled = false
         importedForRecovery = false
         explicitRejectedMove = false
         clearRejectedDownProof()
@@ -138,6 +142,7 @@ class RecoveryJournal(
         lastEventTime = cancelFrame.eventTime
         cancellationAccepted = false
         terminalReconciled = false
+        removedDisplayReconciled = false
         importedForRecovery = true
         explicitRejectedMove = false
         clearRejectedDownProof()
@@ -204,6 +209,7 @@ class RecoveryJournal(
         state = RecoveryInjectionState.RECOVERY_NEEDED
         cancellationAccepted = false
         terminalReconciled = false
+        removedDisplayReconciled = false
         importedForRecovery = false
         explicitRejectedMove = false
         clearRejectedDownProof()
@@ -433,6 +439,38 @@ class RecoveryJournal(
         return true
     }
 
+    /**
+     * Closure only, after the owning guardian has stopped capture, retired every old worker,
+     * observed the original display absent and obtained a fresh global no-down snapshot.
+     * No injection or replacement destination is involved. The complete original journal
+     * must still match; an imported orphan cannot prove its former producers terminated.
+     */
+    @Synchronized fun reconciledRemovedDisplay(
+        original: RecoverySnapshot,
+        previousWorkersTerminated: Boolean,
+        originalDisplayRemoved: Boolean,
+        dispatcherGloballyNoDown: Boolean,
+    ): Boolean {
+        if (!previousWorkersTerminated || !originalDisplayRemoved || !dispatcherGloballyNoDown ||
+            importedForRecovery || state != RecoveryInjectionState.RECOVERY_NEEDED ||
+            original.state != RecoveryInjectionState.RECOVERY_NEEDED || original.possibleContacts == 0 ||
+            original.sessionId != sessionId || original.width != width || original.height != height ||
+            original.targetUid != targetUid || original.displayId != displayId ||
+            original.source != source || original.deviceId != deviceId || original.coordinatePolicy != coordinatePolicy ||
+            !sameCandidate(lastConfirmed, original.lastConfirmed) ||
+            !sameCandidate(activeFrame, original.activeFrame) || !sameCandidate(attempted, original.attempted)) return false
+        state = RecoveryInjectionState.RECOVERY_ADMITTED
+        activeFrame = null
+        attempted = null
+        cancellationAccepted = false
+        terminalReconciled = true
+        removedDisplayReconciled = true
+        return true
+    }
+
+    private fun sameCandidate(frame: TouchFrame?, other: TouchFrame?): Boolean =
+        if (frame == null) other == null else other != null && frame.sameEvent(other)
+
     private fun clearFocusLossProof() {
         focusLossObserved = false
         rejectedFocusCancel = null
@@ -449,6 +487,7 @@ class RecoveryJournal(
         focusLossReconciled = focusLossReconciled,
         coordinatePolicy = coordinatePolicy,
         rejectedDownReconciled = rejectedDownReconciled,
+        removedDisplayReconciled = removedDisplayReconciled,
     )
 
     private fun validTransition(frame: TouchFrame): Boolean {

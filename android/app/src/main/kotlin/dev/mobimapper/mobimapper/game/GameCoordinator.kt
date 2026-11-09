@@ -44,6 +44,7 @@ object GameCoordinator {
     private var currentId:String?=null
     private var waiting=false
     private var toolsRequested=false
+    private var stopServiceWhenClosed=false
     private var cameraShortcut=138
     private var startPending=false
     private var pendingCursorStart=false
@@ -313,6 +314,7 @@ object GameCoordinator {
     }
     fun openEditor(id:String,displayId:Int=SessionController.targetDisplayId) {
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Espera al cierre confirmado de la secuencia anterior antes de editar" }
+        stopServiceWhenClosed=false
         OverlayWindows.requirePermission(app,displayId)
         val requested=requireNotNull(store().get(id)) { "Perfil no encontrado" }
         geometry(displayId)
@@ -357,6 +359,7 @@ object GameCoordinator {
     fun editCurrent() { (SessionController.activeProfileId ?: currentId ?: store().selected()?.id)?.let { openEditor(it) } }
     fun startProfile(id:String,cursor:Boolean=true,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Recupera la secuencia anterior antes de iniciar" }
+        stopServiceWhenClosed=false
         OverlayWindows.requirePermission(app,displayId)
         val p=matchingProfile(id,displayId)
         if(p==null || !p.calibration.confirmed) { openEditor(id,displayId);return }
@@ -502,6 +505,11 @@ object GameCoordinator {
     }
     fun refreshControls() {
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { refreshControls() }; return }
+        if(SessionClosurePolicy.mayStopForegroundService(stopServiceWhenClosed,SessionController.mode,
+                SessionController.active,SessionController.isTransitioning(),SessionController.contacts,SessionController.releaseUnverified)) {
+            stopServiceWhenClosed=false
+            app.stopService(Intent(app,SessionService::class.java))
+        }
         guardPresentation("controls") { refreshControlsOnMain() }
         service?.refreshMenuPointerSources()
     }
@@ -584,9 +592,31 @@ object GameCoordinator {
     }
     fun stop() {
         if(editorVisible) recordEditorClose("session_stopped")
+        stopServiceWhenClosed=true
         operation++; waiting=false; startPending=false;toolsRequested=false;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); editor?.close(); bubble?.hide();controls?.hide()
         SessionController.stopSession()
-        app.stopService(Intent(app,SessionService::class.java))
+    }
+    /** Explicit closure action only: restores the immutable original context, never mapping. */
+    fun focusPendingClosure():Boolean {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        val target=SessionController.recoveryTargetPackage ?: return false
+        val displayId=SessionController.recoveryTargetDisplayId
+        check(displayId==SessionController.targetDisplayId && target==SessionController.targetPackage) {
+            "El contexto de recuperación no coincide con la sesión anterior"
+        }
+        stopServiceWhenClosed=true
+        app.startForegroundService(Intent(app,SessionService::class.java))
+        SessionController.retryPendingClosure()
+        val display=app.getSystemService(DisplayManager::class.java).getDisplay(displayId)
+        if(display?.isValid==true) {
+            GameCatalog.requireLaunchable(app,target)
+            launch(target)
+            message("Cerrando la sesión anterior; después pulsa Jugar para iniciar")
+        } else {
+            // A removed display must never redirect CANCEL or a game task to another one.
+            message("Verificando el cierre de la sesión de la pantalla desconectada")
+        }
+        return true
     }
     fun clearTools() { operation++; waiting=false; startPending=false;toolsRequested=false;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
     fun geometryChanged() {

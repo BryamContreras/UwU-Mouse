@@ -9,6 +9,8 @@ import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.media.ImageReader
 import android.os.Build
+import android.os.Binder
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -25,9 +27,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import dev.mobimapper.mobimapper.MainActivity
 import dev.mobimapper.mobimapper.activation.ActivationNetworkPermission
+import dev.mobimapper.mobimapper.backend.BackendRegistry
+import dev.mobimapper.mobimapper.backend.IInjector
 import dev.mobimapper.mobimapper.editor.OverlayOpacityBudget
 import dev.mobimapper.mobimapper.editor.OverlayWindows
 import dev.mobimapper.mobimapper.session.SessionController
+import dev.mobimapper.mobimapper.session.SessionMode
 import dev.mobimapper.mobimapper.session.SessionService
 import org.junit.After
 import org.junit.Assert.*
@@ -35,7 +40,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.lang.reflect.Proxy
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.FutureTask
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Real framework/window checks. These tests never acquire evdev or inject into another app. */
 @RunWith(AndroidJUnit4::class)
@@ -225,6 +234,102 @@ class AndroidCompatibilityTest {
             }
             else -> fail("Unknown expectedLocalNetwork value: $expected")
         }
+    }
+
+    @Test fun freshControllerObservesOriginalGuardianClosureWithoutFocusOrCallback() {
+        val qemu = instrumentation.uiAutomation.executeShellCommand("getprop ro.kernel.qemu").use {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().use { reader -> reader.readText().trim() }
+        }
+        assertEquals("The fake guardian fixture is restricted to an emulator", "1", qemu)
+        val previous = BackendRegistry.injector
+        assertNull("This suite must never attach a real injection backend", previous)
+        assertEquals("Other compatibility fixtures must not begin a mapping session", 0L,
+            SessionController.status(context)["backendSessionId"])
+        val originalDisplay = 2_000_000_000
+        assertNull(context.getSystemService(DisplayManager::class.java).getDisplay(originalDisplay))
+        val closed = AtomicBoolean(false)
+        val recoveries = AtomicInteger()
+        val forbidden = CopyOnWriteArrayList<String>()
+        val binder = Binder()
+        // A detached status fixture exercises controller integration, not Binder authentication.
+        // No real injection/capture method is ever delegated to another process or device.
+        val guardian = Proxy.newProxyInstance(IInjector::class.java.classLoader, arrayOf(IInjector::class.java)) {
+                proxy, method, arguments ->
+            when (method.name) {
+                "asBinder" -> binder
+                "equals" -> proxy === arguments?.get(0)
+                "hashCode" -> System.identityHashCode(proxy)
+                "toString" -> "CompatibilityGuardianFixture"
+                "status" -> Bundle().apply {
+                    putInt("protocol", 4); putInt("uid", 2000); putBoolean("targeted", true)
+                    putLong("sessionId", 777L); putInt("targetUid", 10394)
+                    putString("targetPackage", SessionController.TARGET); putInt("displayId", originalDisplay)
+                    putInt("possibleContacts", if (closed.get()) 0 else 1); putInt("confirmedContacts", 0)
+                    putBoolean("releaseUnverified", !closed.get()); putBoolean("keyReleaseUnverified", false)
+                    putBoolean("cancelAdmitted", false); putBoolean("terminalReconciled", closed.get())
+                    putString("recoveryState", if (closed.get()) "RECOVERED" else "BLOCKED")
+                    putBoolean("sessionRecoverySupported", true); putBoolean("captureSupported", false)
+                }
+                "windowContext", "focusedApplication", "captureStatus" -> Bundle()
+                "release" -> { assertEquals(777L, arguments?.get(0)); closed.get() }
+                "recoverSession" -> { assertEquals(777L, arguments?.get(0)); recoveries.incrementAndGet(); false }
+                "hideVisualCursor" -> null
+                else -> {
+                    forbidden += method.name
+                    throw AssertionError("Unexpected native input operation: ${method.name}")
+                }
+            }
+        } as IInjector
+        try {
+            onMain {
+                BackendRegistry.injector = guardian
+                NativeSessionHost.initialize(context)
+                SessionController.backendAvailable()
+            }
+            await("Fresh controller did not retain the original guardian") {
+                val status = SessionController.status(context)
+                status["backendSessionId"] == 777L && status["guardianClosurePending"] == true &&
+                    status["mode"] == "blocked"
+            }
+            assertEquals(SessionController.TARGET, SessionController.targetPackage)
+            assertEquals(originalDisplay, SessionController.targetDisplayId)
+            assertEquals(originalDisplay, SessionController.recoveryTargetDisplayId)
+            assertFalse(SessionController.active)
+            assertFalse(SessionController.armed)
+            assertTrue(SessionController.releaseUnverified)
+            assertEquals(1, SessionController.contacts)
+            await("False-focus context refresh did not run the bounded closure attempts") {
+                onMain { SessionController.targetChanged(false) }
+                recoveries.get() == 3 && SessionController.mode == SessionMode.BLOCKED
+            }
+            onMain { SessionController.targetChanged(false) }
+            assertEquals("Closure retries must remain bounded", 3, recoveries.get())
+            // Simulate a surviving guardian finishing later. No IBackendEvents callback exists.
+            closed.set(true)
+            await("A removed original display starved terminal closure observation") {
+                onMain { SessionController.targetChanged(false) }
+                SessionController.mode == SessionMode.STOPPED && !SessionController.releaseUnverified &&
+                    SessionController.contacts == 0 &&
+                    SessionController.status(context)["guardianClosurePending"] == false
+            }
+            assertEquals(originalDisplay, SessionController.targetDisplayId)
+            assertFalse(SessionController.active)
+            assertFalse(SessionController.armed)
+            assertTrue("Adoption/closure must never begin or inject input: $forbidden", forbidden.isEmpty())
+        } finally {
+            // Complete proof through the same fake owner before restoring the prior registry.
+            closed.set(true)
+            try {
+                onMain { SessionController.stopSession() }
+                await("Fake guardian cleanup did not finish") {
+                    SessionController.mode == SessionMode.STOPPED && !SessionController.isTransitioning() &&
+                        !SessionController.releaseUnverified && SessionController.contacts == 0
+                }
+            } finally {
+                onMain { BackendRegistry.injector = previous }
+            }
+        }
+        assertTrue("Cleanup must not begin or inject input: $forbidden", forbidden.isEmpty())
     }
 
     private fun exerciseCursor(display: Display) {

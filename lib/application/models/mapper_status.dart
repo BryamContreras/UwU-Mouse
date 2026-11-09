@@ -14,6 +14,10 @@ class NativeStatus {
       relativeSamples = wire['relativeSamples']! as int,
       injected = wire['injected']! as int,
       releaseUnverified = wire['releaseUnverified']! as bool,
+      stopRequested = wire['stopRequested'] == true,
+      guardianClosurePending = wire['guardianClosurePending'] == true,
+      guardianSessionId = wire['guardianSessionId'] as int? ?? 0,
+      guardianTargetPackage = wire['guardianTargetPackage'] as String? ?? '',
       probe = wire['probe']! as String,
       backendError = wire['backendError'] as String? ?? '',
       backendUid = wire['backendUid'] as int?,
@@ -60,10 +64,13 @@ class NativeStatus {
       contextError,
       pointerMode,
       captureBackend,
-      captureError;
+      captureError,
+      guardianTargetPackage;
   final bool accessibility,
       backend,
       releaseUnverified,
+      stopRequested,
+      guardianClosurePending,
       active,
       editorVisible,
       drawOverlays,
@@ -78,7 +85,7 @@ class NativeStatus {
       maxQueueDepth,
       mergedMoves;
   final int? backendUid, targetUid;
-  final int uiDisplayId;
+  final int uiDisplayId, guardianSessionId;
   final List<double> queueMs, ipcMs;
   final List<String> devices;
 

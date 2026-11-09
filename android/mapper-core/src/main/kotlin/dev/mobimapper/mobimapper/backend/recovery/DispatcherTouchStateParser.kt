@@ -11,6 +11,7 @@ object DispatcherTouchStateParser {
     // InputDispatcher::DispatcherTouchState::dump(), android16-release/android17-release.
     private const val EMPTY_MODERN_TOUCH_STATE = "  TouchStatesByDisplay: <no displays touched>"
     private const val EMPTY_CURSOR_STATE = "  CursorStatesByDisplay: <no displays touched by cursor>"
+    private const val CURSOR_STATES = "  CursorStatesByDisplay:"
     private const val TOUCH_STATES = "  TouchStatesByDisplay:"
     private const val MAX_DISPLAYS = 8
     private const val MAX_WINDOWS = 128
@@ -19,6 +20,10 @@ object DispatcherTouchStateParser {
     // capture removes mouse hover. Only an explicitly empty window list is accepted.
     private val virtualTouchDisplay = Regex("^    (0|[1-9][0-9]{0,8}) :     deviceId=(-1), source=(TOUCHSCREEN)$")
     private val followingDisplay = Regex("^  Display: (0|[1-9][0-9]{0,8})$")
+    // Audited DispatcherTouchState::dump + TouchState::dump in android16-release and
+    // android17-release. Removed displays can remain as explicitly empty cursor entries.
+    private val cursorDisplay17 = Regex("^    LogicalDisplayId (0|[1-9][0-9]{0,8}):$")
+    private val emptyCursorDisplay16 = Regex("^    (0|[1-9][0-9]{0,8}) :     Windows: <none>$")
     private val window = Regex(
         "^        (0|[1-9][0-9]{0,8}) : name='.*', pointerIds=0{32}, " +
             "targetFlags=([A-Z_]+(?: \\| [A-Z_]+)*), firstDownTimeInTarget=<not set>, " +
@@ -35,6 +40,10 @@ object DispatcherTouchStateParser {
         var completed = false
         var modernTouchEmpty = false
         var modernCursorEmpty = false
+        var inModernCursor = false
+        var cursorWindowsExpected = false
+        var cursorFormat = 0
+        val cursorDisplays = mutableSetOf<Int>()
         val displays = mutableSetOf<Int>()
         var deviceId: Int? = null
         var source: String? = null
@@ -44,12 +53,40 @@ object DispatcherTouchStateParser {
         var totalWindows = 0
         fun displayComplete() = deviceId != null && !expectingWindows && (emptyWindows || windowCount > 0)
         for (line in lines) {
+            if (inModernCursor) {
+                if (followingDisplay.matches(line) || line == "  Displays: <none>") {
+                    if (cursorDisplays.isEmpty() || cursorWindowsExpected) return false
+                    inModernCursor = false
+                    modernCursorEmpty = true
+                    completed = true
+                    continue
+                }
+                if (cursorWindowsExpected) {
+                    // Any touched-window row, including an unaudited hover format, is
+                    // ambiguous here. A zero count inferred from a substring is unsafe.
+                    if (line != "      TouchedWindows: <none>") return false
+                    cursorWindowsExpected = false
+                    continue
+                }
+                val entry17 = cursorDisplay17.matchEntire(line)
+                val entry16 = emptyCursorDisplay16.matchEntire(line)
+                val entry = entry17 ?: entry16 ?: return false
+                val format = if (entry17 != null) 17 else 16
+                if (cursorFormat != 0 && cursorFormat != format) return false
+                cursorFormat = format
+                val id = entry.groupValues[1].toIntOrNull() ?: return false
+                // The privileged reader bounds the entire dump. Retired display entries
+                // can accumulate across desktop reconnects; they are not active monitors.
+                if (!cursorDisplays.add(id)) return false
+                cursorWindowsExpected = entry17 != null
+                continue
+            }
             if (modernTouchEmpty && !modernCursorEmpty) {
-                // The audited producer emits these two exact markers consecutively.
-                // Any cursor payload, missing marker or altered format is ambiguous.
-                if (line != EMPTY_CURSOR_STATE) return false
-                modernCursorEmpty = true
-                completed = true
+                when (line) {
+                    EMPTY_CURSOR_STATE -> { modernCursorEmpty = true; completed = true }
+                    CURSOR_STATES -> inModernCursor = true
+                    else -> return false
+                }
                 continue
             }
             if (line.contains("CursorState", ignoreCase = true)) return false
@@ -103,6 +140,6 @@ object DispatcherTouchStateParser {
                 else -> return false
             }
         }
-        return found && completed && !inSection && (!modernTouchEmpty || modernCursorEmpty)
+        return found && completed && !inSection && !inModernCursor && (!modernTouchEmpty || modernCursorEmpty)
     }
 }

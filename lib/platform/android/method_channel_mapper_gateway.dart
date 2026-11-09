@@ -116,6 +116,10 @@ class MethodChannelMapperGateway implements MapperGateway {
       _channel.invokeMethod<void>('startProfile', {'id': id});
 
   @override
+  Future<bool> recoverPendingSession() async =>
+      await _channel.invokeMethod<bool>('recoverPendingSession') ?? false;
+
+  @override
   Future<void> execute(NativeCommand command) =>
       _channel.invokeMethod<void>(command.name);
 

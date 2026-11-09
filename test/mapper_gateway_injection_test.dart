@@ -153,6 +153,8 @@ class _MemoryGateway implements MapperGateway {
   @override
   Future<void> startProfile(String id) async => startedProfiles.add(id);
   @override
+  Future<bool> recoverPendingSession() async => false;
+  @override
   Future<bool> exportProfileFile(String id) async {
     exports.add(id);
     return true;

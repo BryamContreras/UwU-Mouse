@@ -45,6 +45,7 @@ private class AndroidSessionEnvironment : SessionEnvironment {
             "cursorVisible" to host?.cursorVisible,
             "cursorRenderer" to host?.cursorRenderer,
             "cursorRendererError" to host?.cursorRendererError,
+            "cursorCleanupPending" to host?.cursorCleanupPending,
             "trustedCursorAdmissionError" to host?.trustedCursorAdmissionError,
             "cursorX" to host?.cursorX,
             "cursorY" to host?.cursorY,

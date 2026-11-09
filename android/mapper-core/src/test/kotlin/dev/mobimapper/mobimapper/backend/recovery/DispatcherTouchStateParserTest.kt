@@ -52,6 +52,43 @@ class DispatcherTouchStateParserTest {
             "  TouchStatesByDisplay:\n    LogicalDisplayId 17:\n      TouchedWindows: active\n$modernCursorEmpty\n"))
     }
 
+    @Test fun android17RemovedDisplayCursorEntriesCanBeExplicitlyEmpty() {
+        val dump = "$modernTouchEmpty\n  CursorStatesByDisplay:\n" +
+            "    LogicalDisplayId 9:\n      TouchedWindows: <none>\n" +
+            "    LogicalDisplayId 8:\n      TouchedWindows: <none>\n  Display: 11\n"
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("\n", "\r\n")))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("  Display: 11", "  Displays: <none>")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("  Display: 11\n", "")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("LogicalDisplayId 8:", "LogicalDisplayId 9:")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump + modernCursorEmpty))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump + modernTouchEmpty))
+    }
+
+    @Test fun android16RemovedDisplayCursorEntriesUseTheirAuditedDifferentLayout() {
+        val dump = "$modernTouchEmpty\n  CursorStatesByDisplay:\n" +
+            "    9 :     Windows: <none>\n    8 :     Windows: <none>\n  Display: 11\n"
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("    8 :", "    9 :")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("  Display: 11\n", "")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace("    8 :     Windows: <none>",
+            "    LogicalDisplayId 8:\n      TouchedWindows: <none>")))
+    }
+
+    @Test fun modernPerDisplayCursorProofRejectsTouchHoverUnknownAndTruncatedRows() {
+        val prefix = "$modernTouchEmpty\n  CursorStatesByDisplay:\n    LogicalDisplayId 9:\n"
+        for (payload in listOf("", "      TouchedWindows:", "      TouchedWindows: <unknown>",
+            "      TouchedWindows: <none> extra", "     TouchedWindows: <none>",
+            "      TouchedWindows:\n        0: name='game', mDeviceStates=pointerIds=1",
+            "      TouchedWindows:\n        0: name='hover', mDeviceStates=touchingPointers=[]")) {
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(prefix + payload + "\n  Display: 11\n"))
+        }
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$modernTouchEmpty\n  CursorStatesByDisplay:\n  Display: 11\n"))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(prefix + "  Display: 11\n"))
+        val retiredDisplays = (0..31).joinToString("\n") { "    LogicalDisplayId $it:\n      TouchedWindows: <none>" }
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched("$modernTouchEmpty\n  CursorStatesByDisplay:\n$retiredDisplays\n  Display: 40\n"))
+    }
+
     @Test fun duplicateAndMixedLegacyModernStateSectionsRemainAmbiguous() {
         val modern = "$modernTouchEmpty\n$modernCursorEmpty\n"
         for (dump in listOf(modern + modernTouchEmpty, modern + modernCursorEmpty,

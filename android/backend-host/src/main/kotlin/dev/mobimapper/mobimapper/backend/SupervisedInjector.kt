@@ -258,11 +258,12 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         if(!accepted) keyReleaseUnverified=forwardedKeys.isNotEmpty()
         return accepted
     }
-    private fun sendKey(key:ForwardedKey,action:Int,eventTime:Long,metaState:Int):Boolean = privileged {
+    private fun sendKey(key:ForwardedKey,action:Int,eventTime:Long,metaState:Int,
+                        allowWorkerRestart:Boolean=true):Boolean = privileged {
         var channel=connection?.takeIf { it.alive }
         try {
             if(channel==null) {
-                if(forceStopped || closed || appIsStopped()) return@privileged false
+                if(!allowWorkerRestart || forceStopped || closed || appIsStopped()) return@privileged false
                 ensureWorker()
                 channel=connection ?: return@privileged false
             }
@@ -275,12 +276,12 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             false
         }
     }
-    private fun releaseForwardedKeys():Boolean {
+    private fun releaseForwardedKeys(allowWorkerRestart:Boolean=true):Boolean {
         val now=SystemClock.uptimeMillis()
         val iterator=forwardedKeys.entries.iterator()
         while(iterator.hasNext()) {
             val key=iterator.next().value
-            if(sendKey(key,KeyEvent.ACTION_UP,maxOf(now,key.downTime),0)) iterator.remove()
+            if(sendKey(key,KeyEvent.ACTION_UP,maxOf(now,key.downTime),0,allowWorkerRestart)) iterator.remove()
         }
         keyReleaseUnverified=forwardedKeys.isNotEmpty()
         return !keyReleaseUnverified
@@ -311,14 +312,68 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             top!=null && display>=0 && (top.packageName!=targetPackage || display!=journal.displayId)
         }.getOrDefault(false)
     }
-    private fun recoveryContextMatches(original:RecoverySnapshot,originalPackage:String):Boolean=privileged {
+    /** Immutable ownership is independent of whether the old display still has focus or exists. */
+    private fun recoveryIdentityMatches(original:RecoverySnapshot,originalPackage:String):Boolean=privileged {
         runCatching {
+            val current=journal.snapshot()
             targetPackage==originalPackage && targetUid==original.targetUid &&
                 coordinatePolicy==original.coordinatePolicy && journal.displayId==original.displayId &&
-                context.packageManager.getPackageUid(originalPackage,0)==original.targetUid &&
-                context.getSystemService(DisplayManager::class.java).getDisplay(original.displayId)?.isValid==true &&
+                current.sessionId==original.sessionId && current.width==original.width && current.height==original.height &&
+                current.source==original.source && current.deviceId==original.deviceId &&
+                context.packageManager.getPackageUid(originalPackage,0)==original.targetUid
+        }.getOrDefault(false)
+    }
+    private fun recoveryContextMatches(original:RecoverySnapshot,originalPackage:String):Boolean=privileged {
+        recoveryIdentityMatches(original,originalPackage) && runCatching {
+            context.getSystemService(DisplayManager::class.java).getDisplay(original.displayId)?.isValid==true &&
                 nativeContextAllows(originalPackage,original.displayId)
         }.getOrDefault(false)
+    }
+    /** An unavailable service/query is not evidence of display removal. */
+    private fun originalDisplayDefinitelyRemoved(displayId:Int):Boolean=privileged {
+        runCatching {
+            val manager=requireNotNull(context.getSystemService(DisplayManager::class.java))
+            val displays=manager.displays
+            displays.isNotEmpty() && displays.none { it.displayId==displayId } && manager.getDisplay(displayId)==null
+        }.getOrDefault(false)
+    }
+
+    private fun retireAllRecoveryWorkers():Boolean {
+        connection=null
+        val deadline=SystemClock.uptimeMillis()+1_500L
+        for(old in unretiredWorkers.toList()) {
+            val remaining=deadline-SystemClock.uptimeMillis()
+            if(remaining<2L || !old.closeAndAwaitTermination(minOf(750L,remaining/2))) return false
+            unretiredWorkers.remove(old)
+        }
+        return unretiredWorkers.isEmpty()
+    }
+
+    /** Cold closure proof only. Never launch a worker or retarget input to another display. */
+    private fun reconcileRemovedDisplay(original:RecoverySnapshot,originalPackage:String):Boolean {
+        if(closed || forceStopped || appIsStopped() || !recoveryIdentityMatches(original,originalPackage) ||
+            !originalDisplayDefinitelyRemoved(original.displayId)) return false
+        nativeCapture?.let { if(it.active) it.stop(it.activeId) }
+        ownedCaptureId=nativeCapture?.activeId ?: 0L
+        syncCapturePointer(forceRestore=true);pointer.setSessionActive(false)
+        if(nativeCapture?.active==true || !releaseForwardedKeys(allowWorkerRestart=false) || keyReleaseUnverified) {
+            state="BLOCKED";error="REMOVED_DISPLAY_INPUT_RELEASE_UNCONFIRMED";return false
+        }
+        if(!retireAllRecoveryWorkers()) {
+            state="BLOCKED";error="PREVIOUS_WORKER_EXIT_UNCONFIRMED";return false
+        }
+        if(!recoveryIdentityMatches(original,originalPackage) || !originalDisplayDefinitelyRemoved(original.displayId) ||
+            !DispatcherTouchState.isDefinitelyUntouched() || closed || forceStopped || appIsStopped() ||
+            nativeCapture?.active==true || keyReleaseUnverified || unretiredWorkers.isNotEmpty() ||
+            !recoveryIdentityMatches(original,originalPackage) || !originalDisplayDefinitelyRemoved(original.displayId)) {
+            state="BLOCKED";error="REMOVED_DISPLAY_CLOSURE_UNVERIFIED";return false
+        }
+        val reconciled=journal.reconciledRemovedDisplay(original,true,true,true)
+        if(reconciled) {
+            state="RECOVERED";error="";lastRecovery=SystemClock.uptimeMillis();recoveredCount++
+            Log.i("MobiSupervisor","removed_display_reconciled sid=${original.sessionId} display=${original.displayId} workersTerminated=true cancelAdmitted=false receiverVerified=false")
+        } else { state="BLOCKED";error="RECOVERY_JOURNAL_CHANGED" }
+        return reconciled
     }
     private fun selectTarget(packageName:String, expectedUid:Int?=null,
                              policy:TouchCoordinatePolicy=TouchCoordinatePolicy.STRICT,displayId:Int=0) {
@@ -635,18 +690,25 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         val originalPackage=targetPackage
         if(closed || forceStopped || appIsStopped() || recoveryScheduled || sessionId<=0L ||
             sessionId!=original.sessionId || original.state==RecoveryInjectionState.ACTIVE ||
-            !recoveryContextMatches(original,originalPackage)) return false
+            !recoveryIdentityMatches(original,originalPackage)) return false
         nativeCapture?.stop(nativeCapture.activeId)
         ownedCaptureId=nativeCapture?.activeId ?: 0L
         syncCapturePointer(forceRestore=true)
         pointer.setSessionActive(false)
-        if(nativeCapture?.active==true || !releaseForwardedKeys() || recoveryScheduled ||
-            !recoveryContextMatches(original,originalPackage)) return false
+        if(nativeCapture?.active==true ||
+            !releaseForwardedKeys(allowWorkerRestart=!originalDisplayDefinitelyRemoved(original.displayId)) || recoveryScheduled ||
+            !recoveryIdentityMatches(original,originalPackage)) return false
         if(original.state in setOf(RecoveryInjectionState.RECOVERY_ADMITTED,RecoveryInjectionState.STOPPED)) {
             state="RECOVERED";error=""
             return true
         }
         if(original.state!=RecoveryInjectionState.RECOVERY_NEEDED) return false
+        if(original.possibleContacts>0 && originalDisplayDefinitelyRemoved(original.displayId)) {
+            ++recoveryEpoch
+            state="RECOVERING"
+            return reconcileRemovedDisplay(original,originalPackage)
+        }
+        if(!recoveryContextMatches(original,originalPackage)) return false
         if(original.possibleContacts==0) {
             // A fully acknowledged terminal event leaves no candidate for another CANCEL.
             val closed=releaseInternal(scheduleOnFailure=false)
@@ -656,15 +718,8 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         ++recoveryEpoch
         state="RECOVERING"
         val previousGeneration=workerGeneration
-        connection=null
-        val retirementDeadline=SystemClock.uptimeMillis()+1_500L
-        for(old in unretiredWorkers.toList()) {
-            val remaining=retirementDeadline-SystemClock.uptimeMillis()
-            if(remaining<2L || !old.closeAndAwaitTermination(minOf(750L,remaining/2))) {
-                state="BLOCKED";error="PREVIOUS_WORKER_EXIT_UNCONFIRMED"
-                return false
-            }
-            unretiredWorkers.remove(old)
+        if(!retireAllRecoveryWorkers()) {
+            state="BLOCKED";error="PREVIOUS_WORKER_EXIT_UNCONFIRMED";return false
         }
         if(!recoveryContextMatches(original,originalPackage)) {
             state="BLOCKED";error="RECOVERY_CONTEXT_CHANGED";return false
@@ -789,6 +844,15 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             if(closed || epoch!=recoveryEpoch) return@synchronized
             if(forceStopped || appIsStopped()) { stopForForceStop(); return@synchronized }
             val sid=journal.snapshot().sessionId
+            val current=journal.snapshot()
+            if(current.possibleContacts>0 && originalDisplayDefinitelyRemoved(current.displayId)) {
+                val reconciled=reconcileRemovedDisplay(current,failedPackage)
+                lastRecovery=SystemClock.uptimeMillis();recoveryScheduled=false
+                notifyClient(if(reconciled) 2 else 3,if(reconciled)
+                    "Pantalla anterior retirada y Android sin contactos; iniciar manualmente"
+                    else "No se pudo confirmar el cierre de la pantalla anterior")
+                return@synchronized
+            }
             var accepted=false
             var reconciled=false
             // A live worker can close a rejected/ambiguous injection before its EOF cleanup
@@ -939,6 +1003,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("rejectedMoveReconciled",snap.rejectedMoveReconciled)
             putBoolean("rejectedDownReconciled",snap.rejectedDownReconciled)
             putBoolean("focusLossReconciled",snap.focusLossReconciled)
+            putBoolean("removedDisplayReconciled",snap.removedDisplayReconciled)
             putBoolean("sessionRecoverySupported",true)
             putBoolean("releaseUnverified",snap.state==RecoveryInjectionState.RECOVERY_NEEDED)
             putBoolean("injectPermission",context.checkPermission("android.permission.INJECT_EVENTS",Process.myPid(),Process.myUid())==PackageManager.PERMISSION_GRANTED)

@@ -47,4 +47,24 @@ class FocusRecoveryGateTest {
         gate.finished(attempt,false,200L,retryAllowed=false)
         assertNull(gate.begin(41L,true,10_000L))
     }
+    @Test fun removedDisplayClosureCanBeAttemptedWithoutWeakeningTheDefaultFocusGate() {
+        val gate=FocusRecoveryGate(maximumAttempts=1)
+        assertNull(gate.begin(41L,true,100L))
+        val closure=gate.begin(41L,true,100L,allowUnfocused=true)!!
+        assertNull(gate.begin(41L,true,101L,allowUnfocused=true))
+        gate.finished(closure,false,200L)
+        assertNull(gate.begin(41L,true,10_000L,allowUnfocused=true))
+        gate.contextChanged(true)
+        assertNotNull(gate.begin(41L,true,10_001L))
+    }
+    @Test fun explicitRetryRenewsOnlyTheSameIdleClosureOwnerWithoutStartingAnything() {
+        val gate=FocusRecoveryGate(maximumAttempts=1)
+        val closure=gate.begin(41L,true,100L,allowUnfocused=true)!!
+        assertFalse(gate.retryExplicitly(41L))
+        gate.finished(closure,false,200L)
+        assertFalse(gate.retryExplicitly(42L));assertFalse(gate.retryExplicitly(0L))
+        assertTrue(gate.retryExplicitly(41L))
+        assertNull(gate.begin(41L,true,201L)) // Retrying closure does not manufacture focus.
+        assertNotNull(gate.begin(41L,true,201L,allowUnfocused=true))
+    }
 }

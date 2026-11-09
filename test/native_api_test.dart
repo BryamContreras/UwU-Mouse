@@ -80,6 +80,24 @@ void main() {
     expect(decoded.activePackage, 'com.dts.freefireth');
     expect(decoded.releaseUnverified, isTrue);
   });
+  test('pending closure keeps the original native guardian identity', () {
+    final decoded = NativeStatus.fromWire(
+      status()
+        ..['stopRequested'] = true
+        ..['guardianClosurePending'] = true
+        ..['guardianSessionId'] = 4294967301
+        ..['guardianTargetPackage'] = 'com.dts.freefireth',
+    );
+    expect(decoded.stopRequested, isTrue);
+    expect(decoded.guardianClosurePending, isTrue);
+    expect(decoded.guardianSessionId, 4294967301);
+    expect(decoded.guardianTargetPackage, 'com.dts.freefireth');
+    final older = NativeStatus.fromWire(status());
+    expect(older.stopRequested, isFalse);
+    expect(older.guardianClosurePending, isFalse);
+    expect(older.guardianSessionId, 0);
+    expect(older.guardianTargetPackage, isEmpty);
+  });
   test('launcher category is a hint and may be missing', () {
     final app = LaunchableApp.fromWire({
       'packageName': 'com.dts.freefireth',
@@ -771,6 +789,34 @@ void main() {
     expect(calls[1].arguments, {'id': 'profile-1'});
     expect(calls[2].arguments, {'id': 'profile-1'});
   });
+  test(
+    'pending closure route forwards native outcome without a new profile',
+    () async {
+      const channel = MethodChannel('dev.mobimapper/control.v1');
+      final calls = <MethodCall>[];
+      Object? outcome = true;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (call) async {
+            calls.add(call);
+            return outcome;
+          });
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
+      const api = MethodChannelMapperGateway();
+      expect(await api.recoverPendingSession(), isTrue);
+      outcome = false;
+      expect(await api.recoverPendingSession(), isFalse);
+      outcome = null;
+      expect(await api.recoverPendingSession(), isFalse);
+      expect(
+        calls.map((call) => call.method),
+        everyElement('recoverPendingSession'),
+      );
+      expect(calls.map((call) => call.arguments), everyElement(isNull));
+    },
+  );
   test(
     'local activation transfers pairing once and supports discovered reconnect',
     () async {

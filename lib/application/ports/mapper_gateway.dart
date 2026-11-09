@@ -33,5 +33,8 @@ abstract interface class MapperGateway {
   Future<bool> importProfileFile();
   Future<void> openEditor(String id);
   Future<void> startProfile(String id);
+
+  /// Requests closure of an existing session in its original game; never starts one.
+  Future<bool> recoverPendingSession();
   Future<void> execute(NativeCommand command);
 }

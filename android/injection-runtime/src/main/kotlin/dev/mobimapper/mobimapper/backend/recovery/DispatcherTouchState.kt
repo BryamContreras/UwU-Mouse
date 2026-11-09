@@ -21,7 +21,9 @@ import java.util.concurrent.atomic.AtomicInteger
  * pointers: TouchState::isDown() checks window.pointerIds, separately from hovering pointers.
  * The parser additionally accepts the complete, bounded Android 14 hover-only/empty-window
  * section; every touching/pilfered bit must be zero and downTime unset. Android 16–17 split
- * touch/cursor states, so reconciliation requires both explicitly empty maps there.
+ * touch/cursor states, so both must prove no down. The cursor map can retain removed-display
+ * entries: only the exact audited empty-window rows are accepted, through a known complete
+ * section boundary. Nonempty modern cursor/hover layouts remain unknown and fail closed.
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/InputDispatcher.cpp
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/TouchState.cpp
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/inputflinger/dispatcher/InputDispatcher.cpp

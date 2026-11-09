@@ -19,6 +19,7 @@ internal class TrustedCursorOverlay(private val context:Context,private val allo
     private var displayId=-1
     private var nextToken=0L
     private var token=0L
+    private var closing=false
     @Volatile private var x=0f
     @Volatile private var y=0f
     @Volatile private var size=20f
@@ -27,7 +28,7 @@ internal class TrustedCursorOverlay(private val context:Context,private val allo
     private val verify=object:Runnable {
         override fun run() {
             if(view==null) return
-            if(!allowed(displayId)) hideOnMain() else main.postDelayed(this,500)
+            if(closing || !allowed(displayId)) hideOnMain() else main.postDelayed(this,500)
         }
     }
     private fun <T> onMain(action:()->T):T {
@@ -37,9 +38,10 @@ internal class TrustedCursorOverlay(private val context:Context,private val allo
     }
     fun show(display:Int,newX:Float,newY:Float,sizeDp:Float):Long = onMain {
         if(!valid(newX,newY,sizeDp) || !allowed(display)) return@onMain 0L
+        if(closing) return@onMain 0L
         x=newX;y=newY;size=sizeDp
         if(view!=null && displayId==display) { token=++nextToken;view?.postInvalidateOnAnimation();return@onMain token }
-        hideOnMain()
+        if(!hideOnMain()) return@onMain 0L
         runCatching {
             val screen=requireNotNull(context.getSystemService(DisplayManager::class.java).getDisplay(display))
             val overlay=context.createDisplayContext(screen).createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,null)
@@ -75,10 +77,23 @@ internal class TrustedCursorOverlay(private val context:Context,private val allo
     // Zero is an explicit owner-only cleanup after an ambiguous show Binder reply.
     // SupervisedInjector authenticates the application UID before reaching this method.
     fun hide(cursorToken:Long) { onMain { if(cursorToken==0L || cursorToken==token) hideOnMain() } }
-    private fun hideOnMain() {
+    private fun hideOnMain():Boolean {
+        closing=true
         main.removeCallbacks(verify)
-        view?.let { cursor -> runCatching { windows?.removeViewImmediate(cursor) } }
+        val cursor=view
+        if(cursor!=null) try { windows?.removeViewImmediate(cursor) }
+        catch(failure:RuntimeException) {
+            if(failure !is IllegalArgumentException || cursor.isAttachedToWindow) {
+                error=failure.message ?: failure.javaClass.simpleName
+                // A visual cleanup failure must never prevent releasing native input.
+                // Keep its owner and retry; status remains visible until removal is confirmed.
+                main.postDelayed(verify,500)
+                return false
+            }
+        }
         view=null;windows=null;displayId=-1;visible=false;token=0L
+        closing=false
+        return true
     }
     private fun valid(x:Float,y:Float,size:Float)=x.isFinite() && y.isFinite() && size.isFinite() && size in 10f..64f
     private inner class CursorView(ctx:Context):View(ctx) {

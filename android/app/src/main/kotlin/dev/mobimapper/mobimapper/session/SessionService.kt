@@ -53,7 +53,8 @@ class SessionService : Service(), DisplayManager.DisplayListener {
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         lastGeometry=displayGeometry()
-        if (intent?.action == "stop") { dev.mobimapper.mobimapper.game.GameCoordinator.stop(); stopSelf() }
+        // The coordinator ends this service after the guardian confirms stream closure.
+        if (intent?.action == "stop") dev.mobimapper.mobimapper.game.GameCoordinator.stop()
         return START_NOT_STICKY
     }
     override fun onBind(intent: Intent?): IBinder? = null

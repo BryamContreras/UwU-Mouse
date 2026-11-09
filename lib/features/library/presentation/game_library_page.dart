@@ -173,9 +173,8 @@ class _GameLibraryPageState extends State<GameLibraryPage>
       } else {
         final message = _errorText(error);
         setState(() => _failure = message);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(message)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(message)));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -304,6 +303,66 @@ class _GameLibraryPageState extends State<GameLibraryPage>
       SessionReadiness.mayConfigure(status);
 
   bool get _safe => _safeStatus(_status);
+
+  Widget _sessionCard(NativeStatus status) {
+    final needsClosure = SessionReadiness.needsClosureRecovery(status);
+    return Card(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ListTile(
+            leading: _roundIcon(
+              needsClosure ? Icons.shield_outlined : Icons.gamepad_rounded,
+            ),
+            title: Text(
+              status.recovering
+                  ? 'Recuperando'
+                  : needsClosure
+                  ? 'Cierre pendiente'
+                  : status.active
+                  ? (status.pointerMode == 'cursor' ? 'Cursor' : 'En control')
+                  : 'En pausa',
+            ),
+            subtitle: status.error.isEmpty
+                ? null
+                : Text(
+                    status.error,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+            trailing: needsClosure
+                ? null
+                : _command('Cerrar sesión', Icons.close, NativeCommand.stop),
+          ),
+          if (needsClosure)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text(
+                    'Completa el cierre en el juego anterior antes de volver a jugar.',
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    key: const ValueKey('recover-pending-session'),
+                    onPressed: _busy
+                        ? null
+                        : () => _run(() async {
+                            await _api.recoverPendingSession();
+                          }),
+                    icon: const MobiIcon(Icons.close_rounded, size: 25),
+                    label: const Text('Cerrar sesión anterior'),
+                  ),
+                  const SizedBox(height: 8),
+                  _command('Cerrar sesión', Icons.close, NativeCommand.stop),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 
   bool _needsOverlayPermission(NativeStatus status) =>
       SessionReadiness.needsOverlayPermission(status);
@@ -585,40 +644,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
               ),
             if (status?.blocked == true ||
                 status?.recovering == true ||
+                status?.guardianClosurePending == true ||
                 status?.active == true ||
                 (status?.activeProfileId != null && status?.mode != 'stopped'))
-              Card(
-                child: ListTile(
-                  leading: _roundIcon(
-                    status!.blocked || status.recovering
-                        ? Icons.shield_outlined
-                        : Icons.gamepad_rounded,
-                  ),
-                  title: Text(
-                    status.recovering
-                        ? 'Recuperando'
-                        : status.blocked
-                        ? 'Cierre pendiente'
-                        : status.active
-                        ? (status.pointerMode == 'cursor'
-                              ? 'Cursor'
-                              : 'En control')
-                        : 'En pausa',
-                  ),
-                  subtitle: status.error.isEmpty
-                      ? null
-                      : Text(
-                          status.error,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                  trailing: _command(
-                    'Cerrar sesión',
-                    Icons.close,
-                    NativeCommand.stop,
-                  ),
-                ),
-              ),
+              _sessionCard(status!),
             if (_failure != null)
               Padding(
                 padding: const EdgeInsets.all(12),

@@ -2,6 +2,7 @@ package dev.mobimapper.mobimapper.backend
 
 /** A passive cursor renderer. It never owns input capture or injected contacts. */
 interface VisualCursorRenderer {
+    val cleanupPending:Boolean get()=false
     fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean
     fun move(x:Float,y:Float,sizeDp:Float)
     fun refreshWindowOpacity() {}
@@ -15,17 +16,18 @@ interface VisualCursorRenderer {
  */
 class VisualCursorRouter(private val trusted:VisualCursorRenderer,private val application:VisualCursorRenderer):VisualCursorRenderer {
     private var trustedRejected=false
-    private var cleanupPending:VisualCursorRenderer?=null
+    private var pendingCleanup:VisualCursorRenderer?=null
     private var selected:VisualCursorRenderer?=null
     private var displayId=-1
     var route="none";private set
     var trustedError="";private set
     var error="";private set
+    override val cleanupPending:Boolean get()=pendingCleanup!=null
 
     override fun show(displayId:Int,x:Float,y:Float,sizeDp:Float):Boolean {
         if(selected!=null) { move(x,y,sizeDp);return true }
         this.displayId=displayId
-        cleanupPending?.let { if(!close(it)) return false }
+        pendingCleanup?.let { if(!close(it)) return false }
         if(!trustedRejected) {
             val admitted=try { trusted.show(displayId,x,y,sizeDp) }
                 catch(failure:Exception) { trustedError=failure.javaClass.simpleName;false }
@@ -49,8 +51,8 @@ class VisualCursorRouter(private val trusted:VisualCursorRenderer,private val ap
     }
 
     private fun close(renderer:VisualCursorRenderer):Boolean {
-        cleanupPending=renderer
-        return try { renderer.hide();cleanupPending=null;true }
+        pendingCleanup=renderer
+        return try { renderer.hide();pendingCleanup=null;true }
             catch(failure:Exception) {
                 val owner=if(renderer===trusted) "trusted" else "application"
                 error="${owner}_cleanup_${failure.javaClass.simpleName}";false
@@ -74,7 +76,7 @@ class VisualCursorRouter(private val trusted:VisualCursorRenderer,private val ap
     override fun hide() {
         val renderer=selected
         selected=null;route="none"
-        val pending=renderer ?: cleanupPending
-        if(pending!=null) close(pending)
+        val pending=renderer ?: pendingCleanup
+        if(pending!=null) check(close(pending)) { "No se pudo confirmar el cierre del cursor: $error" }
     }
 }

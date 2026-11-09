@@ -9,6 +9,10 @@ abstract final class SessionReadiness {
       !status.editing &&
       status.contacts == 0;
 
+  static bool needsClosureRecovery(NativeStatus? status) =>
+      status != null &&
+      (status.guardianClosurePending || status.blocked || status.recovering);
+
   static bool needsOverlayPermission(NativeStatus status) =>
       !status.overlayPermission;
 }

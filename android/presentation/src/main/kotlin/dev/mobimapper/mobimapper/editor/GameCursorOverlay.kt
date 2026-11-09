@@ -11,6 +11,7 @@ class GameCursorOverlay(private val service:Context,private val overlayContext:C
     private var x=0f
     private var y=0f
     var visible=false;private set
+    val cleanupPending:Boolean get()=host.cleanupPending
     fun setSizeDp(sizeDp:Float) {
         require(sizeDp.isFinite() && sizeDp in BubbleSettings.MIN_CURSOR_SIZE_DP..BubbleSettings.MAX_CURSOR_SIZE_DP)
         this.sizeDp=sizeDp
@@ -26,12 +27,13 @@ class GameCursorOverlay(private val service:Context,private val overlayContext:C
         return true
     }
     fun show() {
+        check(!cleanupPending) { "Espera a que se cierre el cursor anterior" }
         if(visible) return
         check(host.show(overlayContext.display?.displayId ?: 0,x,y,sizeDp)) { "No se pudo mostrar el cursor; comprueba el permiso de superposición o reactiva el motor" }
         visible=true
     }
-    fun hide() {
-        if(!visible) return
-        visible=false;runCatching { host.hide() }
+    fun hide():Boolean {
+        return try { host.hide();visible=false;true }
+        catch(_:Exception) { false }
     }
 }

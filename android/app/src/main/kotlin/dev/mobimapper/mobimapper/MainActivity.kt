@@ -95,6 +95,7 @@ class MainActivity : FlutterActivity() {
                     }
                     "openEditor" -> { GameCommands.openEditor(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
                     "startProfile" -> { GameCommands.startProfile(requireNotNull(call.argument<String>("id")),display?.displayId ?: 0); result.success(null) }
+                    "recoverPendingSession" -> result.success(GameCommands.recoverPendingSession())
                     "pause" -> { GameCommands.pause(); result.success(null) }
                     // Retain the command name for older clients; capture now needs an overlay grant.
                     "accessibilitySettings" -> { startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:$packageName"))); result.success(null) }

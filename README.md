@@ -1,6 +1,6 @@
 # UwU Mouse
 
-Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.1+39**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
+Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.2+40**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
 
 ## Empezar
 
@@ -34,6 +34,8 @@ Una misma tecla puede activar varios puntos de toque a la vez; los comandos, mac
 Abrir un juego inicia con el cursor libre de UwU Mouse; el atajo activa la cámara. El cursor confiable es opaco cuando Android admite esa ventana; si se necesita una ventana del proceso de la app, se respeta el límite de opacidad del sistema para permitir los toques en el juego. El editor dibuja su cursor opaco dentro de su propia ventana. Los interruptores distinguen claramente sus estados y las ventanas siguen siendo arrastrables sin los indicadores de seis puntos.
 
 En **DeX**, el perfil de pantalla externa se separa del perfil del teléfono. Su calibración incluye el marco de la ventana; cambiar su tamaño, posición u orientación exige recalibrar. La sesión se pausa al salir del contexto autorizado. Pausar, editar o recuperar el inyector no reproduce teclas o botones que seguían mantenidos.
+
+Cerrar una sesión conserva el estado **Cerrando sesión** mientras falta confirmar la liberación. Si el proceso de la app se reinicia, recupera la identidad de la sesión pendiente del motor y permite **Cerrar sesión anterior** sin activar el mapeo. Si desapareció la pantalla original, exige terminar los productores de entrada y comprobar que Android no conserva contactos; no envía la cancelación a otra pantalla. Tras confirmar el cierre, volver a jugar requiere una pulsación explícita.
 
 ## Compatibilidad y alcance de la migración
 

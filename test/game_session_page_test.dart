@@ -370,6 +370,95 @@ void main() {
     expect(tester.widget<ButtonStyleButton>(stop.first).onPressed, isNotNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  for (final (mode, releaseUnverified) in [
+    ('blocked', false),
+    ('recovering', false),
+    ('paused', true),
+  ]) {
+    testWidgets(
+      '$mode with releaseUnverified=$releaseUnverified recovers only the previous session',
+      (tester) async {
+        final calls = <String>[];
+        final recovery = Completer<bool>();
+        var wire = status()
+          ..['mode'] = mode
+          ..['releaseUnverified'] = releaseUnverified
+          ..['guardianClosurePending'] = true
+          ..['stopRequested'] = true
+          ..['guardianSessionId'] = 123
+          ..['guardianTargetPackage'] = 'com.dts.freefireth';
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            calls.add(call.method);
+            return switch (call.method) {
+              'status' => wire,
+              'listApps' => [
+                {
+                  'packageName': 'com.dts.freefireth',
+                  'label': 'Free Fire',
+                  'gameHint': true,
+                },
+              ],
+              'listProfiles' => [profileWire()],
+              'selectedProfile' => profileWire(),
+              'recoverPendingSession' => recovery.future,
+              _ => null,
+            };
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpAndSettle();
+        final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+        final recover = find.byKey(const ValueKey('recover-pending-session'));
+        expect(tester.widget<InkWell>(game).onTap, isNull);
+        expect(tester.widget<InkWell>(game).onLongPress, isNull);
+        expect(find.text('Cerrar sesión anterior'), findsOneWidget);
+        calls.clear();
+        await tester.ensureVisible(recover);
+        await tester.tap(recover);
+        await tester.pump();
+        expect(tester.widget<FilledButton>(recover).onPressed, isNull);
+        expect(calls, ['recoverPendingSession']);
+
+        recovery.complete(true);
+        await tester.pumpAndSettle();
+        expect(tester.widget<InkWell>(game).onTap, isNull);
+        expect(tester.widget<InkWell>(game).onLongPress, isNull);
+        expect(recover, findsOneWidget);
+        expect(calls, isNot(contains('startProfile')));
+        expect(calls, isNot(contains('openEditor')));
+        expect(calls, isNot(contains('stop')));
+        expect(
+          calls.where((call) => call == 'recoverPendingSession'),
+          hasLength(1),
+        );
+
+        // A focus request alone does not clear the barrier. Only native proof does.
+        wire = status()..['mode'] = 'stopped';
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        expect(recover, findsNothing);
+        expect(calls, isNot(contains('startProfile')));
+        expect(tester.widget<InkWell>(game).onLongPress, isNotNull);
+        await tester.ensureVisible(game);
+        await tester.tap(game);
+        await tester.pumpAndSettle();
+        expect(calls.where((call) => call == 'startProfile'), hasLength(1));
+        expect(calls, isNot(contains('openEditor')));
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
   for (final calibrated in [false, true]) {
     testWidgets(
       'game tap ${calibrated ? 'starts saved profile' : 'opens calibration'}',

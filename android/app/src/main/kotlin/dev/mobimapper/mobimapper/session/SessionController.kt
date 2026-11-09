@@ -44,12 +44,14 @@ object SessionController {
     }
     private fun handleRecovery(sessionId:Long,workerGeneration:Long,phase:Int,reason:String) {
             if(!noticeGate.accept(sessionId,workerGeneration,phase)) return
+            if(!SessionClosurePolicy.mayApplyRecoveryNotice(sessionBackend!=null,releaseUnverified,contacts)) return
             if(phase==1) { pause("Recuperando inyector: $reason"); mode=SessionMode.RECOVERING }
             if(phase==2) worker.post {
                 if(sessionId==backendSessionId) {
-                    val result=runCatching { (sessionBackend ?: environment.injector)?.status() }.getOrNull()
-                    if(result!=null && (result.getBoolean("cancelAdmitted") || result.getBoolean("terminalReconciled")) && result.getLong("sessionId")==sessionId) {
+                    val result=runCatching { (sessionBackend ?: environment.injector)?.let(::guardianClosureSnapshot) }.getOrNull()
+                    if(result?.provesClosureOf(originalSessionIdentity())==true) {
                         composer?.acknowledgeBackendReset(); releaseUnverified=false; contacts=0;cameraContactAdmitted=false
+                        guardianClosurePending=false;sessionBackend=null
                         mode=if(explicitlyStopped) SessionMode.STOPPED else SessionMode.PAUSED
                         state=if(explicitlyStopped) "Detenida · secuencia recuperada" else "Pausada · secuencia recuperada"
                         error=if(explicitlyStopped) "Secuencia anterior cerrada; sesión detenida" else "Inicia una sesión nueva manualmente"
@@ -57,7 +59,12 @@ object SessionController {
                 }
                 main.post { events.changed() }
             }
-            if(phase==3) { releaseUnverified=true; state="Bloqueada"; error=reason; mode=SessionMode.BLOCKED }
+            if(phase==3) {
+                // FAILED can arrive before STARTED through independent Binder threads.
+                // Stop input even when the ordering gate correctly discards a later STARTED.
+                pause("No se pudo cerrar el gesto anterior: $reason")
+                releaseUnverified=true; state="Cierre pendiente"; error=reason; mode=SessionMode.BLOCKED
+            }
             main.post { events.changed() }
     }
     private val metricsLock = Any()
@@ -108,6 +115,9 @@ object SessionController {
     @Volatile private var cameraIdleWakeup:Runnable?=null
     // Engine-thread ownership: an ACK from a replacement process cannot release this stream.
     private var sessionBackend: IInjector? = null
+    @Volatile private var guardianClosurePending=false
+    private var closureObservationPending=false
+    private var nextClosureObservationAt=0L
     @Volatile private var camera = true
     private val pointerTransition=PointerTransitionGate()
     val pointerTransitionPending:Boolean get()=pointerTransition.pending || cursorCommandPending
@@ -515,6 +525,9 @@ object SessionController {
         targetConfirmed = isTarget
         if (!isTarget) {
             if (active || starting || (testRunning && probeStarted)) pause("Aplicación destino sin foco; inicia otra vez manualmente")
+            // A removed display cannot regain focus. Keep the bounded closure retry /
+            // proof-observation heartbeat alive without authorizing or arming input.
+            requestPendingRecovery()
             return
         }
         requestPendingRecovery()
@@ -538,21 +551,34 @@ object SessionController {
         }
     }
     val needsRecoveryContext:Boolean get()=releaseUnverified || mode==SessionMode.RECOVERING
+    val recoveryTargetPackage:String? get()=originalTargetPackage.takeIf { needsRecoveryContext && backendSessionId>0L }
+    val recoveryTargetDisplayId:Int get()=originalTargetDisplayId
+
+    /** An explicit retry can renew bounded closure attempts; it never arms input. */
+    @Synchronized fun retryPendingClosure() {
+        if(!needsRecoveryContext) return
+        focusRecovery.retryExplicitly(backendSessionId)
+        requestPendingRecovery()
+    }
 
     /** Retrying closure is separate from arming: only an explicit later action starts mapping. */
     @Synchronized private fun requestPendingRecovery() {
         val backend=sessionBackend ?: return
         if(environment.injector?.asBinder()!==backend.asBinder()) return
         val eligible=releaseUnverified && !active && !armed && !starting && !stopping && !testRunning &&
-            mode!=SessionMode.RECOVERING && composer?.recoveryFrame()!=null
-        val attempt=focusRecovery.begin(backendSessionId,eligible,SystemClock.uptimeMillis()) ?: return
+            mode!=SessionMode.RECOVERING && (guardianClosurePending || composer?.recoveryFrame()!=null)
+        if(!eligible) return
+        // This RPC closes the immutable original stream only. The guardian checks focus
+        // or independently proves a removed display empty; normal input is never armed.
+        val attempt=focusRecovery.begin(backendSessionId,true,SystemClock.uptimeMillis(),allowUnfocused=true)
+            ?: run { observeGuardianClosure(backend);return }
         val originalComposer=composer
         worker.post {
             var succeeded=false
             var retryAllowed=true
             try {
                 if(backendSessionId!=attempt.sessionId || sessionBackend!==backend || composer!==originalComposer ||
-                    !targetConfirmed || active || armed || stopping || !releaseUnverified) return@post
+                    active || armed || stopping || !releaseUnverified) return@post
                 if(!backend.status().getBoolean("sessionRecoverySupported",false)) {
                     retryAllowed=false
                     mode=SessionMode.BLOCKED;state="Bloqueada";error="Actualiza el motor para recuperar esta sesión"
@@ -560,17 +586,13 @@ object SessionController {
                 }
                 mode=SessionMode.RECOVERING;state="Recuperando gesto anterior"
                 main.post { events.changed() }
+                // A surviving guardian can still own an ACTIVE journal after app reattachment.
+                if(guardianClosurePending) runCatching { backend.release(attempt.sessionId) }
                 backend.recoverSession(attempt.sessionId)
-                val result=backend.status()
-                val closed=result.getLong("sessionId")==attempt.sessionId &&
-                    result.getInt("targetUid",-1)==originalTargetUid &&
-                    result.getInt("displayId",-1)==originalTargetDisplayId &&
-                    result.getString("targetPackage")==originalTargetPackage &&
-                    result.getInt("possibleContacts",-1)==0 && !result.getBoolean("releaseUnverified",true) &&
-                    !result.getBoolean("keyReleaseUnverified",true) &&
-                    (result.getBoolean("cancelAdmitted") || result.getBoolean("terminalReconciled"))
+                val closed=guardianClosureSnapshot(backend)?.provesClosureOf(originalSessionIdentity())==true
                 if(closed && backendSessionId==attempt.sessionId && sessionBackend===backend && composer===originalComposer) {
                     composer?.acknowledgeBackendReset();releaseUnverified=false;contacts=0;cameraContactAdmitted=false
+                    guardianClosurePending=false;sessionBackend=null
                     mode=if(explicitlyStopped) SessionMode.STOPPED else SessionMode.PAUSED
                     state=if(explicitlyStopped) "Detenida · secuencia recuperada" else "Pausada · secuencia recuperada"
                     error="Secuencia anterior cerrada; inicia manualmente"
@@ -584,6 +606,28 @@ object SessionController {
                 focusRecovery.finished(attempt,succeeded,SystemClock.uptimeMillis(),retryAllowed)
                 main.post { events.changed() }
             }
+        }
+    }
+    /** A reattached app has no old callback Binder. Observe proof after bounded retries end. */
+    @Synchronized private fun observeGuardianClosure(backend:IInjector) {
+        val now=SystemClock.uptimeMillis()
+        if(closureObservationPending || now<nextClosureObservationAt) return
+        closureObservationPending=true;nextClosureObservationAt=now+250L
+        val sid=backendSessionId;val originalComposer=composer
+        worker.post {
+            try {
+                if(!releaseUnverified || active || armed || starting || stopping || sid!=backendSessionId ||
+                    sessionBackend!==backend || composer!==originalComposer) return@post
+                if(guardianClosureSnapshot(backend)?.provesClosureOf(originalSessionIdentity())==true) {
+                    composer?.acknowledgeBackendReset();releaseUnverified=false;contacts=0;cameraContactAdmitted=false
+                    guardianClosurePending=false;sessionBackend=null
+                    mode=SessionClosurePolicy.settledMode(explicitlyStopped,true,false)
+                    state=if(explicitlyStopped) "Detenida · secuencia recuperada" else "Pausada · secuencia recuperada"
+                    error="Secuencia anterior cerrada; inicia manualmente"
+                    main.post { events.changed() }
+                }
+            } catch(_:Exception) { /* Missing status never establishes closure. */ }
+            finally { synchronized(this) { closureObservationPending=false } }
         }
     }
     private fun prepare(run: Long): Boolean {
@@ -605,12 +649,11 @@ object SessionController {
             // Own the newly opened empty session before another status RPC can fail.
             previousBackendSessionId=backendSessionId
             backendSessionId=sid;sessionBackend=backend;check(noticeGate.begin(sid))
+            originalTargetUid=-1;originalTargetPackage=packageName;originalTargetDisplayId=displayId
+            originalContinuousCamera=continuousCamera;cameraContactAdmitted=false
             val backendState=backend.status()
             check(backendState.getInt("displayId",-1)==displayId) { "El motor no confirmó la pantalla de destino" }
             originalTargetUid=backendState.getInt("targetUid",-1)
-            originalTargetPackage=packageName
-            originalTargetDisplayId=displayId
-            originalContinuousCamera=continuousCamera;cameraContactAdmitted=false
             lastAttemptedFrame=null;lastMotorError=null;firstRejectedInput=null
             synchronized(metricsLock) { queueCount=0;ipcCount=0;cameraDeliveryCount=0;cameraResetIpcCount=0;metricsSessionId=sid }
             cameraResetBatches=0L;cameraResetFailures=0L;cameraResetUnknownProgress=0L
@@ -928,8 +971,12 @@ object SessionController {
             main.post { if(run==generation) onReady(safe) }
         }
     }
-    fun editorClosed() { if(!active) { mode=if(releaseUnverified) SessionMode.BLOCKED else SessionMode.PAUSED; state=if(releaseUnverified) "Bloqueada" else "Pausada" } }
-    fun stopSession() { explicitlyStopped=true; pause("Detenida por usuario") }
+    @Synchronized fun editorClosed() {
+        if(active || stopping || mode==SessionMode.RECOVERING) return
+        mode=SessionClosurePolicy.settledMode(explicitlyStopped,!releaseUnverified,false)
+        state=when(mode) { SessionMode.STOPPED -> "Detenida";SessionMode.BLOCKED -> "Cierre pendiente";else -> "Pausada" }
+    }
+    @Synchronized fun stopSession() { explicitlyStopped=true; pause("Detenida por usuario") }
     @Synchronized fun sessionServiceDestroyed() {
         // A prior pause owns its release and diagnostic reason. Service cleanup must
         // not replace either, including an inactive blocked/recovering sequence.
@@ -952,13 +999,23 @@ object SessionController {
         active = false; armed = false; generation++; testRunning = false;pointerTransition.invalidate();cursorCommandPending=false
         starting = false; stopping = true; probeStarted = false
         val run = generation
-        mode=if(explicitlyStopped) SessionMode.STOPPED else SessionMode.PAUSED; state = if(explicitlyStopped) "Detenida" else "Pausada"; error = reason
+        // STOPPED is a confirmed outcome, not the request while release is still queued.
+        mode=SessionMode.PAUSED; state = if(explicitlyStopped) "Cerrando sesión" else "Pausada"; error = reason
         queue.clear()
         publishMouse(run, false)
         main.post { events.changed() }
         worker.post {
             releaseOnWorker()
-            synchronized(this) { if (run == generation) { stopping = false; if(releaseUnverified && mode!=SessionMode.RECOVERING) { mode=SessionMode.BLOCKED; state="Bloqueada" } } }
+            synchronized(this) { if (run == generation) {
+                stopping = false
+                mode=SessionClosurePolicy.settledMode(explicitlyStopped,!releaseUnverified,mode==SessionMode.RECOVERING)
+                state=when(mode) {
+                    SessionMode.STOPPED -> "Detenida"
+                    SessionMode.BLOCKED -> "Cierre pendiente"
+                    SessionMode.RECOVERING -> "Recuperando gesto anterior"
+                    else -> "Pausada"
+                }
+            } }
             requestPendingRecovery()
             main.post { events.changed() }
             Log.i("MobiMapper", "paused releaseAcknowledged=${!releaseUnverified} pending=$contacts reason=$reason")
@@ -973,13 +1030,22 @@ object SessionController {
         val priorUnverified = releaseUnverified
         val pending = (c?.activeCount ?: 0) > 0 || c?.releaseUnverified == true || priorUnverified
         val localReleased = engine?.pause() ?: c?.cancelAll() ?: !pending
-        val backendReleased = runCatching { backend?.release(backendSessionId) ?: false }.getOrDefault(false)
+        if(backend!=null) runCatching { backend.release(backendSessionId) }
+        val observed=runCatching { backend?.let(::guardianClosureSnapshot) }.getOrNull()
+        // beginTarget can succeed before its following status reply is lost. Recover the
+        // missing UID only from that same guardian/SID/package/display, never a new target.
+        if(originalTargetUid<10_000 && observed?.identity?.let {
+                it.sessionId==backendSessionId && it.packageName==originalTargetPackage && it.displayId==originalTargetDisplayId
+            }==true) originalTargetUid=observed.identity.targetUid
+        val backendReleased=observed?.provesClosureOf(originalSessionIdentity())==true
         // Only the Binder captured with this composer can acknowledge its possibly delivered stream.
         // A new registered backend may know nothing about contacts left by a dead process.
-        if (backendReleased) { c?.acknowledgeBackendReset(); sessionBackend = null;cameraContactAdmitted=false }
+        if (backendReleased) { c?.acknowledgeBackendReset(); sessionBackend = null;cameraContactAdmitted=false;guardianClosurePending=false }
+        else if(backend!=null && backendSessionId>0L && c?.recoveryFrame()==null) guardianClosurePending=true
         releaseUnverified = if (backendReleased) false else
-            (c?.releaseUnverified == true || (c?.activeCount ?: 0) > 0 || (priorUnverified && !localReleased))
-        contacts = c?.activeCount ?: 0
+            (c?.releaseUnverified == true || (c?.activeCount ?: 0) > 0 || (priorUnverified && !localReleased) ||
+                guardianClosurePending || (backend!=null && backendSessionId>0L))
+        contacts = if(backendReleased) 0 else maxOf(c?.activeCount ?: 0,if(guardianClosurePending) contacts else 0)
         return !releaseUnverified
     }
     private fun probeTargetFocused(): Boolean = if (environment.available) targetConfirmed else
@@ -1219,8 +1285,46 @@ object SessionController {
         }
         worker.post(await)
     }
+    private fun originalSessionIdentity()=GuardianSessionIdentity(backendSessionId,originalTargetUid,originalTargetPackage,originalTargetDisplayId)
+    private fun guardianClosureSnapshot(backend:IInjector):GuardianClosureSnapshot? {
+        val status=backend.status()
+        if(status.getInt("protocol",-1)!=4 || status.getInt("uid",-1)!=2000 || !status.getBoolean("targeted",false)) return null
+        val identity=GuardianSessionIdentity(status.getLong("sessionId"),status.getInt("targetUid",-1),
+            status.getString("targetPackage") ?: "",status.getInt("displayId",-1))
+        return GuardianClosureSnapshot(identity,status.getInt("possibleContacts",-1),status.getInt("confirmedContacts",-1),
+            status.getBoolean("releaseUnverified",true),status.getBoolean("keyReleaseUnverified",true),
+            status.getBoolean("cancelAdmitted",false),status.getBoolean("terminalReconciled",false),
+            status.getString("recoveryState") ?: "").takeIf { it.valid }
+    }
     fun backendAvailable() {
         worker.post {
+            val attached=environment.injector ?: return@post
+            val guardian=runCatching { guardianClosureSnapshot(attached) }.getOrNull()
+            if(guardian!=null && SessionClosurePolicy.mayAdoptGuardian(backendSessionId,composer!=null,
+                    active,armed,starting,testRunning,guardian)) {
+                val adopted=synchronized(this) {
+                    if(!SessionClosurePolicy.mayAdoptGuardian(backendSessionId,composer!=null,active,armed,starting,testRunning,guardian)) false
+                    else {
+                        val original=guardian.identity
+                        backendSessionId=original.sessionId;sessionBackend=attached;noticeGate.begin(original.sessionId)
+                        originalTargetUid=original.targetUid;originalTargetPackage=original.packageName;originalTargetDisplayId=original.displayId
+                        targetPackage=original.packageName;targetDisplayId=original.displayId
+                        targetConfirmed=false;focusRecovery.contextChanged(false)
+                        guardianClosurePending=true;releaseUnverified=true;contacts=maxOf(guardian.possibleContacts,guardian.confirmedContacts)
+                        explicitlyStopped=true;mode=SessionMode.BLOCKED;state="Cierre pendiente"
+                        error="Vuelve al juego anterior para terminar de cerrar la sesión"
+                        true
+                    }
+                }
+                if(adopted) {
+                    main.post { environment.refreshContext();events.changed() }
+                    requestPendingRecovery()
+                    return@post
+                }
+            }
+            if(releaseUnverified && guardianClosurePending && sessionBackend?.asBinder()===attached.asBinder()) {
+                requestPendingRecovery();return@post
+            }
             val frame=composer?.recoveryFrame()
             if(releaseUnverified && frame!=null) {
                 val backend=environment.injector ?: return@post
@@ -1238,13 +1342,15 @@ object SessionController {
                         else if(originalTargetPackage==TARGET) backend.recoverOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid)
                         else backend.recoverTargetOrphan(client,width,height,frame.downTime,frame.ids,frame.xs,frame.ys,originalTargetUid,originalTargetPackage)
                     if(sid>0) {
-                        val recoveredStatus=backend.status()
-                        check(recoveredStatus.getInt("displayId",-1)==originalTargetDisplayId) { "La recuperación no confirmó la pantalla original" }
-                        backendSessionId=sid; noticeGate.begin(sid); sessionBackend=backend; composer?.acknowledgeBackendReset()
-                        releaseUnverified=false; contacts=0;cameraContactAdmitted=false
+                        val recoveredStatus=guardianClosureSnapshot(backend)
+                        check(recoveredStatus?.provesClosureOf(originalSessionIdentity().copy(sessionId=sid))==true) {
+                            "La recuperación no confirmó el cierre de la sesión original"
+                        }
+                        backendSessionId=sid; noticeGate.begin(sid); sessionBackend=null; composer?.acknowledgeBackendReset()
+                        releaseUnverified=false; contacts=0;cameraContactAdmitted=false;guardianClosurePending=false
                         mode=if(explicitlyStopped) SessionMode.STOPPED else SessionMode.PAUSED
                         state=if(explicitlyStopped) "Detenida · secuencia recuperada" else "Pausada · secuencia recuperada"
-                        error=if(explicitlyStopped) "Secuencia anterior cerrada; sesión detenida" else if(recoveredStatus.getBoolean("cancelAdmitted")) "Inicia manualmente; cancelación admitida por Android" else "Inicia una sesión nueva manualmente"
+                        error=if(explicitlyStopped) "Secuencia anterior cerrada; sesión detenida" else if(recoveredStatus.cancelAdmitted) "Inicia manualmente; cancelación admitida por Android" else "Inicia una sesión nueva manualmente"
                     } else { state="Bloqueada"; mode=SessionMode.BLOCKED; error="Cancelación anterior no admitida" }
                 } catch(e:Exception) { state="Bloqueada"; mode=SessionMode.BLOCKED; error=e.message ?: "No se pudo recuperar" }
                 main.post { events.changed() }
@@ -1301,6 +1407,7 @@ object SessionController {
         val captureDiagnostics = environment.diagnostics()
         return mapOf("protocol" to 1, "state" to state, "active" to active,
             "mode" to mode.wire,"activeProfileId" to activeProfileId,"profileName" to profileName,
+            "stopRequested" to explicitlyStopped,"guardianClosurePending" to guardianClosurePending,
             "activePackage" to targetPackage,"targetDisplayId" to targetDisplayId,"originalTargetDisplayId" to originalTargetDisplayId,
             "contextError" to error,
             "pointerMode" to if(!active) "none" else if(camera) "camera" else if(runtimeProfile==null) "native" else "cursor",
@@ -1322,6 +1429,7 @@ object SessionController {
             "targetFocused" to backend?.getBoolean("targetFocused"), "focusError" to backend?.getString("focusError"),
             "supervisorPid" to backend?.getInt("supervisorPid"), "workerPid" to backend?.getInt("workerPid"),
             "workerGeneration" to backend?.getLong("workerGeneration"), "backendSessionId" to backendSessionId,
+            "guardianSessionId" to backend?.getLong("sessionId"),"guardianTargetPackage" to backend?.getString("targetPackage"),
             "recoveryState" to backend?.getString("recoveryState"), "recoveryAttempts" to backend?.getInt("recoveryAttempts"),
             "recoveredCount" to backend?.getInt("recoveredCount"), "cancelAdmitted" to backend?.getBoolean("cancelAdmitted"),
             "liveWorkerCancelAdmitted" to backend?.getBoolean("liveWorkerCancelAdmitted"),

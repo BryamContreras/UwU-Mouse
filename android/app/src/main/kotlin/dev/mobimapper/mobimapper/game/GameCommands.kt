@@ -18,4 +18,8 @@ object GameCommands {
     fun pause() = SessionController.pause("Pausada por usuario")
     fun openMenu() = GameCoordinator.openControlsMenu()
     fun stop() = GameCoordinator.stop()
+    fun recoverPendingSession():Boolean {
+        check(!LocalActivation.busy) { "Espera a que termine la activación" }
+        return GameCoordinator.focusPendingClosure()
+    }
 }

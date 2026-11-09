@@ -4,6 +4,44 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VisualCursorRouterTest {
+    @Test fun failedOrdinaryTrustedHideRemainsPendingAndCanBeRetried() {
+        val events=mutableListOf<String>()
+        val trusted=Renderer("trusted",events)
+        val application=Renderer("application",events)
+        val router=VisualCursorRouter(trusted,application)
+        assertTrue(router.show(0,10f,20f,20f))
+        trusted.hideFailure=IllegalStateException()
+        assertThrows(IllegalStateException::class.java) { router.hide() }
+        assertTrue(router.cleanupPending)
+        assertEquals("trusted_cleanup_IllegalStateException",router.error)
+        assertFalse(router.show(0,11f,21f,20f))
+        assertEquals(1,trusted.publications.size)
+        assertTrue(application.publications.isEmpty())
+        trusted.hideFailure=null
+        router.hide()
+        assertFalse(router.cleanupPending)
+        assertTrue(router.show(0,12f,22f,20f))
+        assertEquals("trusted",router.route)
+    }
+
+    @Test fun failedOrdinaryApplicationHideCannotBeReportedAsComplete() {
+        val events=mutableListOf<String>()
+        val trusted=Renderer("trusted",events).apply { admitted=false }
+        val application=Renderer("application",events)
+        val router=VisualCursorRouter(trusted,application)
+        assertTrue(router.show(17,10f,20f,20f))
+        application.hideFailure=IllegalArgumentException()
+        assertThrows(IllegalStateException::class.java) { router.hide() }
+        assertTrue(router.cleanupPending)
+        assertFalse(router.show(17,11f,21f,20f))
+        assertEquals(1,application.publications.size)
+        application.hideFailure=null
+        router.hide()
+        assertFalse(router.cleanupPending)
+        assertTrue(router.show(17,12f,22f,20f))
+        assertEquals("application",router.route)
+    }
+
     private data class Position(val x:Float,val y:Float,val size:Float)
     private data class Publication(val display:Int,val position:Position)
     private class BackendDisconnectedException:Exception()

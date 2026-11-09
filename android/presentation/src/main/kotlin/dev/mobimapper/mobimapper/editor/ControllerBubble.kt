@@ -13,6 +13,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.PointerIcon
 import android.view.View
 import android.view.WindowManager
 import android.widget.*
@@ -93,7 +94,12 @@ class ControllerBubble(
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
         this.playing = playing; this.editEnabled = editEnabled; this.playEnabled = playEnabled
         this.interactionEnabled = interactionEnabled; this.cursorHint = cursorHint
+        val pointerOwnershipChanged=this.pointerIntercepted!=pointerIntercepted
         this.pointerIntercepted=pointerIntercepted;this.onCursorReturn=onCursorReturn
+        if(pointerOwnershipChanged) {
+            val icon=PointerIcon.getSystemIcon(overlayContext,if(pointerIntercepted) PointerIcon.TYPE_NULL else PointerIcon.TYPE_ARROW)
+            bubble?.pointerIcon=icon;menu?.pointerIcon=icon
+        }
         this.onVisualSettingsChanged=onVisualSettingsChanged
         this.profileItems=profileItems;this.onCreateProfile=onCreateProfile
         this.onExportProfile=onExportProfile;this.onImportProfile=onImportProfile
@@ -106,7 +112,11 @@ class ControllerBubble(
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createBubble() {
-        val view = ImageView(overlayContext).apply {
+        val view = object:ImageView(overlayContext) {
+            override fun onResolvePointerIcon(event:MotionEvent,pointerIndex:Int):PointerIcon? =
+                if(pointerIntercepted) PointerIcon.getSystemIcon(context,PointerIcon.TYPE_NULL)
+                else super.onResolvePointerIcon(event,pointerIndex)
+        }.apply {
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
             contentDescription="UwU Mouse · abrir opciones"
             setImageResource(R.drawable.mm_brand); scaleType=ImageView.ScaleType.FIT_CENTER
@@ -374,7 +384,11 @@ class ControllerBubble(
                 LinearLayout.LayoutParams(0,dp(76),1f).apply { setMargins(dp(3),dp(4),dp(3),0) })
         }
         panel.addView(row); panel.addView(detail)
-        val scroll = ScrollView(overlayContext).apply {
+        val scroll = object:ScrollView(overlayContext) {
+            override fun onResolvePointerIcon(event:MotionEvent,pointerIndex:Int):PointerIcon? =
+                if(pointerIntercepted) PointerIcon.getSystemIcon(context,PointerIcon.TYPE_NULL)
+                else super.onResolvePointerIcon(event,pointerIndex)
+        }.apply {
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
             contentDescription="UwU Mouse · opciones"
             addView(panel); isVerticalScrollBarEnabled=false
