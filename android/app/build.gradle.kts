@@ -51,7 +51,13 @@ android {
     buildFeatures {
         aidl = true
     }
-    packaging { jniLibs { useLegacyPackaging = true } }
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+        // Bouncy Castle publishes these license resources in each companion JAR.
+        // Concatenate their notices rather than discarding any dependency's attribution.
+        resources.merges += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md")
+        resources.excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+    }
 }
 
 kotlin {

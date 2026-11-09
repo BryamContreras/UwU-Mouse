@@ -69,6 +69,13 @@ $versionFile=Join-Path $destination 'flutter-version.json'
 if($LASTEXITCODE -ne 0) { throw 'Flutter version query failed' }
 & $python.Source (Join-Path $projectRoot 'tools\check_toolchain.py') --flutter-json $versionFile
 if($LASTEXITCODE -ne 0) { throw 'Installed Flutter differs from the shared toolchain' }
+$precachePreference=$ErrorActionPreference
+try {
+    $ErrorActionPreference='Continue'
+    & (Join-Path $FlutterRoot 'bin\flutter.bat') precache --android
+    $precacheExitCode=$LASTEXITCODE
+} finally { $ErrorActionPreference=$precachePreference }
+if($precacheExitCode -ne 0) { throw 'Could not refresh the Android embedding for the pinned Flutter SDK' }
 if(!(Test-Path -LiteralPath (Join-Path $FlutterRoot 'bin\cache\artifacts\engine\android-arm64\flutter.jar'))) { throw 'Cached Flutter Android embedding jar not found' }
 # Machine-specific configuration belongs only to the standalone build.
 $sdkProperty=$AndroidSdk.Replace('\','/').Replace(':','\:')

@@ -15,6 +15,9 @@ import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Display
+import android.view.InputDevice
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.hardware.input.InputManager
@@ -88,9 +91,9 @@ class AndroidCompatibilityTest {
         }
     }
 
-    @Test fun installedNativeLibrariesAreReadableAndCaptureBinaryLoads() {
+    @Test fun installedNativeLibrariesAndActivationTlsLoad() {
         assertTrue("This shared emulator APK must use x86_64", Build.SUPPORTED_ABIS.contains("x86_64"))
-        for (name in listOf("libuwu_capture.so", "libuwu_adb.so", "libflutter.so")) {
+        for (name in listOf("libuwu_capture.so", "libuwu_adb.so", "libflutter.so", "libconscrypt_jni.so")) {
             val library = File(context.applicationInfo.nativeLibraryDir, name)
             assertTrue("Missing installed native library: $name", library.isFile)
             assertTrue("Unreadable installed native library: $name", library.canRead())
@@ -98,6 +101,13 @@ class AndroidCompatibilityTest {
         }
         // Loading checks the platform linker/DCL contract. No native inventory/start method is called.
         System.load(File(context.applicationInfo.nativeLibraryDir, "libuwu_capture.so").absolutePath)
+        System.load(File(context.applicationInfo.nativeLibraryDir, "libuwu_adb.so").absolutePath)
+        // Exercise the production key/certificate/provider path, including Bouncy Castle.
+        val tls = dev.mobimapper.mobimapper.activation.adb.AdbKey(context, "uwu-compatibility").sslContext
+        // Construct the actual native-backed TLS socket without opening a network connection.
+        (tls.socketFactory.createSocket() as javax.net.ssl.SSLSocket).use { socket ->
+            assertTrue(socket.supportedProtocols.contains("TLSv1.3"))
+        }
         assertFalse(SessionController.active)
         assertEquals(0, SessionController.contacts)
     }
@@ -143,6 +153,52 @@ class AndroidCompatibilityTest {
         }
         assertTrue("A rejected permission must not poison a later grant", cursor.show(display.displayId, 80f, 80f, 20f))
         cursor.hide()
+    }
+
+    @Test fun focusedApplicationOverlayRetainsBackKeysAndTheirPhysicalSource() {
+        val display = requireNotNull(context.getSystemService(DisplayManager::class.java)
+            .getDisplay(Display.DEFAULT_DISPLAY))
+        val overlay = context.createWindowContext(display, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+        val windows = overlay.getSystemService(WindowManager::class.java)
+        val delivered = mutableListOf<Triple<Int, Int, Boolean>>()
+        val view = onMain {
+            object : View(overlay) {
+                init { isFocusable = true; isFocusableInTouchMode = true }
+                override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                    if (event.keyCode != KeyEvent.KEYCODE_BACK) return super.dispatchKeyEvent(event)
+                    delivered += Triple(event.action, event.source, event.isCanceled)
+                    return true
+                }
+            }.also {
+                val params = WindowManager.LayoutParams(320, 240, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                        WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM, PixelFormat.TRANSLUCENT)
+                windows.addView(it, params)
+                it.requestFocus()
+            }
+        }
+        try {
+            await("The owned Back test overlay never gained focus") {
+                onMain { view.isAttachedToWindow && view.hasWindowFocus() }
+            }
+            val expected = mutableListOf<Triple<Int, Int, Boolean>>()
+            for (source in listOf(InputDevice.SOURCE_MOUSE, InputDevice.SOURCE_KEYBOARD)) {
+                val downTime = SystemClock.uptimeMillis()
+                for (action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                    assertTrue("The test must retain focus before injecting its own Back key", onMain { view.hasWindowFocus() })
+                    val event = KeyEvent(downTime, SystemClock.uptimeMillis(), action, KeyEvent.KEYCODE_BACK,
+                        0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, source)
+                    assertTrue("Framework rejected an event for the owned test overlay",
+                        instrumentation.uiAutomation.injectInputEvent(event, true))
+                    expected += Triple(action, source, false)
+                }
+            }
+            await("Back key pairs did not reach the owned overlay") { onMain { delivered.size >= expected.size } }
+            assertEquals("Scoped legacy Back must retain mouse/keyboard identity", expected, onMain { delivered.toList() })
+            assertTrue("Handling Back must leave the owned overlay attached", onMain { view.isAttachedToWindow })
+        } finally {
+            onMain { windows.removeViewImmediate(view) }
+        }
     }
 
     @Test fun activationNetworkPermissionReflectsPlatformGrant() {
