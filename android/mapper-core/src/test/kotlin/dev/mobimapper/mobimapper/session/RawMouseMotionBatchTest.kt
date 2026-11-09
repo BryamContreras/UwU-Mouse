@@ -67,5 +67,19 @@ class RawMouseMotionBatchTest {
         assertEquals(1f,raw.filteredXSum { x,time -> filtered+=time;x },0f)
         assertEquals(listOf(1L,3L),filtered)
         assertEquals(1f,raw.ySum(),0f)
+        assertEquals(2,raw.movingSampleCount)
+    }
+
+    @Test fun motionMetadataPreservesNegativeZeroVerticalOnlyAndDuplicateDeviceTimes() {
+        val raw=RawMouseMotionBatch(longArrayOf(20,20,10,10),
+            floatArrayOf(-0f,0f,-.25f,0f),floatArrayOf(0f,1f,0f,-0f))
+        assertEquals(2,raw.movingSampleCount)
+        val delivered=mutableListOf<Long>()
+        assertTrue(raw.deliverMotion { _,_,time -> delivered+=time;true })
+        assertEquals(listOf(20L,10L),delivered)
+        assertEquals(0,RawMouseMotionBatch(longArrayOf(0),floatArrayOf(0f),floatArrayOf(-0f)).movingSampleCount)
+        assertThrows(IllegalArgumentException::class.java) {
+            RawMouseMotionBatch(longArrayOf(0),floatArrayOf(0f),floatArrayOf(Float.POSITIVE_INFINITY))
+        }
     }
 }

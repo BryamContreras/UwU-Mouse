@@ -3,6 +3,7 @@ package dev.mobimapper.mobimapper.session
 import android.content.Context
 import android.os.*
 import android.util.Log
+import java.util.concurrent.atomic.AtomicLong
 import dev.mobimapper.mobimapper.backend.IBackendEvents
 import dev.mobimapper.mobimapper.backend.IInjector
 import dev.mobimapper.mobimapper.engine.*
@@ -78,8 +79,10 @@ object SessionController {
     @Volatile var error = ""; private set
     @Volatile var releaseUnverified = false; private set
     @Volatile var inputKeys = 0L; private set
-    @Volatile var inputMouse = 0L; private set
-    @Volatile var relativeSamples = 0L; private set
+    private val inputMouseCount=AtomicLong()
+    val inputMouse:Long get()=inputMouseCount.get()
+    private val relativeSampleCount=AtomicLong()
+    val relativeSamples:Long get()=relativeSampleCount.get()
     @Volatile var wheelSteps = 0f; private set
     @Volatile var injected = 0L; private set
     @Volatile var contacts = 0; private set
@@ -196,7 +199,8 @@ object SessionController {
                     } else if(cameraPacer?.offer(precisionMouseX(x),y,enqueued,queue.consumingSampleTimeNanos)==false && active)
                         pause("No se pudo enviar el movimiento de cámara")
                 }
-                8 -> if(camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled()) {
+                8 -> if(camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled() &&
+                    (code==InputQueueEntry.NO_POINTER_EPOCH || pointerTransition.admitsMotion(code))) {
                     val batch=queue.consumingMotionBatch ?: return@InputQueue
                     if(runtimeProfile?.bindings?.ggCameraPolicy==null &&
                         runtimeProfile?.bindings?.continuousCamera==true && !cameraResetBatchSupported) {
@@ -889,7 +893,7 @@ object SessionController {
     /** Both physical edges bypass the transition gate, just like the keyboard hold. */
     fun cameraSuspendButton(code:Int,down:Boolean):Boolean {
         if(!active || !targetConfirmed || !isCameraSuspendButton(code)) return false
-        inputMouse++
+        inputMouseCount.incrementAndGet()
         pointerTransition.hold(down)?.let { queue.offer(4,code=it,generation=generation) }
         return true
     }
@@ -908,7 +912,7 @@ object SessionController {
     }
     fun button(code: Int, down: Boolean) {
         if(cameraSuspendButton(code,down)) return
-        inputMouse++;queue.offer(2,code,if(down)1f else 0f,generation=generation)
+        inputMouseCount.incrementAndGet();queue.offer(2,code,if(down)1f else 0f,generation=generation)
     }
     /** Physical UP bypasses mode transitions to clear latches; ordinary taps still receive UP. */
     fun mappedButtonReleased(code:Int):Boolean {
@@ -922,34 +926,58 @@ object SessionController {
     fun macroButtonReleased(code:Int):Boolean=mappedButtonReleased(code)
     fun mouse(dx: Float, dy: Float, sampleTimeNanos:Long=Long.MIN_VALUE) {
         if(!active || !targetConfirmed || pointerTransitionPending) return
-        inputMouse++;if(dx!=0f || dy!=0f) {
+        inputMouseCount.incrementAndGet();if(dx!=0f || dy!=0f) {
             if(camera && usesIdleCameraRetirement()) {
                 cameraIdlePolicy.sourceMotion(sampleTimeNanos)
                 cameraIdlePolicy.motionReceived(SystemClock.elapsedRealtimeNanos())
             }
-            relativeSamples++;queue.offer(3,x=dx,y=dy,generation=generation,sampleTimeNanos=sampleTimeNanos)
+            relativeSampleCount.incrementAndGet();queue.offer(3,x=dx,y=dy,generation=generation,sampleTimeNanos=sampleTimeNanos)
         }
     }
     fun mouseBatch(batch:RawMouseMotionBatch) {
+        val run=generation
         if(!active || !targetConfirmed || pointerTransitionPending) return
-        inputMouse+=batch.size
-        var movement=false
-        val trackIdle=camera && usesIdleCameraRetirement()
-        for(index in batch.timesNanos.indices) if(batch.xs[index]!=0f || batch.ys[index]!=0f) {
-            relativeSamples++;movement=true
-            if(trackIdle) cameraIdlePolicy.sourceMotion(batch.timesNanos[index])
+        val pointerEpoch=if(runtimeProfile?.bindings?.ggCameraPolicy!=null)
+            pointerTransition.motionEpoch() ?: return else InputQueueEntry.NO_POINTER_EPOCH
+        enqueueMouseBatch(batch,run,camera && usesIdleCameraRetirement(),pointerEpoch)
+    }
+    /** Cold publication by main. A racing lifecycle change only makes this hint stale. */
+    fun nativeCameraRoute(captureId:Long,buttons:Int):NativeMotionDispatchGate.Route? {
+        val run=generation
+        if(!active || !targetConfirmed || !camera || pointerTransitionPending || runtimeProfile?.bindings?.ggCameraPolicy==null) return null
+        val pointerEpoch=pointerTransition.motionEpoch() ?: return null
+        return if(run==generation) NativeMotionDispatchGate.Route(captureId,run,buttons,pointerEpoch) else null
+    }
+    /** Steady Binder ingress only enqueues; overflow keeps the ordinary pause/release path. */
+    fun tryNativeCameraBatch(batch:RawMouseMotionBatch,route:NativeMotionDispatchGate.Route):Boolean {
+        val run=route.generation
+        if(run!=generation || !active || !targetConfirmed || !camera || pointerTransitionPending ||
+            runtimeProfile?.bindings?.ggCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
+        // This camera policy owns its timers on the worker. Legacy idle-retirement
+        // policies keep the main route and cannot seed another generation's idle state.
+        enqueueMouseBatch(batch,run,trackIdle=false,pointerEpoch=route.pointerEpoch)
+        // Even an overflow is handled here: its ordinary pause/release path owns the failure.
+        // Returning false after an offer would let the caller submit this same batch twice.
+        return true
+    }
+    private fun enqueueMouseBatch(batch:RawMouseMotionBatch,run:Long,trackIdle:Boolean,pointerEpoch:Int) {
+        inputMouseCount.addAndGet(batch.size.toLong())
+        if(batch.movingSampleCount==0) return
+        relativeSampleCount.addAndGet(batch.movingSampleCount.toLong())
+        if(trackIdle) {
+            for(index in batch.timesNanos.indices) if(batch.xs[index]!=0f || batch.ys[index]!=0f)
+                cameraIdlePolicy.sourceMotion(batch.timesNanos[index])
+            cameraIdlePolicy.motionReceived(SystemClock.elapsedRealtimeNanos())
         }
-        if(!movement) return
-        if(trackIdle) cameraIdlePolicy.motionReceived(SystemClock.elapsedRealtimeNanos())
-        queue.offerMotionBatch(batch,generation)
+        queue.offerMotionBatch(batch,run,pointerEpoch)
     }
     fun cursorMove(x:Float,y:Float) {
         if(!active || !targetConfirmed || pointerTransitionPending) return
-        inputMouse++;queue.offer(6,x=x,y=y,generation=generation)
+        inputMouseCount.incrementAndGet();queue.offer(6,x=x,y=y,generation=generation)
     }
     fun cursorButton(down:Boolean,x:Float,y:Float) {
         if(!active || !targetConfirmed || pointerTransitionPending) return
-        inputMouse++;queue.offer(5,code=if(down)1 else 0,x=x,y=y,generation=generation)
+        inputMouseCount.incrementAndGet();queue.offer(5,code=if(down)1 else 0,x=x,y=y,generation=generation)
     }
     fun wheel(vertical: Float) { wheelSteps += vertical } // observation only, no fake binding
     fun backendDied() { pause("Backend perdido; la liberación requiere comprobarse en receptor") }

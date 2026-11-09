@@ -13,7 +13,7 @@ APP = "dev.mobimapper.mobimapper"
 TEST_CLASS = f"{APP}.runtime.AndroidCompatibilityTest"
 RUNNER = f"{APP}.test/androidx.test.runner.AndroidJUnitRunner"
 LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
-FULL_SUITE_TESTS = 8
+FULL_SUITE_TESTS = 9
 
 
 def run(adb: list[str], *arguments: str, timeout: int = 120) -> str:

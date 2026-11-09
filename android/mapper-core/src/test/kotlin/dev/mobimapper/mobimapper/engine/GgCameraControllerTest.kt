@@ -4,6 +4,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class GgCameraControllerTest {
+    @Test fun freeFireMotionAndTimerQueriesDoNotReadAnUnusedIdleClock() {
+        var idleClockReads=0
+        var deliveryClockReads=0
+        val frames=mutableListOf<TouchFrame>()
+        val composer=TouchComposer({ deliveryClockReads++;1000L },{ frames+=it;true },continuousCamera=true)
+        val geometry=MappingGeometry(2560f,1440f)
+        val controller=GgCameraController(composer,geometry,
+            GgCameraPolicy(true,AimBounds(0f,0f,2560f,1440f),2560f),{ idleClockReads++;1000L })
+        controller.activate()
+        repeat(1000) {
+            assertTrue(controller.motion(.25f,-.5f))
+            assertTrue(controller.dispatchTimers())
+            assertNull(controller.nextWakeupDelayMillis)
+        }
+        assertEquals(0,idleClockReads)
+        assertTrue(deliveryClockReads>0)
+        assertEquals(1000,frames.size)
+    }
+
     private class Harness(
         freeFire:Boolean=false,
         val geometry:MappingGeometry=MappingGeometry(1000f,2000f),

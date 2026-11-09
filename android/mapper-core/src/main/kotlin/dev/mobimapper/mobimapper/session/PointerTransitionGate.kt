@@ -12,6 +12,10 @@ class PointerTransitionGate {
     private var enabled=false
     private var appliedCursor=false
 
+    /** Motion retains this epoch through queueing, including a complete cursor round trip. */
+    @Synchronized fun motionEpoch():Int? = if(enabled && !pending && !appliedCursor) ticket else null
+    @Synchronized fun admitsMotion(epoch:Int):Boolean = enabled && !pending && !appliedCursor && ticket==epoch
+
     /** A session always starts with an empty hold, even if the physical key is still down. */
     @Synchronized fun begin(cursor:Boolean) {
         ++ticket;pending=false;enabled=true;appliedCursor=cursor;baseCursor=cursor;temporaryCursorHeld=false

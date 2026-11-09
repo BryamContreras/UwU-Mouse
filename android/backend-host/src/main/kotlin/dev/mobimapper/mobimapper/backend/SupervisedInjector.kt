@@ -103,6 +103,14 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private var cameraResetLastDurationNanos=0L
     private val taskManager=Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
     private val focusMethod=Class.forName("android.app.IActivityTaskManager").getMethod("getFocusedRootTaskInfo")
+    // Cache reflection metadata, never a focus result. Every admission still queries Android.
+    // A less specific vendor return type retains the previous runtime-field lookup fallback.
+    private val focusTopField=runCatching { focusMethod.returnType.getField("topActivity") }.getOrNull()
+    private val focusDisplayField=runCatching { focusMethod.returnType.getField("displayId") }.getOrNull()
+    private fun focusPackage(info:Any):String? =
+        ((focusTopField ?: info.javaClass.getField("topActivity")).get(info) as? ComponentName)?.packageName
+    private fun focusDisplay(info:Any):Int =
+        (focusDisplayField ?: info.javaClass.getField("displayId")).getInt(info)
     private val motionDisplayMethod=InputEvent::class.java.getMethod("getDisplayId")
     private var expiry:Runnable?=null
     private val pointer = PointerPresentation { type ->
@@ -148,11 +156,11 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         return try {
             runCatching {
                 val info=requireNotNull(focusMethod.invoke(taskManager))
-                val top=info.javaClass.getField("topActivity").get(info) as? ComponentName
-                val displayId=info.javaClass.getField("displayId").getInt(info)
+                val top=focusPackage(info)
+                val displayId=focusDisplay(info)
                 Bundle().apply {
                     putBoolean("valid",top!=null && displayId>=0)
-                    putString("packageName",top?.packageName)
+                    putString("packageName",top)
                     putInt("displayId",displayId)
                 }
             }.getOrElse { Bundle().apply { putBoolean("valid",false);putInt("displayId",-1) } }
@@ -179,8 +187,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             it.getInt("right")>=target.getInt("right") && it.getInt("bottom")>=target.getInt("bottom") }) return false
         return privileged { runCatching {
             val task=requireNotNull(focusMethod.invoke(taskManager))
-            (task.javaClass.getField("topActivity").get(task) as? ComponentName)?.packageName==packageName &&
-                task.javaClass.getField("displayId").getInt(task)==displayId
+            focusPackage(task)==packageName && focusDisplay(task)==displayId
         }.getOrDefault(false) }
     }
     @Synchronized override fun startCapture(client:IPhysicalInputCallback,displayId:Int,targetPackage:String,
@@ -300,16 +307,16 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         return try { block() } finally { Binder.restoreCallingIdentity(identity) }
     }
     private fun focused():Boolean=privileged {
-        runCatching { val info=focusMethod.invoke(taskManager); val top=info.javaClass.getField("topActivity").get(info) as? ComponentName
-            top?.packageName==targetPackage && info.javaClass.getField("displayId").getInt(info)==journal.displayId }.getOrDefault(false)
+        runCatching { val info=requireNotNull(focusMethod.invoke(taskManager))
+            focusPackage(info)==targetPackage && focusDisplay(info)==journal.displayId }.getOrDefault(false)
     }
     /** Query failure/null focus never establishes that Android switched away from this stream. */
     private fun focusDefinitelyElsewhere():Boolean=privileged {
         runCatching {
             val info=requireNotNull(focusMethod.invoke(taskManager))
-            val top=info.javaClass.getField("topActivity").get(info) as? ComponentName
-            val display=info.javaClass.getField("displayId").getInt(info)
-            top!=null && display>=0 && (top.packageName!=targetPackage || display!=journal.displayId)
+            val top=focusPackage(info)
+            val display=focusDisplay(info)
+            top!=null && display>=0 && (top!=targetPackage || display!=journal.displayId)
         }.getOrDefault(false)
     }
     /** Immutable ownership is independent of whether the old display still has focus or exists. */

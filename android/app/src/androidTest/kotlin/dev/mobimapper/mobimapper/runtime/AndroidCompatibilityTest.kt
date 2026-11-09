@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.Binder
 import android.os.Bundle
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
@@ -34,6 +35,9 @@ import dev.mobimapper.mobimapper.editor.OverlayWindows
 import dev.mobimapper.mobimapper.session.SessionController
 import dev.mobimapper.mobimapper.session.SessionMode
 import dev.mobimapper.mobimapper.session.SessionService
+import dev.mobimapper.mobimapper.session.InputQueue
+import dev.mobimapper.mobimapper.session.NativeMotionDispatchGate
+import dev.mobimapper.mobimapper.session.RawMouseMotionBatch
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -43,6 +47,8 @@ import java.io.File
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.FutureTask
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -97,6 +103,59 @@ class AndroidCompatibilityTest {
             await("foreground service did not stop") { !sessionServiceForeground() }
         } finally {
             onMain { activity.finish() }
+        }
+    }
+
+    @Test fun nativeMotionDispatchRunsWhileMainIsOccupiedAndRetainsButtonOrder() {
+        val worker=HandlerThread("UwUMotionCompatibility").apply { start() }
+        val main=Handler(Looper.getMainLooper())
+        val gate=NativeMotionDispatchGate()
+        val route=NativeMotionDispatchGate.Route(77L,7L,0,42)
+        val mainOccupied=CountDownLatch(1)
+        val releaseMain=CountDownLatch(1)
+        val firstMotion=CountDownLatch(1)
+        val consumed=CountDownLatch(3)
+        val trace=CopyOnWriteArrayList<Pair<Int,Int>>()
+        val overflow=AtomicBoolean(false)
+        lateinit var queue:InputQueue
+        queue=InputQueue(Handler(worker.looper),{ type,code,_,_,_,generation ->
+            assertEquals(7L,generation)
+            if(type==8) assertEquals(42,code)
+            val value=if(type==8) requireNotNull(queue.consumingMotionBatch).xs.single().toInt() else code
+            trace+=type to value
+            firstMotion.countDown();consumed.countDown()
+        },{ overflow.set(true) })
+        fun batch(value:Float)=RawMouseMotionBatch(longArrayOf(SystemClock.elapsedRealtimeNanos()),
+            floatArrayOf(value),floatArrayOf(1f))
+        try {
+            gate.publish(route)
+            assertTrue(main.post { mainOccupied.countDown();releaseMain.await(10,TimeUnit.SECONDS) })
+            assertTrue("Main fixture never started",mainOccupied.await(3,TimeUnit.SECONDS))
+            val direct=requireNotNull(gate.directRoute(77,0))
+            assertTrue(queue.offerMotionBatch(batch(101f),direct.generation,direct.pointerEpoch))
+            assertTrue("Motion depended on the occupied main thread",firstMotion.await(3,TimeUnit.SECONDS))
+            assertTrue(gate.defer())
+            assertTrue(main.post {
+                try { assertTrue(queue.offer(2,code=1,x=1f,generation=7L)) }
+                finally { gate.complete(route.copy(buttons=1)) }
+            })
+            assertNull("Motion must wait for the earlier M1 DOWN",gate.directRoute(77,1))
+            assertTrue(gate.defer())
+            val following=batch(102f)
+            assertTrue(main.post {
+                try { assertTrue(queue.offerMotionBatch(following,7L,42)) }
+                finally { gate.complete(route.copy(buttons=1)) }
+            })
+            assertEquals(listOf(8 to 101),trace.toList())
+            releaseMain.countDown()
+            assertTrue("Deferred input did not drain",consumed.await(3,TimeUnit.SECONDS))
+            onMain { assertEquals(0,gate.pendingCallbacks) }
+            assertEquals(listOf(8 to 101,2 to 1,8 to 102),trace.toList())
+            assertFalse(overflow.get())
+        } finally {
+            releaseMain.countDown()
+            worker.quitSafely()
+            worker.join(3_000)
         }
     }
 

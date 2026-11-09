@@ -24,7 +24,10 @@ class InputQueueEntry {
     var sampleCount = 0
     var motionBatch: RawMouseMotionBatch? = null
 
-    companion object { const val NO_SAMPLE_TIME = Long.MIN_VALUE }
+    companion object {
+        const val NO_SAMPLE_TIME = Long.MIN_VALUE
+        const val NO_POINTER_EPOCH = Int.MIN_VALUE
+    }
 }
 
 /**
@@ -100,8 +103,9 @@ class InputQueueBuffer {
         return true
     }
 
-    fun offerMotionBatch(batch: RawMouseMotionBatch, enqueuedAtNanos: Long, generation: Long): Boolean {
-        if (!offer(8, 0, 0f, 0f, enqueuedAtNanos, generation, batch.timesNanos.last())) return false
+    fun offerMotionBatch(batch: RawMouseMotionBatch, enqueuedAtNanos: Long, generation: Long,
+                         pointerEpoch:Int=InputQueueEntry.NO_POINTER_EPOCH): Boolean {
+        if (!offer(8, pointerEpoch, 0f, 0f, enqueuedAtNanos, generation, batch.timesNanos.last())) return false
         val index = (head + size - 1) % CAPACITY
         motionBatches[index] = batch
         firstSamples[index] = batch.timesNanos.first()

@@ -1,15 +1,21 @@
 package dev.mobimapper.mobimapper.session
 
-/** Owned by one queue entry. Source samples remain separate until the precision filter runs. */
+/** Arrays transfer to one queue entry and must not be mutated after construction. */
 class RawMouseMotionBatch(
     val timesNanos: LongArray,
     val xs: FloatArray,
     val ys: FloatArray,
 ) {
     val size: Int get() = timesNanos.size
+    val movingSampleCount:Int
     init {
         require(size in 1..256 && xs.size == size && ys.size == size)
-        require(timesNanos.all { it >= 0L } && xs.all { it.isFinite() } && ys.all { it.isFinite() })
+        var moving=0
+        for(index in timesNanos.indices) {
+            require(timesNanos[index]>=0L && xs[index].isFinite() && ys[index].isFinite())
+            if(xs[index]!=0f || ys[index]!=0f) moving++
+        }
+        movingSampleCount=moving
     }
     inline fun filteredXSum(filter: (Float, Long) -> Float): Float {
         var sum=0.0

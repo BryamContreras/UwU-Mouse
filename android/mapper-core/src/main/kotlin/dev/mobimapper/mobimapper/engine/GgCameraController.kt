@@ -65,7 +65,9 @@ class GgCameraController(
     private fun displayMotion(dx:Double,dy:Double):Boolean {
         if(!active || composer.paused) return false
         if(!dx.isFinite() || !dy.isFinite()) return composer.stopForCameraCoordinateLimit()
-        val now=clockMillis()
+        // Free Fire never retires/restarts on a timer. Its source samples need no
+        // idle timestamp; TouchComposer timestamps the actual delivered frames.
+        val now=if(policy.freeFire) 0L else clockMillis()
         if(abs(dx)<MOTION_EPSILON && abs(dy)<MOTION_EPSILON) {
             lastActivityAt=now
             return true
@@ -118,6 +120,7 @@ class GgCameraController(
     fun dispatchTimers():Boolean {
         if(!active) return true
         if(composer.paused) return false
+        if(policy.freeFire) return true
         val now=clockMillis()
         pendingStartAt?.let { deadline ->
             if(now>=deadline) {
@@ -142,7 +145,9 @@ class GgCameraController(
 
     val nextWakeupDelayMillis:Long? get() {
         if(!active || composer.paused) return null
-        val next=listOfNotNull(pendingStartAt,nextIdleCheckAt).minOrNull() ?: return null
+        val start=pendingStartAt
+        val idle=nextIdleCheckAt
+        val next=if(start==null) idle ?: return null else if(idle==null) start else minOf(start,idle)
         return (next-clockMillis()).coerceAtLeast(0L)
     }
 

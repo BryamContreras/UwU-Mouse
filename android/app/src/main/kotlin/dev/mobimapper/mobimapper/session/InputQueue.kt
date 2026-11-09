@@ -54,9 +54,9 @@ class InputQueue(private val worker: Handler, private val consume: (Int, Int, Fl
         if (!accepted) overflow()
         return accepted
     }
-    fun offerMotionBatch(batch:RawMouseMotionBatch,generation:Long):Boolean {
+    fun offerMotionBatch(batch:RawMouseMotionBatch,generation:Long,pointerEpoch:Int=InputQueueEntry.NO_POINTER_EPOCH):Boolean {
         val accepted=synchronized(this) {
-            if(!buffer.offerMotionBatch(batch,SystemClock.elapsedRealtimeNanos(),generation)) return@synchronized false
+            if(!buffer.offerMotionBatch(batch,SystemClock.elapsedRealtimeNanos(),generation,pointerEpoch)) return@synchronized false
             if(!scheduled) {
                 scheduled=true
                 if(!worker.post(drain)) { scheduled=false;buffer.clear();return@synchronized false }

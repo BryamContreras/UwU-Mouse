@@ -41,13 +41,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var captureAttemptEpoch=0L
     @Volatile private var captureFailure=""
     val nativeCaptureError:String get()=CaptureFailureMessages.describe(captureFailure)
-    private val pendingNativeFrames=AtomicInteger()
+    private val motionDispatch=NativeMotionDispatchGate()
     private val pendingNativeSamples=AtomicInteger()
     private var rateCapabilityBinder:android.os.IBinder?=null
     private var nativeRateSupported=false
     private var appliedMouseRateHz=0
     @Volatile private var receivedMotionBatches=0L
     @Volatile private var receivedBatchedSamples=0L
+    @Volatile private var directCameraBatches=0L
+    @Volatile private var mainCameraBatches=0L
     @Volatile private var ignoredUnknownKeys=0L
     @Volatile private var lastUnknownScanCode=-1
     private val keyMap=LinuxKeyMap.load()
@@ -70,23 +72,34 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 require(buttonState and 31.inv()==0)
                 RawMouseMotionBatch(eventTimesNanos,relXs,relYs)
             } catch(_:IllegalArgumentException) { onCaptureLost(captureId,"invalid_native_motion_batch");return }
+            if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_capture_binder_receipt",eventTimesNanos.last())
+            // oneway calls on this one Binder node arrive serially. A prior key,
+            // button or UI callback blocks this lane until main has queued its work.
+            // No lifecycle lock or UI/Binder call is made while reading the gate.
+            val route=if(wheel==0f && horizontalWheel==0f && !startingNativeCapture && captureId==nativeCaptureId)
+                motionDispatch.directRoute(captureId,buttonState) else null
+            if(route!=null && SessionController.tryNativeCameraBatch(batch,route)) {
+                receivedMotionBatches++;receivedBatchedSamples+=size;directCameraBatches++
+                recordNativeCameraMotion(batch,deviceIds.last())
+                if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_direct_dispatch",eventTimesNanos.last())
+                return
+            }
             if(pendingNativeSamples.addAndGet(size)>8192) {
                 pendingNativeSamples.addAndGet(-size);onCaptureLost(captureId,"native_sample_queue_overflow");return
             }
-            if(pendingNativeFrames.incrementAndGet()>512) {
-                pendingNativeFrames.decrementAndGet();pendingNativeSamples.addAndGet(-size)
+            if(!motionDispatch.defer()) {
+                pendingNativeSamples.addAndGet(-size)
                 onCaptureLost(captureId,"native_callback_queue_overflow");return
             }
-            if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_capture_binder_receipt",eventTimesNanos.last())
             if(!main.post {
                 try {
                     if(captureId==nativeCaptureId) {
                         receivedMotionBatches++;receivedBatchedSamples+=size
                         receiveMotionBatch(batch,deviceIds,devicePaths,wheel,buttonState)
                     }
-                } finally { pendingNativeFrames.decrementAndGet();pendingNativeSamples.addAndGet(-size) }
+                } finally { pendingNativeSamples.addAndGet(-size);motionDispatch.complete(nativeCameraRoute()) }
             }) {
-                pendingNativeFrames.decrementAndGet();pendingNativeSamples.addAndGet(-size)
+                pendingNativeSamples.addAndGet(-size);motionDispatch.complete(null)
                 onCaptureLost(captureId,"main_thread_unavailable")
             }
         }
@@ -95,16 +108,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             keyDown:Boolean,keyRepeat:Boolean) {
             if(captureId!=nativeCaptureId && !startingNativeCapture) return
             if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_capture_binder_receipt",eventTimeNanos)
-            if(pendingNativeFrames.incrementAndGet()>512) {
-                pendingNativeFrames.decrementAndGet()
+            if(!motionDispatch.defer()) {
                 onCaptureLost(captureId,"native_callback_queue_overflow");return
             }
             if(!main.post {
                 try {
                     if(captureId==nativeCaptureId) receivePhysical(kind,eventTimeNanos,deviceId,devicePath,
                         relX,relY,wheel,buttonState,keyScanCode,keyDown,keyRepeat)
-                } finally { pendingNativeFrames.decrementAndGet() }
-            }) { pendingNativeFrames.decrementAndGet();onCaptureLost(captureId,"main_thread_unavailable") }
+                } finally { motionDispatch.complete(nativeCameraRoute()) }
+            }) { motionDispatch.complete(null);onCaptureLost(captureId,"main_thread_unavailable") }
         }
         override fun onCaptureLost(captureId:Long,reason:String) {
             if(startingNativeCapture) {
@@ -116,6 +128,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             // Invalidate queued events before posting UI cleanup. The privileged lease has
             // already returned the devices even when the application main thread is stalled.
             nativeCaptureId=0L
+            motionDispatch.publish(null)
             captureFailure=reason
             main.post {
                 if(attempt!=captureAttemptEpoch || nativeCaptureId!=0L) return@post
@@ -311,7 +324,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     val mouseCaptured:Boolean get()=appliedMouseCapture
     /** Worker-side quiescence check; no device, window or Binder query on this path. */
     fun inputDispatchIdle():Boolean = nativeCaptureId!=0L && !startingNativeCapture && appliedMouseCapture &&
-        physicalButtonsKnown && physicalButtons==0 && pendingNativeFrames.get()==0 && pendingNativeSamples.get()==0
+        physicalButtonsKnown && physicalButtons==0 && motionDispatch.pendingCallbacks==0 && pendingNativeSamples.get()==0
     private var requestedMouseCapture = false
     private var sourceTailPending = false
     private var deferredSourceChanges = 0L
@@ -433,6 +446,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             return
         }
         captureAttemptEpoch++
+        motionDispatch.publish(null)
         mouseButtons.reset()
         val previous=nativeCaptureId
         nativeCaptureId=0L
@@ -491,6 +505,23 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(captureFailure.isEmpty()) scheduleSourceChange()
     }
 
+    /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
+    private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
+        val captureId=nativeCaptureId
+        if(captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown ||
+            menuAwaitingRelease || wantsMenuPointer()) return null
+        val route=SessionController.nativeCameraRoute(captureId,physicalButtons) ?: return null
+        return route.takeIf { captureEpoch==it.generation }
+    }
+
+    private fun recordNativeCameraMotion(batch:RawMouseMotionBatch,deviceId:Int) {
+        rawMotionCallbacks+=batch.size
+        lastRawMotionSource=InputDevice.SOURCE_MOUSE;lastRawMotionAction=MotionEvent.ACTION_HOVER_MOVE
+        lastRawMotionDeviceId=deviceId;lastRawMotionDeviceSources=InputDevice.SOURCE_MOUSE
+        lastRawMotionDeviceKnown=true;lastRawMotionExternal=true;lastRawMotionVirtual=false;lastRawMotionFilter="native_exclusive_batch"
+        lastInputDisplayId=SessionController.targetDisplayId
+    }
+
     private fun receiveMotionBatch(batch:RawMouseMotionBatch,deviceIds:IntArray,devicePaths:Array<String>,wheel:Float,buttons:Int) {
         if(!SessionController.targetConfirmed) { forceMouseOff("native_context_lost");return }
         if(!appliedMouseCapture) return
@@ -500,11 +531,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             captureFailure="native_batch_button_mismatch";SessionController.pause(nativeCaptureError);forceMouseOff("batch_buttons");return
         }
         if(SessionController.active && !SessionController.cursorMode && !wantsMenuPointer() && !menuAwaitingRelease) {
-            rawMotionCallbacks+=batch.size
-            lastRawMotionSource=InputDevice.SOURCE_MOUSE;lastRawMotionAction=MotionEvent.ACTION_HOVER_MOVE
-            lastRawMotionDeviceId=deviceIds.last();lastRawMotionDeviceSources=InputDevice.SOURCE_MOUSE
-            lastRawMotionDeviceKnown=true;lastRawMotionExternal=true;lastRawMotionVirtual=false;lastRawMotionFilter="native_exclusive_batch"
-            lastInputDisplayId=SessionController.targetDisplayId
+            recordNativeCameraMotion(batch,deviceIds.last())
+            mainCameraBatches++
+            if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_main_dispatch",batch.timesNanos.last())
             physicalButtons=buttons;physicalButtonsKnown=true
             SessionController.mouseBatch(batch)
             if(wheel!=0f) SessionController.wheel(wheel)
@@ -623,6 +652,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         EditorWindowBounds(requireNotNull(it.packageName),displayId,bounds,Rect(bounds),it.focused,frame.layer)
     }
     private fun forceMouseOff(reason: String) {
+        motionDispatch.publish(null)
         captureAttemptEpoch++
         requestedMouseCapture = false
         main.removeCallbacks(applySources); main.removeCallbacks(sourceTailTimeout); sourceTailPending = false
@@ -733,7 +763,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             "captureProvider" to "native-evdev", "captureId" to nativeCaptureId,"captureError" to nativeCaptureError,
             "captureErrorCode" to captureFailure,
             "motionTransport" to mapOf("nativeRateSupported" to nativeRateSupported,"appliedMouseRateHz" to appliedMouseRateHz,
-                "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to pendingNativeFrames.get(),
+                "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
+                "cameraDirectBatches" to directCameraBatches,"cameraMainBatches" to mainCameraBatches,
                 "pendingSamples" to pendingNativeSamples.get()),
             "unknownKeys" to mapOf("ignored" to ignoredUnknownKeys,"lastScanCode" to lastUnknownScanCode),
             "keyLayouts" to keyMap.diagnostics(),
@@ -940,6 +971,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
     private class CursorGeometryUnavailable(message:String,cause:RuntimeException?=null):IllegalStateException(message,cause)
     private fun updateCursorPresentation() {
+        motionDispatch.publish(null)
         val menuPointer=wantsMenuPointer()
         if(appliedMouseCapture && (menuPointer || SessionController.cursorMode) && SessionController.targetConfirmed) {
             try {
@@ -1000,6 +1032,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 forceMouseOff("cursor_renderer_unavailable")
             }
         } else clearCursorInteraction()
+        motionDispatch.publish(nativeCameraRoute())
     }
     private fun clearCursorInteraction(hideVisual:Boolean=true):Boolean {
         menuMovePending=false

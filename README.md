@@ -1,6 +1,6 @@
 # UwU Mouse
 
-Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.2+40**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
+Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.3+41**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
 
 ## Empezar
 
