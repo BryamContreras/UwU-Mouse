@@ -21,6 +21,24 @@ class DispatcherTouchStateParserTest {
             "mHoveringPointerIdsByDevice=41:${"0".repeat(31)}1, pilferedPointerIds=${"0".repeat(32)}"
     private fun hoverSection(rows: String = hoverWindow()): String =
         "$header\n$mouseDisplay\n      Windows:\n$rows\n  Display: 0\n"
+    private val emptyModernDevice =
+        "[touchingPointers=[], downTimeInTarget=<not set>, hoveringPointers=[], pilferingPointerIds=<none>]"
+    private fun modernWindow(format: Int, index: Int = 0, devices: List<Int> = listOf(24),
+                             name: String = "monitor"): String {
+        val fields = "name='$name', targetFlags=0x0, forwardingWindowToken=0x0, mDeviceStates="
+        return if (format == 17) "        $index: $fields\n" +
+            devices.joinToString("\n") { "          DeviceId($it):$emptyModernDevice" }
+        else "        $index : $fields" + devices.mapIndexed { i, device ->
+            (if (i == 0) "" else "    ") + "$device:$emptyModernDevice"
+        }.joinToString("\n")
+    }
+    private fun modernSection(format: Int, rows: String = modernWindow(format)): String {
+        val display = if (format == 17) "    LogicalDisplayId 11:\n      TouchedWindows:"
+            else "    11 :     Windows:"
+        val retired = if (format == 17) "    LogicalDisplayId 9:\n      TouchedWindows: <none>"
+            else "    9 :     Windows: <none>"
+        return "$modernTouchEmpty\n  CursorStatesByDisplay:\n$display\n$rows\n$retired\n  Display: 11\n"
+    }
 
     @Test fun acceptsExactObservedLineInCompleteDiagnostic() {
         assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(
@@ -87,6 +105,93 @@ class DispatcherTouchStateParserTest {
         assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(prefix + "  Display: 11\n"))
         val retiredDisplays = (0..31).joinToString("\n") { "    LogicalDisplayId $it:\n      TouchedWindows: <none>" }
         assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched("$modernTouchEmpty\n  CursorStatesByDisplay:\n$retiredDisplays\n  Display: 40\n"))
+    }
+
+    @Test fun android17AcceptsCompleteObservedMonitorWindowsWithEveryDeviceExplicitlyEmpty() {
+        // Anonymous full-shape reproduction of the live Android17 dispatcher: monitor
+        // windows survive while all touch/hover/pilfer vectors are explicitly empty.
+        val rows = (0..2).joinToString("\n") { modernWindow(17, it, listOf(24), "[Gesture Monitor] $it") }
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17, rows)))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17, rows).replace("\n", "\r\n")))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17,
+            modernWindow(17, devices = listOf(0, 24, 51)))))
+    }
+
+    @Test fun android16UsesInlineFirstDeviceAndItsAuditedContinuationIndentation() {
+        // TouchedWindow::dump uses dumpMap with numeric keys; DispatcherTouchState and
+        // TouchState add different indentation from17. Never reinterpret one as the other.
+        val rows = modernWindow(16, devices = listOf(0, 24, 51)) + "\n" + modernWindow(16, 1)
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(16, rows)))
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(16, rows).replace("\n", "\r\n")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(16, modernWindow(17))))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17, modernWindow(16))))
+    }
+
+    @Test fun modernDeviceProofRejectsAnyTouchHoverDownTimePilferForwardingOrUnknownField() {
+        for (format in listOf(16, 17)) {
+            val complete = modernSection(format)
+            val invalid = listOf(
+                complete.replace("touchingPointers=[]", "touchingPointers=[0]"),
+                complete.replace("hoveringPointers=[]", "hoveringPointers=[0]"),
+                complete.replace("downTimeInTarget=<not set>", "downTimeInTarget=12345"),
+                complete.replace("pilferingPointerIds=<none>", "pilferingPointerIds=${"0".repeat(31)}1"),
+                complete.replace("targetFlags=0x0", "targetFlags=FOREGROUND"),
+                complete.replace("targetFlags=0x0", "targetFlags=UNKNOWN"),
+                complete.replace("forwardingWindowToken=0x0", "forwardingWindowToken=0x1234"),
+                complete.replace("touchingPointers=[]", "touchingPointers=<none>"),
+                complete.replace("pilferingPointerIds=<none>", "pilferingPointerIds=<none>, extra=0"),
+                complete.replace("downTimeInTarget=<not set>", "downTimeInTarget=<unknown>"),
+            )
+            invalid.forEach { assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(it)) }
+        }
+    }
+
+    @Test fun modernWindowProofRequiresCompleteSequentialUniqueDeviceRowsAndKnownBoundary() {
+        for (format in listOf(16, 17)) {
+            val complete = modernSection(format)
+            val duplicateDevice = modernSection(format, modernWindow(format, devices = listOf(24, 24)))
+            val secondWindow = modernSection(format, modernWindow(format) + "\n" + modernWindow(format, 1))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(secondWindow))
+            val invalid = listOf(duplicateDevice,
+                modernSection(format, modernWindow(format, 1)),
+                modernSection(format, modernWindow(format) + "\n" + modernWindow(format)),
+                modernSection(format, modernWindow(format, devices = emptyList())),
+                complete.replace("  Display: 11\n", ""),
+                complete.replace("  Display: 11", "  UnknownNextSection:"),
+                complete.substringBefore("pilferingPointerIds="),
+                complete.replace("pilferingPointerIds=<none>]", "pilferingPointerIds=<none>"),
+                complete + modernCursorEmpty,
+                complete + modernTouchEmpty,
+            )
+            invalid.forEach { assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(it)) }
+        }
+        val missingLastDevice = modernSection(17, modernWindow(17) +
+            "\n        1: name='monitor2', targetFlags=0x0, forwardingWindowToken=0x0, mDeviceStates=")
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(missingLastDevice))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17).replace("          DeviceId(24):", "        DeviceId(24):")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17).replace("DeviceId(24)", "DeviceId(-1)")))
+    }
+
+    @Test fun modernWindowNamesCannotSpoofQuotesOrControlCharacters() {
+        for (format in listOf(16, 17)) {
+            for (name in listOf("bad'name", "bad\nname", "bad\rname", "bad\u0000name", "bad\tname", "bad\u007fname")) {
+                assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                    modernWindow(format, name = name))))
+            }
+        }
+    }
+
+    @Test fun modernWindowAndDeviceStateCountsRemainBounded() {
+        for (format in listOf(16, 17)) {
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                (0 until 128).joinToString("\n") { modernWindow(format, it) })))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                (0..128).joinToString("\n") { modernWindow(format, it) })))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                modernWindow(format, devices = (0 until 1024).toList()))))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                modernWindow(format, devices = (0..1024).toList()))))
+        }
     }
 
     @Test fun duplicateAndMixedLegacyModernStateSectionsRemainAmbiguous() {

@@ -15,6 +15,8 @@ object DispatcherTouchStateParser {
     private const val TOUCH_STATES = "  TouchStatesByDisplay:"
     private const val MAX_DISPLAYS = 8
     private const val MAX_WINDOWS = 128
+    private const val MAX_CURSOR_DEVICE_STATES = 1024
+    private const val UINT = "(0|[1-9][0-9]{0,8})"
     private val display = Regex("^    (0|[1-9][0-9]{0,8}) :     deviceId=(0|[1-9][0-9]{0,8}), source=(MOUSE|TOUCHSCREEN \\| MOUSE)$")
     // A completed injected gesture may leave this virtual-device entry after evdev
     // capture removes mouse hover. Only an explicitly empty window list is accepted.
@@ -23,7 +25,16 @@ object DispatcherTouchStateParser {
     // Audited DispatcherTouchState::dump + TouchState::dump in android16-release and
     // android17-release. Removed displays can remain as explicitly empty cursor entries.
     private val cursorDisplay17 = Regex("^    LogicalDisplayId (0|[1-9][0-9]{0,8}):$")
-    private val emptyCursorDisplay16 = Regex("^    (0|[1-9][0-9]{0,8}) :     Windows: <none>$")
+    private val cursorDisplay16 = Regex("^    $UINT :     (Windows: <none>|Windows:)$")
+    // TouchedWindow::dump and PrintTools.h, android16-release/android17-release:
+    // accept only explicit zero device vectors, no down time or pilfering, and the
+    // non-forwarding zero-flags window subset. Window names cannot inject syntax.
+    private const val EMPTY_DEVICE = "\\[touchingPointers=\\[\\], downTimeInTarget=<not set>, hoveringPointers=\\[\\], pilferingPointerIds=<none>\\]"
+    private const val EMPTY_WINDOW_FIELDS = "name='[^'\\p{Cc}]*', targetFlags=0x0, forwardingWindowToken=0x0, mDeviceStates="
+    private val cursorWindow17 = Regex("^        $UINT: $EMPTY_WINDOW_FIELDS$")
+    private val cursorDevice17 = Regex("^          DeviceId\\($UINT\\):$EMPTY_DEVICE$")
+    private val cursorWindow16 = Regex("^        $UINT : $EMPTY_WINDOW_FIELDS$UINT:$EMPTY_DEVICE$")
+    private val cursorDevice16 = Regex("^    $UINT:$EMPTY_DEVICE$")
     private val window = Regex(
         "^        (0|[1-9][0-9]{0,8}) : name='.*', pointerIds=0{32}, " +
             "targetFlags=([A-Z_]+(?: \\| [A-Z_]+)*), firstDownTimeInTarget=<not set>, " +
@@ -43,6 +54,10 @@ object DispatcherTouchStateParser {
         var inModernCursor = false
         var cursorWindowsExpected = false
         var cursorFormat = 0
+        var cursorDisplayEmpty = false
+        var cursorWindowCount = 0
+        var cursorDeviceStates = 0
+        val cursorDevices = mutableSetOf<Int>()
         val cursorDisplays = mutableSetOf<Int>()
         val displays = mutableSetOf<Int>()
         var deviceId: Int? = null
@@ -52,33 +67,60 @@ object DispatcherTouchStateParser {
         var windowCount = 0
         var totalWindows = 0
         fun displayComplete() = deviceId != null && !expectingWindows && (emptyWindows || windowCount > 0)
+        fun cursorDisplayComplete() = !cursorWindowsExpected &&
+            (cursorDisplayEmpty || (cursorWindowCount > 0 && cursorDevices.isNotEmpty()))
+        fun addCursorDevice(id: String): Boolean = id.toIntOrNull()?.let {
+            cursorDevices.add(it) && ++cursorDeviceStates <= MAX_CURSOR_DEVICE_STATES
+        } == true
         for (line in lines) {
             if (inModernCursor) {
                 if (followingDisplay.matches(line) || line == "  Displays: <none>") {
-                    if (cursorDisplays.isEmpty() || cursorWindowsExpected) return false
+                    if (cursorDisplays.isEmpty() || !cursorDisplayComplete()) return false
                     inModernCursor = false
                     modernCursorEmpty = true
                     completed = true
                     continue
                 }
                 if (cursorWindowsExpected) {
-                    // Any touched-window row, including an unaudited hover format, is
-                    // ambiguous here. A zero count inferred from a substring is unsafe.
-                    if (line != "      TouchedWindows: <none>") return false
+                    when (line) {
+                        "      TouchedWindows: <none>" -> cursorDisplayEmpty = true
+                        "      TouchedWindows:" -> cursorDisplayEmpty = false
+                        else -> return false
+                    }
                     cursorWindowsExpected = false
                     continue
                 }
                 val entry17 = cursorDisplay17.matchEntire(line)
-                val entry16 = emptyCursorDisplay16.matchEntire(line)
-                val entry = entry17 ?: entry16 ?: return false
-                val format = if (entry17 != null) 17 else 16
-                if (cursorFormat != 0 && cursorFormat != format) return false
-                cursorFormat = format
-                val id = entry.groupValues[1].toIntOrNull() ?: return false
-                // The privileged reader bounds the entire dump. Retired display entries
-                // can accumulate across desktop reconnects; they are not active monitors.
-                if (!cursorDisplays.add(id)) return false
-                cursorWindowsExpected = entry17 != null
+                val entry16 = cursorDisplay16.matchEntire(line)
+                val entry = entry17 ?: entry16
+                if (entry != null) {
+                    if (cursorDisplays.isNotEmpty() && !cursorDisplayComplete()) return false
+                    val format = if (entry17 != null) 17 else 16
+                    if (cursorFormat != 0 && cursorFormat != format) return false
+                    cursorFormat = format
+                    val id = entry.groupValues[1].toIntOrNull() ?: return false
+                    // The privileged reader bounds the entire dump. Retired display entries
+                    // can accumulate across desktop reconnects; they are not active monitors.
+                    if (!cursorDisplays.add(id)) return false
+                    cursorWindowsExpected = entry17 != null
+                    cursorDisplayEmpty = entry16?.groupValues?.get(2) == "Windows: <none>"
+                    cursorWindowCount = 0
+                    cursorDevices.clear()
+                    continue
+                }
+                if (cursorDisplays.isEmpty() || cursorDisplayEmpty) return false
+                val nextWindow = (if (cursorFormat == 17) cursorWindow17 else cursorWindow16).matchEntire(line)
+                if (nextWindow != null) {
+                    if (cursorWindowCount > 0 && cursorDevices.isEmpty()) return false
+                    if (nextWindow.groupValues[1].toIntOrNull() != cursorWindowCount || ++totalWindows > MAX_WINDOWS) return false
+                    cursorWindowCount++
+                    cursorDevices.clear()
+                    if (cursorFormat == 16 && !addCursorDevice(nextWindow.groupValues[2])) return false
+                    continue
+                }
+                if (cursorWindowCount == 0) return false
+                val nextDevice = (if (cursorFormat == 17) cursorDevice17 else cursorDevice16).matchEntire(line) ?: return false
+                if (!addCursorDevice(nextDevice.groupValues[1])) return false
                 continue
             }
             if (modernTouchEmpty && !modernCursorEmpty) {
