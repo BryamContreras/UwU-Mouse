@@ -20,18 +20,25 @@ estable del contrato Binder. Requiere Python 3.9 o posterior, sin dependencias.
 | `lib/application/controllers/` | Coordinación de acciones explícitas, como iniciar un perfil |
 | `lib/application/policies/` | Reglas de preparación de sesión |
 | `lib/platform/android/` | Implementación `MethodChannelMapperGateway` |
-| `lib/features/` | Pantallas de biblioteca, conexión y activación |
+| `lib/features/` | Pantallas de biblioteca, conexión, activación y ajustes |
 | `lib/shared/widgets/` | Componentes visuales compartidos |
 
-Las pantallas reciben `MapperGateway`; `MobiMapperApp` selecciona su implementación.
+Las pantallas reciben `MapperGateway`; `UwUMouseApp` selecciona su implementación.
 Una implementación distinta se inyecta en esa composición sin cambiar las
-pantallas. El adaptador Android conserva el canal `dev.mobimapper/control.v1`, los
+pantallas. El adaptador Android conserva el canal `dev.uwumouse/control.v1`, los
 nombres de comandos y el protocolo 1 de los mapas de estado. Las features no
 instancian `MethodChannel` ni importan el adaptador Android.
 
 `ProfileLauncher` coordina una acción solicitada por el usuario y comprueba que
 sigue vigente. Volver del segundo plano no debe reproducir una acción cancelada
 ni restaurar teclas o botones mantenidos.
+
+Inicio ofrece accesos compactos a Depuración inalámbrica y Mostrar sobre otras
+apps, con estado real de Android y un indicador neutral mientras se desconoce.
+Ajustes contiene Conexión y la selección persistente del estilo del cursor.
+Conexión conserva el acceso a la configuración inalámbrica de Android y la
+activación del motor cuando falta, sin presentar la captura como un interruptor
+manual. Sus consultas no abren por sí solas una sesión.
 
 ## Módulos Android y dirección de dependencias
 
@@ -185,6 +192,48 @@ UID de la aplicación antes de realizar operaciones privilegiadas.
 6. El cierre coordina devolución de dispositivos, liberación de teclas reenviadas
    y finalización/cancelación de contactos. Un ACK ambiguo o liberación no verificada
    mantiene el bloqueo correspondiente; no se presenta como una liberación segura.
+
+Flutter presenta **Cerrar sesión** dentro de la tarjeta de sesión de Inicio
+mientras existe una sesión activa, pausada, bloqueada o en proceso de cierre;
+la acción se oculta al quedar ociosa. Sigue siendo independiente de otras
+operaciones de interfaz: invalida solicitudes de juego/editor aún pendientes y
+descarta lecturas de estado anteriores a la solicitud. `GameCoordinator.stop`
+solicita primero el cierre nativo; los errores de limpieza de una ventana no
+impiden solicitarlo ni intentar limpiar las demás. La validación del botón
+persistente en Inicio/Ajustes registrada más adelante es histórica y corresponde
+a la interfaz anterior.
+
+La lectura de estado del backend que solicita Flutter se realiza fuera del hilo
+principal. Una recuperación que ocupe el guardián no debe impedir que la Activity
+atienda el botón de cierre. La composición de diagnósticos de presentación sigue
+en main y las respuestas de otra generación o sesión se descartan.
+
+Un guardián superviviente puede reconciliar una secuencia sustituida por entrada
+física, incluido un `POINTER_UP` rechazado, sólo tras detener captura, confirmar
+la terminación de todos sus workers y observar un dispatcher global sin contactos
+pulsados. Se comparan SID, destino, dimensiones, política y candidatos del mismo
+diario antes de cerrarlo. Esta prueba no equivale a un CANCEL admitido ni a una
+recepción verificada por el juego. Un snapshot desconocido o un dedo mantenido
+conserva el bloqueo; no se crean inyectores después de fallar esa vía terminal.
+
+La salida del juego se distingue de la pérdida de foco mediante metadata de tareas
+globales. Sólo se acepta ausencia tras haber observado la tarea, sin ventana ni
+foco del juego, durante al menos dos segundos en snapshots nuevos y válidos. La
+enumeración ocurre como máximo una vez por segundo fuera del foco del juego;
+listas truncadas, tareas opacas y falta de permisos no prueban ausencia. La
+preparación, edición, transiciones y pantallas apagadas suspenden esa decisión.
+No se usa esta metadata para autorizar inyección ni se añade trabajo por muestra.
+
+La revisión de cierres del 9 de noviembre de 2026 aprobó **889 pruebas JVM**,
+**94 pruebas Flutter**, análisis, lint y APK release. Se observó en el teléfono un
+`POINTER_UP` rechazado con dos contactos retenidos en el diario y sólo hover en
+Android; su forma anónima y las barreras de reconciliación quedan cubiertas por
+pruebas. La enumeración real de tareas confirmó que el juego minimizado seguía
+ejecutándose. Se verificaron el botón principal en Inicio/Ajustes, el cierre
+idempotente sin contactos y la conservación exacta de los perfiles al actualizar.
+La mezcla física de dedos y ratón y la salida real del juego durante una partida
+requieren todavía su ensayo de uso; las pruebas y la consulta de metadata tienen
+ese alcance separado.
 
 Las teclas no asignadas también quedan suprimidas por un grab de teclado. Por eso
 la app las reenvía explícitamente mediante `forwardKey`, restringido a la captura
@@ -405,18 +454,23 @@ Los callbacks también conservan `onFrame` para bordes y entregas escalares y
 El estado nativo distingue muestras leídas, entregadas, descartadas y pendientes,
 paquetes, lecturas, barreras y el límite solicitado/aplicado.
 
-Se conservan `dev.mobimapper.mobimapper`, el archivo `profiles-v1.json`, el esquema
-9 de perfiles, las identidades de entrada shell/worker y el protocolo backend 4.
-Los paquetes Kotlin permanecen estables aunque sus archivos se hayan movido entre
-módulos. La retirada del antiguo servicio de accesibilidad es deliberada.
+Desde 0.3.4 la aplicación usa `dev.uwumouse.app` y los módulos usan el espacio de
+nombres de UwU Mouse. El archivo `profiles-v1.json`, el esquema 9 de perfiles y
+el protocolo backend 4 conservan sus formatos; las opciones del bucle se añaden
+como campos opcionales con valores predeterminados compatibles. Cambiar el
+applicationId no migra el almacenamiento ni los permisos de otra instalación:
+la primera actualización requiere [exportar e importar los perfiles](docs/MIGRACION_0_3_4.md).
+La retirada del antiguo servicio de accesibilidad es deliberada.
 
 Las primeras **15 transacciones de `IInjector` mantienen orden, tipos y direcciones**.
 Los métodos nuevos se agregan al final: captura, renovación, parada, estado,
 contexto, teclas y notificaciones. El checker permite ese crecimiento y rechaza
 insertar, quitar o cambiar una transacción del prefijo existente.
-El contrato actual tiene **25 métodos `IInjector`**. Los dos últimos,
-`startCaptureWithRate` y `setCaptureMouseRate`, añaden inicio/cambio de frecuencia;
-la capacidad correspondiente se comprueba antes de usar un backend anterior.
+El contrato actual tiene **35 métodos `IInjector`**. Las ampliaciones incluyen
+captura con límite de frecuencia, reemplazo de cámara, cursor visual, estilo,
+muestreo de FPS y ventanas pasivas de estado. Las capacidades correspondientes
+se comprueban antes de usar un backend anterior; compartir el número de protocolo
+no demuestra que todos los métodos opcionales estén disponibles.
 
 El protocolo 4 por sí solo no demuestra que un backend antiguo tenga captura
 nativa. `captureReady` exige la capacidad anunciada por el backend; la ausencia

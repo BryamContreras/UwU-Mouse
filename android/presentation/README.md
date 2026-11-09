@@ -14,5 +14,14 @@ must request the standard overlay permission and create an appropriate window
 context. `OverlayWindows.requirePermission` applies to the phone and external
 displays alike. Passive layers retain the combined-opacity budget.
 
-Kotlin package names are preserved for compatibility. Android drawable resources
-belong to `dev.mobimapper.presentation.R`; launcher assets remain in the app.
+Android drawable resources belong to the presentation module; launcher assets
+remain in the app. Version 0.3.4 uses the UwU Mouse namespace consistently.
+
+Repeat action settings expose **Mantener en bucle** and, only when enabled,
+**Temporizador (segundos)**. The timer accepts integer values 0–86400 (zero means
+no timer); invalid text blocks Save and returns focus to the owning action.
+Disabling the loop keeps its valid timer value for later use. The numeric pad,
+interval input and marker drawing stay inside this native editor.
+
+The controls, cursor and optional FPS/battery monitor use bounded drawing and
+position updates. Presentation does not create an injection or capture loop.

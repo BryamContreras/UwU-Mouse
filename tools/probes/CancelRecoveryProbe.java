@@ -20,8 +20,8 @@ public final class CancelRecoveryProbe {
         Object tasks = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null);
         Object info = Class.forName("android.app.IActivityTaskManager").getMethod("getFocusedRootTaskInfo").invoke(tasks);
         ComponentName top = (ComponentName) info.getClass().getField("topActivity").get(info);
-        if (!"dev.mobimapper.inputlab".equals(top.getPackageName()) || info.getClass().getField("displayId").getInt(info) != 0) throw new SecurityException("Lab must remain focused");
-        int uid = ctx.getPackageManager().getPackageUid("dev.mobimapper.inputlab", 0);
+        if (!"dev.uwumouse.inputlab".equals(top.getPackageName()) || info.getClass().getField("displayId").getInt(info) != 0) throw new SecurityException("Lab must remain focused");
+        int uid = ctx.getPackageManager().getPackageUid("dev.uwumouse.inputlab", 0);
         Object manager = ctx.getSystemService(Context.INPUT_SERVICE);
         float[] xs = {324f,712.8f,885.6f}, ys = {1528.56f,1111.68f,1899.12f};
         MotionEvent.PointerProperties[] props = new MotionEvent.PointerProperties[3];
@@ -34,9 +34,9 @@ public final class CancelRecoveryProbe {
         MotionEvent event=MotionEvent.obtain(downTime,now,MotionEvent.ACTION_CANCEL,3,props,coords,0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,32);
         try {
             InputEvent.class.getMethod("setDisplayId",int.class).invoke(event,0);
-            Log.i("MobiRecoveryProbe","cancel attempt pid="+Process.myPid()+" uptime="+now+" down="+downTime+" ids=0,1,2 target="+uid+" display=0 source=4098 device=0 mode=2");
+            Log.i("UwuRecoveryProbe","cancel attempt pid="+Process.myPid()+" uptime="+now+" down="+downTime+" ids=0,1,2 target="+uid+" display=0 source=4098 device=0 mode=2");
             boolean ok=(Boolean)manager.getClass().getMethod("injectInputEvent",InputEvent.class,int.class,int.class).invoke(manager,event,2,uid);
-            Log.i("MobiRecoveryProbe","cancel result="+ok+" uptime="+SystemClock.uptimeMillis());
+            Log.i("UwuRecoveryProbe","cancel result="+ok+" uptime="+SystemClock.uptimeMillis());
             System.out.println("cancelAdmitted="+ok);
         } finally { event.recycle(); }
     }

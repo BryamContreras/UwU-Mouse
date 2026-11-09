@@ -3,12 +3,12 @@ plugins {
 }
 
 android {
-    namespace = "dev.mobimapper.inputlab"
+    namespace = "dev.uwumouse.inputlab"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
 
     defaultConfig {
-        applicationId = "dev.mobimapper.inputlab"
+        applicationId = "dev.uwumouse.inputlab"
         minSdk = uwu.versions.minSdk.get().toInt()
         targetSdk = uwu.versions.targetSdk.get().toInt()
         versionCode = 2

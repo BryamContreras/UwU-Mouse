@@ -201,16 +201,16 @@ def check(root: Path) -> dict[str, object]:
 
     forbidden("mapper-core", r"\b(?:android|androidx|io\.flutter)\.[A-Za-z_]", "core must remain independent of Android and Flutter")
     forbidden("capture-api", r"\b(?:android|androidx|io\.flutter)\.[A-Za-z_]", "physical input contract must remain platform independent")
-    forbidden("presentation", r"\b(?:android\.accessibilityservice|android\.view\.accessibility|dev\.mobimapper\.(?:capture|windowcontext|backend\.host)|dev\.mobimapper\.mobimapper\.runtime)\.|\bdev\.mobimapper\.mobimapper\.backend\." + LEGACY_BACKEND_ADAPTERS + r"\b", "presentation must not depend on capture, backend composition or accessibility services")
-    forbidden("presentation", r"\bdev\.mobimapper\.mobimapper\.(?:MainActivity|R|session\.(?:SessionController|CaptureService|NativeInputHost)|game\.GameCoordinator|profile\.ProfileStore)\b", "presentation must use host ports instead of application implementations")
-    forbidden("injection-runtime", r"\bdev\.mobimapper\.(?:capture|windowcontext)\.|\b(?:SupervisedInjector|NativeCaptureBroker|BackendIdentity|ShellMain)\b", "touch runtime must not depend on physical capture, window discovery or privileged composition")
-    controller = within(root, "android/app/src/main/kotlin/dev/mobimapper/mobimapper/session/SessionController.kt")
+    forbidden("presentation", r"\b(?:android\.accessibilityservice|android\.view\.accessibility|dev\.uwumouse\.(?:capture|windowcontext|backend\.host)|dev\.uwumouse\.app\.runtime)\.|\bdev\.uwumouse\.app\.backend\." + LEGACY_BACKEND_ADAPTERS + r"\b", "presentation must not depend on capture, backend composition or accessibility services")
+    forbidden("presentation", r"\bdev\.uwumouse\.app\.(?:MainActivity|R|session\.(?:SessionController|CaptureService|NativeInputHost)|game\.GameCoordinator|profile\.ProfileStore)\b", "presentation must use host ports instead of application implementations")
+    forbidden("injection-runtime", r"\bdev\.uwumouse\.(?:capture|windowcontext)\.|\b(?:SupervisedInjector|NativeCaptureBroker|BackendIdentity|ShellMain)\b", "touch runtime must not depend on physical capture, window discovery or privileged composition")
+    controller = within(root, "android/app/src/main/kotlin/dev/uwumouse/app/session/SessionController.kt")
     if re.search(r"\b(?:NativeSessionHost|GameCoordinator|BackendRegistry|MainActivity|MapperRuntimeComposition)\b",
                  clean_text(controller.read_text(encoding="utf-8-sig"), strings=True)):
         fail("SessionController must use SessionEnvironment/SessionEvents instead of concrete application adapters")
-    engine = within(root, modules["mapper-core"]["path"]) / "src/main/kotlin/dev/mobimapper/mobimapper/engine"
+    engine = within(root, modules["mapper-core"]["path"]) / "src/main/kotlin/dev/uwumouse/app/engine"
     for path in source_files(engine):
-        if re.search(r"\bdev\.mobimapper\.(?:capture|injection|windowcontext|backend\.host)\.|\bdev\.mobimapper\.mobimapper\.backend\." + LEGACY_BACKEND_ADAPTERS + r"\b", clean_text(path.read_text(encoding="utf-8-sig"), strings=True)):
+        if re.search(r"\bdev\.uwumouse\.(?:capture|injection|windowcontext|backend\.host)\.|\bdev\.uwumouse\.app\.backend\." + LEGACY_BACKEND_ADAPTERS + r"\b", clean_text(path.read_text(encoding="utf-8-sig"), strings=True)):
             fail(f"{path.relative_to(root).as_posix()}: mapping engine must not depend on capture or injection adapters")
 
     manifest = within(root, "android/app/src/main/AndroidManifest.xml").read_text(encoding="utf-8-sig")

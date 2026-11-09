@@ -6,7 +6,7 @@ $targetSerial=Get-ProjectDevice $adbPath $Serial
 $destination=Join-Path (Split-Path -Parent $PSScriptRoot) "evidence\v020\$Case"
 New-Item -ItemType Directory -Force $destination|Out-Null
 function Read-State {
-    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join'')
+    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join'')
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'No mapper diagnostic available'}
     $Matches[1]|ConvertFrom-Json
 }
@@ -44,7 +44,7 @@ if($NoVideo){
         Start-Sleep -Milliseconds 1000
     } while($recordTimer.Elapsed.TotalSeconds -lt 60)
 } else {
-    $remote="/data/local/tmp/mobimapper-$Case.mp4"
+    $remote="/data/local/tmp/uwumouse-$Case.mp4"
     # Recording is evidence only, excluded from performance samples.
     $recorder=Start-Process -FilePath $adbPath -ArgumentList @('-s',$targetSerial,'shell','screenrecord','--size','1158x540','--bit-rate','4000000','--time-limit','45',$remote) -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $destination 'screenrecord-stdout.txt') -RedirectStandardError (Join-Path $destination 'screenrecord-stderr.txt')
     while(!$recorder.HasExited -and $recordTimer.Elapsed.TotalSeconds -lt 60){
@@ -59,10 +59,10 @@ if($NoVideo){
 Save-Json @($timeline.ToArray()) 'timeline.json'
 $after=Read-State
 Save-Json $after 'after.json'
-foreach($name in @('dev.mobimapper.mobimapper','mobimapper_backend','mobimapper_injector')){
+foreach($name in @('dev.uwumouse.app','uwumouse_backend','uwumouse_injector')){
     $processText=((& $adbPath -s $targetSerial shell pidof $name)-join'').Trim()
     if($processText -match '^\d+$'){
-        & $adbPath -s $targetSerial logcat -d "--pid=$processText" -v threadtime -s MobiMapper:I MobiMapperKeys:I MobiSupervisor:I MobiInjectWorker:I '*:S'|Set-Content -LiteralPath (Join-Path $destination "$name.log") -Encoding UTF8
+        & $adbPath -s $targetSerial logcat -d "--pid=$processText" -v threadtime -s UwUMouse:I UwUMouseKeys:I UwuSupervisor:I UwuInjectWorker:I '*:S'|Set-Content -LiteralPath (Join-Path $destination "$name.log") -Encoding UTF8
     }
 }
 Save-Json ([ordered]@{screenRecording=(!$NoVideo);performanceSample=[bool]$NoVideo;package=$before.activePackage;profileId=$before.activeProfileId;session=$before.backendSessionId;maxSampledMapperContacts=($timeline.ToArray()|ForEach-Object{$_.contacts}|Measure-Object -Maximum).Maximum;finalActive=$after.active;finalContacts=$after.contacts;releaseUnverified=$after.releaseUnverified;note='Mapper diagnostics only; visible behaviour requires user observation or optional video. No internal game events or receiver acknowledgement are read.'}) 'result.json'

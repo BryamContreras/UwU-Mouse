@@ -1,1 +1,1 @@
--keep class dev.mobimapper.capture.nativeinput.ShellEvdevCapture { *; }
+-keep class dev.uwumouse.capture.nativeinput.ShellEvdevCapture { *; }

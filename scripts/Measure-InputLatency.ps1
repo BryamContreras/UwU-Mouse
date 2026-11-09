@@ -4,8 +4,8 @@ param(
     [switch]$Instrumented,
     [string]$Destination,
     [string]$MouseEventPath,
-    [ValidatePattern('^dev\.mobimapper\.mobimapper(?:\.[a-z][a-z0-9_]*)?$')]
-    [string]$ApplicationId='dev.mobimapper.mobimapper'
+    [ValidatePattern('^dev\.uwumouse\.app(?:\.[a-z][a-z0-9_]*)?$')]
+    [string]$ApplicationId='dev.uwumouse.app'
 )
 . "$PSScriptRoot\AndroidTools.ps1"
 $adbPath=Get-ProjectAdb
@@ -28,7 +28,7 @@ function Call-Mapper([string]$Method,[string[]]$Extra=@()) {
 }
 function Read-Receiver {
     # Optional, independent observer. It is never launched or installed by this script.
-    $wire=((& $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-live.json 2>$null)-join '')
+    $wire=((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json 2>$null)-join '')
     if($LASTEXITCODE -eq 0 -and $wire.StartsWith('{')) { return ($wire | ConvertFrom-Json) }
     return $null
 }
@@ -114,7 +114,7 @@ if($null -ne $receiverBefore -and $null -ne $receiverAfter) {
     $sameObserver=$receiverBefore.observationId -eq $receiverAfter.observationId -and $receiverBefore.pid -eq $receiverAfter.pid
     $receiverFresh=$false
     $receiverLiveError=$null
-    $applicable=$before.activePackage -eq 'dev.mobimapper.inputlab' -and $after.activePackage -eq 'dev.mobimapper.inputlab' -and
+    $applicable=$before.activePackage -eq 'dev.uwumouse.inputlab' -and $after.activePackage -eq 'dev.uwumouse.inputlab' -and
         $receiverBefore.activityResumed -and $receiverAfter.activityResumed -and
         $receiverBefore.windowFocused -and $receiverAfter.windowFocused -and
         $receiverBefore.displayId -eq $before.targetDisplayId -and $receiverAfter.displayId -eq $after.targetDisplayId

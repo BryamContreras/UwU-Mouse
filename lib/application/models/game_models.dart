@@ -82,8 +82,15 @@ class LocalProfile {
       repeatIntervalMs = _integer(wire, 'schemaVersion') >= 7
           ? _integer(_map(wire, 'action'), 'repeatIntervalMs')
           : 100,
+      repeatToggle = _repeatToggle(_map(wire, 'action')),
+      repeatDurationSeconds = _repeatDurationSeconds(_map(wire, 'action')),
       actionCadenceEnabled = _actionCadenceEnabled(_map(wire, 'action')),
       actionCadenceYPercent = _actionCadenceYPercent(_map(wire, 'action')),
+      actionCadenceStartMs = _actionCadenceStartMs(_map(wire, 'action')),
+      actionCadenceDurationMs = _actionCadenceDurationMs(_map(wire, 'action')),
+      actionCadenceDurationEnabled = _actionCadenceDurationEnabled(
+        _map(wire, 'action'),
+      ),
       actionCount = _activeActionCount(wire) + _macroCount(wire),
       macroCount = _macroCount(wire),
       cameraToggle = _integer(_map(wire, 'shortcuts'), 'cameraToggle'),
@@ -154,8 +161,14 @@ class LocalProfile {
       joystickEnabled,
       cameraEnabled,
       actionEnabled,
-      actionCadenceEnabled;
-  final int repeatIntervalMs, actionCadenceYPercent;
+      repeatToggle,
+      actionCadenceEnabled,
+      actionCadenceDurationEnabled;
+  final int repeatIntervalMs,
+      repeatDurationSeconds,
+      actionCadenceYPercent,
+      actionCadenceStartMs,
+      actionCadenceDurationMs;
   final int upKey,
       downKey,
       leftKey,
@@ -246,9 +259,24 @@ int _activeActionCount(Map<Object?, Object?> wire) {
   bool enabled(Map<Object?, Object?> action, {required bool base}) {
     final active = current ? _boolean(action, 'enabled') : true;
     final behavior = current ? _text(action, 'behavior') : 'tap';
+    final repeatToggle = _repeatToggle(action);
+    final repeatDurationSeconds = _repeatDurationSeconds(action);
+    if ((repeatToggle || repeatDurationSeconds != 0) && behavior != 'repeat') {
+      throw const FormatException('El bucle requiere una acción Repetir');
+    }
     final cadenceEnabled = _actionCadenceEnabled(action);
     final cadenceYPercent = _actionCadenceYPercent(action);
-    if ((cadenceEnabled || cadenceYPercent != 0) &&
+    final cadenceStartMs = _actionCadenceStartMs(action);
+    final cadenceDurationMs = _actionCadenceDurationMs(action);
+    final cadenceDurationEnabled = _actionCadenceDurationEnabled(action);
+    if (cadenceDurationEnabled && cadenceDurationMs == 0) {
+      throw const FormatException('La duración debe ser mayor que 0 ms');
+    }
+    if ((cadenceEnabled ||
+            cadenceYPercent != 0 ||
+            cadenceStartMs != 500 ||
+            cadenceDurationMs != 0 ||
+            cadenceDurationEnabled) &&
         (!active ||
             behavior != 'tap' ||
             _text(action, 'triggerKind') != 'mouse' ||
@@ -259,7 +287,7 @@ int _activeActionCount(Map<Object?, Object?> wire) {
     final interval = _integer(action, 'repeatIntervalMs');
     if ((!base && !active) ||
         !const ['tap', 'repeat', 'cursorToggle'].contains(behavior) ||
-        interval < 50 ||
+        interval < 30 ||
         interval > 5000) {
       throw const FormatException('Comportamiento de acción incompatible');
     }
@@ -278,6 +306,21 @@ int _activeActionCount(Map<Object?, Object?> wire) {
   return count;
 }
 
+bool _repeatToggle(Map<Object?, Object?> action) =>
+    action.containsKey('repeatToggle')
+    ? _boolean(action, 'repeatToggle')
+    : false;
+
+int _repeatDurationSeconds(Map<Object?, Object?> action) {
+  final value = action.containsKey('repeatDurationSeconds')
+      ? _integer(action, 'repeatDurationSeconds')
+      : 0;
+  if (value < 0 || value > 86400) {
+    throw const FormatException('Temporizador de repetición incompatible');
+  }
+  return value;
+}
+
 bool _actionCadenceEnabled(Map<Object?, Object?> action) =>
     action.containsKey('cadenceEnabled')
     ? _boolean(action, 'cadenceEnabled')
@@ -292,6 +335,31 @@ int _actionCadenceYPercent(Map<Object?, Object?> action) {
   }
   return value;
 }
+
+int _actionCadenceStartMs(Map<Object?, Object?> action) {
+  final value = action.containsKey('cadenceStartMs')
+      ? _integer(action, 'cadenceStartMs')
+      : 500;
+  if (value < 0 || value > 5000) {
+    throw const FormatException('Tiempo de inicio de cadencia incompatible');
+  }
+  return value;
+}
+
+int _actionCadenceDurationMs(Map<Object?, Object?> action) {
+  final value = action.containsKey('cadenceDurationMs')
+      ? _integer(action, 'cadenceDurationMs')
+      : 0;
+  if (value < 0 || value > 10000) {
+    throw const FormatException('Duración de cadencia incompatible');
+  }
+  return value;
+}
+
+bool _actionCadenceDurationEnabled(Map<Object?, Object?> action) =>
+    action.containsKey('cadenceDurationEnabled')
+    ? _boolean(action, 'cadenceDurationEnabled')
+    : _actionCadenceDurationMs(action) > 0;
 
 /// Schema 6 exposes only a summary in Flutter; native code owns execution and persistence.
 int _macroCount(Map<Object?, Object?> wire) {

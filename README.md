@@ -1,21 +1,25 @@
 # UwU Mouse
 
-Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. Versión de desarrollo **0.3.3+41**. Conserva el paquete Android `dev.mobimapper.mobimapper` para mantener datos y autorizaciones al actualizar con la misma firma.
+Mapeador local de teclado y ratón a controles táctiles para **Android 14 o posterior**, con interfaz Flutter y motor Kotlin. La versión y su número de compilación se definen en [pubspec.yaml](pubspec.yaml).
 
 ## Empezar
 
-1. Abre **Ajustes de conexión** y comprueba **Captura nativa**, **Motor de toques** y **Mostrar sobre otras apps**. Esta implementación ya no declara un servicio de accesibilidad.
-2. Para activar el motor sin PC, abre **Activar en este teléfono**, empareja mediante el código de Depuración inalámbrica e introdúcelo desde la notificación. Después puedes usar **Reactivar sin código** mientras Android conserve la autorización. [Guía local](docs/ACTIVAR_TELEFONO.md).
+1. En Inicio toca **Depuración inalámbrica** o **Mostrar sobre otras apps** para abrir su configuración de Android. Las filas compactas muestran un check verde o una X roja según el estado real; mientras no se conoce, muestran un indicador neutral. También puedes abrir **Ajustes → Conexión → Configurar en Android** para encender o apagar la depuración inalámbrica desde Android.
+2. Si falta el motor, abre **Ajustes → Conexión → Activar motor**. En **Activar en este teléfono**, empareja mediante el código de Depuración inalámbrica e introdúcelo desde la notificación. Después puedes usar **Reactivar sin código** mientras Android conserve la autorización. [Guía local](docs/ACTIVAR_TELEFONO.md).
 3. Agrega un juego y toca su círculo para abrirlo. **Mapear** permite colocar controles y guardar el perfil.
-4. La burbuja permite elegir **Perfiles**, mapear, alternar Control/Teclado y cerrar la sesión. Mantén pulsado un juego para ver sus opciones.
+4. La burbuja permite elegir **Perfiles**, mapear y alternar Control/Teclado. **Cerrar menú** sale de ese panel sin terminar la sesión. **Cerrar sesión** aparece dentro de la tarjeta de sesión en Inicio mientras hay una sesión activa, pausada, bloqueada o cerrándose; se oculta al quedar ociosa. Mantén pulsado un juego para ver sus opciones.
 
-El permiso estándar **Mostrar sobre otras apps** se utiliza tanto en el teléfono como en pantallas externas. La captura de teclado y ratón usa un proceso autorizado UID 2000 y lectura exclusiva de dispositivos externos mediante `EVIOCGRAB`; el inyector conserva su proceso separado.
+El permiso estándar **Mostrar sobre otras apps** se utiliza tanto en el teléfono como en pantallas externas. La captura de teclado y ratón se gestiona automáticamente al usar la sesión: no hay un interruptor independiente de «Captura nativa». El motor se activa cuando hace falta y puede cerrarse desde **Ajustes → Conexión → Laboratorio y diagnóstico → Cerrar backend ADB**. **Comprobar servicio** consulta su estado; no inicia una sesión.
 
-Después de reiniciar o perder el motor puede hacer falta reactivarlo. Al tocar un juego, la app intenta hacerlo con la identidad guardada si Depuración inalámbrica sigue disponible; requiere tu pulsación y no recupera acciones mantenidas. **InputLab es opcional**. El [activador de PC](docs/ACTIVAR_PC.md) sigue disponible.
+La captura usa un proceso autorizado UID 2000 y lectura exclusiva de dispositivos externos mediante `EVIOCGRAB`; el inyector conserva su proceso separado.
+
+Después de reiniciar o perder el motor puede hacer falta reactivarlo. Al tocar un juego, la app intenta hacerlo con la identidad guardada si Depuración inalámbrica sigue disponible; requiere tu pulsación y no recupera acciones mantenidas. **InputLab es opcional**. El [activador de PC](docs/ACTIVAR_PC.md) admite una conexión ADB autorizada por USB o Wi-Fi. Un hub con ratón y teclado no activa ADB por sí solo: para usar USB necesitas primero un equipo que ejecute ADB. Tras activar, puedes desconectarlo y volver al hub; la alternativa sin PC es la activación inalámbrica local.
 
 ## Mapeo y perfiles
 
-Joystick WASD, cámara suave, acciones táctiles, Disparo M1, Apuntar M2, macros de puntos, **Repetir** al mantener y **Mapa/Mochila** con cursor. Hasta **24 acciones y macros combinadas**. Arrastra los círculos, asigna directamente una tecla, cambia su tamaño desde una esquina o elimínalos con su X. La burbuja permite mostrar los controles y ajustar su opacidad.
+Joystick WASD, cámara suave, acciones táctiles, Disparo M1, Apuntar M2, macros de puntos, **Repetir** y **Mapa/Mochila** con cursor. Hasta **24 acciones y macros combinadas**. Arrastra los círculos, asigna directamente una tecla, cambia su tamaño desde una esquina o elimínalos con su X. La burbuja permite mostrar los controles y ajustar su opacidad.
+
+**Repetir** conserva el intervalo configurable de **30–5000 ms**. Por defecto actúa mientras mantienes pulsada su tecla o botón. Con **Mantener en bucle**, una pulsación inicia y otra detiene; soltar no interrumpe la secuencia. Al habilitarlo aparece **Temporizador (segundos)**, que acepta enteros de **0 a 86400**: `0` deja el bucle sin límite y, por ejemplo, `60` lo apaga al cumplir un minuto. Cada nueva activación empieza el plazo de nuevo. Pausar, cerrar o salir del modo de control cancela el bucle y libera sus toques. Los perfiles anteriores mantienen el comportamiento de pulsación sostenida.
 
 La cámara utiliza **Región suave** como única política, sin selector de modo. Los perfiles nuevos usan sensibilidad **0,70** en ambos ejes y **250 Hz**. La compensación parte de GG Mouse y se calcula por muestra respecto al área calibrada del juego, con un punto inicial fijo y acumulación de fracciones en doble precisión. Este motor es común al teléfono, DeX y otras pantallas externas. En Free Fire conserva el dedo y compensa el eje horizontal durante arrastres largos; en otros juegos renueva al salir del área o después de 700 ms sin movimiento. Los perfiles antiguos también ejecutan Región suave y conservan sus sensibilidades y controles. La burbuja permite ajustar sensibilidad y tamaño del cursor de forma independiente de la cámara.
 
@@ -29,15 +33,25 @@ La cámara ofrece **100, 125, 250, 500, 1000 Hz y Libre** para limitar la entreg
 
 Cada juego admite varios perfiles locales con mapeos independientes. **Perfiles** aparece primero en la burbuja y permite seleccionarlos o eliminarlos con confirmación. Los atajos se validan contra las asignaciones existentes. El editor usa un borrador: Guardar valida y aplica de forma segura; Cancelar conserva el perfil anterior. Los paneles tienen controles compactos y barras de ajuste más visibles.
 
+La pestaña **Ajustes** reúne **Conexión** y **Estilo del cursor**: Clásico, Oscuro, Cian y Rosa. La burbuja conserva ajustes de sensibilidad/tamaño del cursor, tamaño/opacidad de los controles y un monitor opcional de FPS y batería. El monitor solo consulta mientras se muestra; no certifica la latencia entre el ratón y la imagen.
+
 Una misma tecla puede activar varios puntos de toque a la vez; los comandos, macros y direcciones mantienen sus reservas para evitar conflictos. **Exportar** guarda el perfil elegido como `.uwumouse.json` y **Importar perfil**, debajo de **Nuevo perfil**, abre el explorador de Android. El archivo contiene el perfil y su calibración, sin permisos generales de almacenamiento.
 
 Abrir un juego inicia con el cursor libre de UwU Mouse; el atajo activa la cámara. El cursor confiable es opaco cuando Android admite esa ventana; si se necesita una ventana del proceso de la app, se respeta el límite de opacidad del sistema para permitir los toques en el juego. El editor dibuja su cursor opaco dentro de su propia ventana. Los interruptores distinguen claramente sus estados y las ventanas siguen siendo arrastrables sin los indicadores de seis puntos.
 
 En **DeX**, el perfil de pantalla externa se separa del perfil del teléfono. Su calibración incluye el marco de la ventana; cambiar su tamaño, posición u orientación exige recalibrar. La sesión se pausa al salir del contexto autorizado. Pausar, editar o recuperar el inyector no reproduce teclas o botones que seguían mantenidos.
 
-Cerrar una sesión conserva el estado **Cerrando sesión** mientras falta confirmar la liberación. Si el proceso de la app se reinicia, recupera la identidad de la sesión pendiente del motor y permite **Cerrar sesión anterior** sin activar el mapeo. Si desapareció la pantalla original, exige terminar los productores de entrada y comprobar que Android no conserva contactos; no envía la cancelación a otra pantalla. Tras confirmar el cierre, volver a jugar requiere una pulsación explícita.
+**Cerrar sesión** también permite solicitar o reintentar el cierre durante bloqueos, transiciones y errores de lectura del estado. La app conserva **Cierre pendiente** mientras falta confirmar la liberación. Si Android ya sustituyó la secuencia inyectada al tocar la pantalla, el mismo guardián puede cerrar su registro después de terminar la captura y todos sus inyectores y comprobar que Android no conserva contactos pulsados, sin exigir volver al juego. Un dedo físico mantenido o una comprobación no concluyente conserva el cierre pendiente. Si el proceso de la app se reinicia, recupera la identidad de la sesión pendiente del motor y permite **Cerrar sesión anterior** sin activar el mapeo. Tras confirmar el cierre, volver a jugar requiere una pulsación explícita.
 
-## Compatibilidad y alcance de la migración
+Cuando desaparece la tarea del juego y su ventana, la sesión se cierra automáticamente tras al menos dos segundos de confirmación con observaciones nuevas. Minimizar el juego, cambiar de app o moverlo a otra pantalla conserva la pausa. Si Android no permite consultar las tareas completas, se mantiene el cierre manual en lugar de deducir una salida sólo por perder el foco.
+
+## Actualización 0.3.4 y cambio de identidad
+
+La versión **0.3.4+42** reúne las mejoras de rendimiento, cierre de sesiones, ajustes y repetición en bucle. El identificador Android pasa a ser **`dev.uwumouse.app`**. Android la considera una aplicación nueva: compartir el certificado no transfiere los datos ni permisos de la instalación anterior. **Exporta tus perfiles antes de cambiar de aplicación**, impórtalos después y vuelve a conceder los permisos. [Migración paso a paso](docs/MIGRACION_0_3_4.md) · [Cambios de la versión](CHANGELOG.md).
+
+## Compatibilidad y validación
+
+La [revisión de rendimiento](PERFORMANCE_REVIEW.md) detalla las optimizaciones de captura, cámara, inyección, dibujado y tareas de fondo, junto con sus pruebas y la validación pendiente en partidas prolongadas.
 
 Android 14, 15, 16 y 17 usan el mismo APK por arquitectura, con selección de capacidades y diagnósticos de plataforma. Las restricciones de las API públicas, los cambios revisados y la matriz de comprobación figuran en [Compatibilidad Android](docs/ANDROID_COMPATIBILITY.md). Las pruebas automáticas no certifican todos los firmwares ni periféricos.
 
@@ -45,7 +59,7 @@ La arquitectura separa interfaz, dominio, captura, ventanas, presentación, acti
 
 La detección se basa en capacidades USB/Bluetooth y admite más interfaces compuestas, teclados compactos, pads numéricos y controles multimedia. Las teclas usan layouts instalados por fabricante/producto o nombre, con Generic como fallback. Esto amplía la compatibilidad sin certificar todos los modelos, firmwares o idiomas.
 
-El preview nativo se instala con un paquete separado cuando no está disponible la firma del APK existente.
+Las actualizaciones posteriores que conserven el nuevo identificador y certificado podrán instalarse sobre esta aplicación. Las copias de prueba con otra identidad o firma mantienen datos separados.
 
 La ruta nativa se probó en el teléfono con teclado y ratón físicos, sin servicio de accesibilidad y con InputLab como receptor independiente. En la observación delimitada recibió 3311 callbacks táctiles, sin errores de secuencia ni fugas de mouse o WASD asignado; las teclas sin asignación se reenviaron de forma deliberada. [Resultados y alcance de la medición](ARCHITECTURE.md#validación-y-referencias).
 
@@ -76,7 +90,7 @@ flutter pub get --enforce-lockfile
 flutter build apk --release --split-per-abi --android-project-arg=force-version-code-ignoring-abi=true
 ```
 
-Instala sobre la versión existente con el mismo certificado, con la sesión detenida, sin contactos y el backend anterior cerrado. El motor local se activa con ADB autorizado como UID 2000 y comprueba el permiso de inyección; no requiere root ni modifica los juegos. La captura y las ventanas ya no dependen de accesibilidad. Un backend antiguo sin capacidad nativa debe reiniciarse después de actualizar el APK.
+Para la primera instalación de 0.3.4 sigue la [guía de migración](docs/MIGRACION_0_3_4.md). En actualizaciones del mismo identificador, instala con el mismo certificado, con la sesión detenida, sin contactos y el backend anterior cerrado. El motor local se activa con ADB autorizado como UID 2000 y comprueba el permiso de inyección; no requiere root ni modifica los juegos. La captura y las ventanas ya no dependen de accesibilidad. Reactiva el motor después de actualizar para cargar el código del APK nuevo.
 
 `python tools/check_architecture.py --json` verifica los límites y el protocolo Binder. `scripts/Check-Architecture.ps1` compila y prueba los módulos Android por separado, sin cambiar las versiones Flutter/Dart del proyecto. InputLab y `android/latencyprobe` son laboratorios independientes; este último conserva una prueba de accesibilidad exclusivamente para comparar rutas y no forma parte de la aplicación.
 

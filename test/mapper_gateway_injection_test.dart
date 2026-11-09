@@ -1,16 +1,42 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobimapper/app/mapper_app.dart';
-import 'package:mobimapper/application/ports/mapper_gateway.dart';
+import 'package:uwu_mouse/app/mapper_app.dart';
+import 'package:uwu_mouse/application/ports/mapper_gateway.dart';
 
 import 'support/profile_fixtures.dart';
 
 void main() {
-  testWidgets('profiles expose export and import below new profile', (
+  testWidgets('switches between the library and cursor settings', (
     tester,
   ) async {
     final gateway = _MemoryGateway();
-    await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+    await tester.pumpWidget(UwUMouseApp(gateway: gateway));
+    await tester.pumpAndSettle();
+    expect(find.text('Mis juegos'), findsOneWidget);
+    await tester.tap(find.text('Ajustes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Estilo del cursor'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('cursor-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('cursor-style-cyan')));
+    await tester.pumpAndSettle();
+    expect(gateway.style, 'cyan');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Inicio'));
+    await tester.pumpAndSettle();
+    expect(find.text('Mis juegos'), findsOneWidget);
+    await tester.tap(find.text('Ajustes'));
+    await tester.pumpAndSettle();
+    expect(find.text('Cian'), findsOneWidget);
+    expect(gateway.style, 'cyan');
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+  testWidgets('profiles expose import beside new profile and export', (
+    tester,
+  ) async {
+    final gateway = _MemoryGateway();
+    await tester.pumpWidget(UwUMouseApp(gateway: gateway));
     await tester.pumpAndSettle();
     await tester.longPress(
       find.byKey(const ValueKey('game-com.dts.freefireth')),
@@ -22,7 +48,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.getTopLeft(find.text('Importar perfil')).dy,
-      greaterThan(tester.getTopLeft(find.text('Nuevo perfil')).dy),
+      tester.getTopLeft(find.text('Nuevo perfil')).dy,
+    );
+    expect(
+      tester.getTopLeft(find.text('Importar perfil')).dx,
+      greaterThan(tester.getTopLeft(find.text('Nuevo perfil')).dx),
     );
     await tester.tap(find.text('Importar perfil'));
     await tester.pumpAndSettle();
@@ -39,10 +69,12 @@ void main() {
     'library launches through an injected gateway without a platform channel',
     (tester) async {
       final gateway = _MemoryGateway();
-      await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+      await tester.pumpWidget(UwUMouseApp(gateway: gateway));
       await tester.pumpAndSettle();
       expect(find.text('Free Fire'), findsOneWidget);
-      expect(find.text('Captura nativa: Activada'), findsOneWidget);
+      expect(find.text('Depuración inalámbrica'), findsOneWidget);
+      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+      expect(find.text('Captura nativa'), findsNothing);
       await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
       await tester.pumpAndSettle();
       expect(gateway.startedProfiles, ['profile-1']);
@@ -58,12 +90,15 @@ void main() {
         captureReady: false,
         legacyAccessibility: true,
       );
-      await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+      await tester.pumpWidget(UwUMouseApp(gateway: gateway));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
       await tester.pumpAndSettle();
       expect(gateway.startedProfiles, isEmpty);
-      expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
+      expect(
+        find.text('La captura de teclado y ratón no está disponible.'),
+        findsOneWidget,
+      );
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Listo para abrir tu juego'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -74,12 +109,18 @@ void main() {
     tester,
   ) async {
     final gateway = _MemoryGateway(overlayPermission: false);
-    await tester.pumpWidget(MobiMapperApp(gateway: gateway));
+    await tester.pumpWidget(UwUMouseApp(gateway: gateway));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
     expect(gateway.startedProfiles, isEmpty);
-    expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('overlay-permission')),
+        matching: find.text('Mostrar sobre otras apps'),
+      ),
+      findsOneWidget,
+    );
     final allow = find.text('Permitir superposición');
     await tester.ensureVisible(allow);
     await tester.tap(allow);
@@ -101,6 +142,15 @@ class _MemoryGateway implements MapperGateway {
   final commands = <NativeCommand>[];
   final exports = <String>[];
   int imports = 0;
+  String style = 'classic';
+
+  @override
+  Future<String> cursorStyle() async => style;
+
+  @override
+  Future<void> setCursorStyle(String value) async {
+    style = value;
+  }
 
   @override
   Future<NativeStatus> status() async => NativeStatus.fromWire({

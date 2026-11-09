@@ -7,6 +7,9 @@ abstract final class SessionReadiness {
       !status.blocked &&
       !status.recovering &&
       !status.editing &&
+      !status.closing &&
+      !status.transitioning &&
+      !status.guardianClosurePending &&
       status.contacts == 0;
 
   static bool needsClosureRecovery(NativeStatus? status) =>

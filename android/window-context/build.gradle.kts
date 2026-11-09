@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mobimapper.windowcontext"
+    namespace = "dev.uwumouse.windowcontext"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     defaultConfig { minSdk = uwu.versions.minSdk.get().toInt() }

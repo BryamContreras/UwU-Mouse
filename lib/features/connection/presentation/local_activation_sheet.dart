@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../application/ports/mapper_gateway.dart';
-import '../../../shared/widgets/mobi_icon.dart';
+import '../../../shared/widgets/uwu_icon.dart';
 
 class LocalActivationSheet extends StatefulWidget {
   const LocalActivationSheet({super.key, required this.gateway});
@@ -31,13 +31,23 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_perform(_api.activationStartDiscovery));
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
+    _startPolling();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
-    if (_foreground) unawaited(_poll());
+    _timer?.cancel();
+    _timer = null;
+    if (_foreground) {
+      unawaited(_poll());
+      _startPolling();
+    }
+  }
+
+  void _startPolling() {
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
   }
 
   @override
@@ -162,7 +172,7 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
                 IconButton(
                   tooltip: 'Cerrar activación',
                   onPressed: () => Navigator.pop(context),
-                  icon: const MobiIcon(Icons.close_rounded, size: 26),
+                  icon: const UwuIcon(Icons.close_rounded, size: 26),
                 ),
               ],
             ),
@@ -183,7 +193,7 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
               onPressed: busy
                   ? null
                   : () => _perform(_api.wirelessDebuggingSettings),
-              icon: const MobiIcon(Icons.settings_outlined, size: 25),
+              icon: const UwuIcon(Icons.settings_outlined, size: 25),
               label: const Text('Abrir Depuración inalámbrica'),
             ),
             const SizedBox(height: 16),
@@ -282,7 +292,7 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
                     onPressed: busy
                         ? null
                         : () => _perform(_api.activationStartDiscovery),
-                    icon: const MobiIcon(Icons.refresh_rounded, size: 23),
+                    icon: const UwuIcon(Icons.refresh_rounded, size: 23),
                     label: const Text('Buscar de nuevo'),
                   ),
                   const Text(

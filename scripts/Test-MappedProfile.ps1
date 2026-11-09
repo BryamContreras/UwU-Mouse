@@ -6,17 +6,17 @@ $targetSerial=Get-ProjectDevice $adbPath $Serial
 $destination=Join-Path (Split-Path -Parent $PSScriptRoot) "evidence\v020\$Case"
 New-Item -ItemType Directory -Force $destination|Out-Null
 function State {
-    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join''
+    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join''
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'No mapper status'}
     $Matches[1]|ConvertFrom-Json
 }
-function Observe { ((& $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-live.json)-join"`n")|ConvertFrom-Json }
+function Observe { ((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json)-join"`n")|ConvertFrom-Json }
 function Save($Value,[string]$Name){$Value|ConvertTo-Json -Depth 22|Set-Content -Encoding UTF8 (Join-Path $destination $Name)}
 $before=Observe;$initial=State
 Assert-ProjectLiveReceiver $adbPath $targetSerial $before $initial.uptimeMs
 if(!$before.activityResumed -or !$before.windowFocused -or @($before.pendingContactIds).Count -ne 0 -or $initial.active -or $initial.releaseUnverified){throw 'InputLab must be visible, empty, and idle'}
 Save $before 'before.json'
-& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method labMapped --extra automated:b:true
+& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method labMapped --extra automated:b:true
 if($LASTEXITCODE -ne 0){throw 'Probe request failed'}
 $complete=$false
 for($i=0;$i -lt 40;$i++){

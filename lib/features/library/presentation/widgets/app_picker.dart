@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../../application/models/game_models.dart';
-import '../../../../shared/widgets/mobi_icon.dart';
+import '../../../../shared/widgets/uwu_icon.dart';
 
 class AppPicker extends StatefulWidget {
   const AppPicker({super.key, required this.apps});
@@ -49,7 +49,7 @@ class AppPickerState extends State<AppPicker> {
               TextField(
                 decoration: const InputDecoration(
                   hintText: 'Buscar por nombre o paquete',
-                  prefixIcon: MobiIcon(Icons.search_rounded, size: 27),
+                  prefixIcon: UwuIcon(Icons.search_rounded, size: 27),
                 ),
                 onChanged: (value) => setState(() => _query = value),
               ),
@@ -77,7 +77,7 @@ class AppPickerState extends State<AppPicker> {
                             ),
                             tileColor: const Color(0xfff4f7fb),
                             leading: app.icon == null
-                                ? MobiIcon(
+                                ? UwuIcon(
                                     app.gameHint
                                         ? Icons.sports_esports_outlined
                                         : Icons.apps,
@@ -91,7 +91,7 @@ class AppPickerState extends State<AppPicker> {
                                       height: 44,
                                       fit: BoxFit.cover,
                                       errorBuilder: (_, error, stack) =>
-                                          const MobiIcon(Icons.apps, size: 27),
+                                          const UwuIcon(Icons.apps, size: 27),
                                     ),
                                   ),
                             title: Text(app.label),
@@ -104,7 +104,7 @@ class AppPickerState extends State<AppPicker> {
                                 color: Color(0xff5d7a99),
                               ),
                             ),
-                            trailing: const MobiIcon(
+                            trailing: const UwuIcon(
                               Icons.add_circle_outline_rounded,
                               size: 27,
                               color: Color(0xff237abf),

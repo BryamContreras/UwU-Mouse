@@ -11,7 +11,7 @@ import java.util.Arrays;
 
 /** Shell-only, fixed-InputLab capability probe. Never used by the product mapper/guardian. */
 public final class OffscreenMultiTouchProbe {
-    private static final String TARGET = "dev.mobimapper.inputlab";
+    private static final String TARGET = "dev.uwumouse.inputlab";
     private static final long STEP_MILLIS = 120;
     private final Object tasks, manager;
     private final Method focus, inject, display;

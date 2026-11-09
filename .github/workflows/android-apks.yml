@@ -124,7 +124,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import hashlib, os, pathlib, re, shutil, subprocess, zipfile
+          import hashlib, json, os, pathlib, re, shutil, subprocess, zipfile
           from tools.check_toolchain import load_toolchain
           text = pathlib.Path('pubspec.yaml').read_text(encoding='utf-8')
           match = re.search(r'^version:\s*(\d+\.\d+\.\d+\+\d+)\s*$', text, re.M)
@@ -132,6 +132,7 @@ jobs:
               raise SystemExit('Missing numeric version in pubspec.yaml')
           version = match.group(1)
           version_code = version.split('+')[1]
+          application_id = json.loads(pathlib.Path('architecture/modules.json').read_text(encoding='utf-8'))['compatibility']['production_application_id']
           aapt = pathlib.Path(os.environ['ANDROID_HOME']) / 'build-tools' / load_toolchain()['buildTools'] / 'aapt2'
           apksigner = aapt.with_name('apksigner')
           keystore = os.environ.get('UWU_ANDROID_DEBUG_KEYSTORE')
@@ -149,8 +150,11 @@ jobs:
           for abi in ('armeabi-v7a', 'arm64-v8a', 'x86_64'):
               source = pathlib.Path(f'build/app/outputs/flutter-apk/app-{abi}-release.apk')
               badging = subprocess.check_output([str(aapt), 'dump', 'badging', str(source)], text=True)
-              if f"versionCode='{version_code}'" not in badging.splitlines()[0]:
-                  raise SystemExit(f'{source}: versionCode differs from local universal build')
+              package = dict(re.findall(r"(\w+)='([^']*)'", badging.splitlines()[0]))
+              if package.get('name') != application_id:
+                  raise SystemExit(f'{source}: applicationId differs from the project identity')
+              if package.get('versionCode') != version_code or package.get('versionName') != version.split('+', 1)[0]:
+                  raise SystemExit(f'{source}: version differs from pubspec.yaml')
               signing = subprocess.check_output([str(apksigner), 'verify', '--print-certs', str(source)], text=True)
               signers = re.findall(r'^(?:Signer #\d+:?|V\d+ Signer:) certificate SHA-256 digest:\s*([a-fA-F0-9]{64})\s*$', signing, re.M)
               if not signers or len({value.lower() for value in signers}) != 1 or (expected_certificate and any(value.lower() != expected_certificate for value in signers)):

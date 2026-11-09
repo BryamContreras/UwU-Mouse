@@ -11,11 +11,11 @@ require(embeddingJar.isFile) {
 }
 
 android {
-    namespace = "dev.mobimapper.mobimapper"
+    namespace = "dev.uwumouse.app"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     defaultConfig {
-        applicationId = "dev.mobimapper.mobimapper.validation"
+        applicationId = "dev.uwumouse.app.validation"
         minSdk = uwu.versions.minSdk.get().toInt()
         targetSdk = uwu.versions.targetSdk.get().toInt()
         versionCode = 37

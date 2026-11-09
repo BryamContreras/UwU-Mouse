@@ -19,7 +19,7 @@ if(Test-Path -LiteralPath $destination){throw 'Evidence directory already exists
 New-Item -ItemType Directory -Path $destination|Out-Null
 $adbPath=Get-ProjectAdb
 $targetSerial=Get-ProjectDevice $adbPath $Serial
-$mapperPackage='dev.mobimapper.mobimapper'
+$mapperPackage='dev.uwumouse.app'
 $providerForbidden=$false
 $before=$null
 $initialProcessIds=@()
@@ -40,17 +40,17 @@ function Invoke-ControlAdb([string[]]$Arguments){
 }
 function Read-State {
     if($script:providerForbidden){throw 'Mapper provider calls are forbidden after ForceStop'}
-    $wire=(Invoke-ControlAdb @('shell','content','call','--uri','content://dev.mobimapper.mobimapper.backend','--method','diagnostics'))-join''
+    $wire=(Invoke-ControlAdb @('shell','content','call','--uri','content://dev.uwumouse.app.backend','--method','diagnostics'))-join''
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw "No native status: $wire"}
     return $Matches[1]|ConvertFrom-Json
 }
 function Call([string]$Method,[string[]]$Extra=@()){
     if($script:providerForbidden){throw 'Mapper provider calls are forbidden after ForceStop'}
-    $wire=(Invoke-ControlAdb (@('shell','content','call','--uri','content://dev.mobimapper.mobimapper.backend','--method',$Method)+$Extra))-join''
+    $wire=(Invoke-ControlAdb (@('shell','content','call','--uri','content://dev.uwumouse.app.backend','--method',$Method)+$Extra))-join''
     if($wire -notmatch 'accepted=true'){throw "Diagnostic command was not accepted: $Method $wire"}
 }
 function Observe {
-    $wire=(Invoke-ControlAdb @('shell','run-as','dev.mobimapper.inputlab','cat','files/input-lab-live.json'))-join"`n"
+    $wire=(Invoke-ControlAdb @('shell','run-as','dev.uwumouse.inputlab','cat','files/input-lab-live.json'))-join"`n"
     return $wire|ConvertFrom-Json
 }
 function Assert-Observer($Snapshot){
@@ -105,12 +105,12 @@ function Read-PackageState {
 }
 function Collect-Logs {
     $ids=@($script:initialProcessIds)
-    foreach($name in @($mapperPackage,'dev.mobimapper.inputlab','mobimapper_backend','mobimapper_injector')){
+    foreach($name in @($mapperPackage,'dev.uwumouse.inputlab','uwumouse_backend','uwumouse_injector')){
         $ids+=@(Process-Ids $name)
     }
     foreach($processId in @($ids|Sort-Object -Unique)){
         if([string]$processId -notmatch '^\d+$' -or [long]$processId -le 0){continue}
-        Invoke-ControlAdb @('logcat','-d',"--pid=$processId",'-v','brief','-s','MobiMapper:I','MobiSupervisor:I','MobiInjectWorker:I','MobiBackend:I','MobiActivity:I','MobiInputLab:I','*:S')|
+        Invoke-ControlAdb @('logcat','-d',"--pid=$processId",'-v','brief','-s','UwUMouse:I','UwuSupervisor:I','UwuInjectWorker:I','UwuBackend:I','UwuActivity:I','UwuInputLab:I','*:S')|
             Set-Content -LiteralPath (Join-Path $destination "process-$processId.log") -Encoding UTF8
     }
 }
@@ -138,8 +138,8 @@ try {
     $guardianPid=[long]$live.supervisorPid
     $workerPid=[long]$live.workerPid
     $initialProcessIds+=@([string]$guardianPid,[string]$workerPid)
-    Assert-OwnedProcess $guardianPid 'mobimapper_backend'
-    Assert-OwnedProcess $workerPid 'mobimapper_injector'
+    Assert-OwnedProcess $guardianPid 'uwumouse_backend'
+    Assert-OwnedProcess $workerPid 'uwumouse_injector'
     switch($Mode){
         'Guardian' {
             Invoke-ControlAdb @('shell','kill','-9',[string]$guardianPid)|Out-Null
@@ -149,7 +149,7 @@ try {
             Save-Json $lost 'authority-lost-controller.json'
         }
         'AllAuthority' {
-            $remoteScript='/data/local/tmp/mobimapper-drop-privilege-test.sh'
+            $remoteScript='/data/local/tmp/uwumouse-drop-privilege-test.sh'
             Invoke-ControlAdb @('push',(Join-Path $PSScriptRoot 'drop-privilege-test.sh'),$remoteScript)|
                 Set-Content -LiteralPath (Join-Path $destination 'drop-push.txt') -Encoding UTF8
             Invoke-ControlAdb @('shell','sh',$remoteScript,[string]$workerPid,[string]$guardianPid)|

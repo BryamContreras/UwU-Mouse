@@ -10,8 +10,8 @@ import java.lang.reflect.Method;
 
 /** Ephemeral legacy monitor permission probe. No receiver, event reads, pilfer or injection. */
 public final class InputMonitorOpenProbe {
-    private static final String TARGET = "dev.mobimapper.inputlab";
-    private static final String ACTIVITY = "dev.mobimapper.inputlab.InputLabActivity";
+    private static final String TARGET = "dev.uwumouse.inputlab";
+    private static final String ACTIVITY = "dev.uwumouse.inputlab.InputLabActivity";
     private static final String PERMISSION = "android.permission.MONITOR_INPUT";
 
     private InputMonitorOpenProbe() { }

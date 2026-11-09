@@ -16,30 +16,23 @@ ThemeData buildAppTheme() => ThemeData(
   scaffoldBackgroundColor: Colors.white,
   switchTheme: SwitchThemeData(
     thumbColor: WidgetStateProperty.resolveWith(
-      (states) => states.contains(WidgetState.selected)
-          ? Colors.white
-          : const Color(0xff6b7b91),
+      (states) => states.contains(WidgetState.disabled)
+          ? const Color(0xffa3afc0)
+          : Colors.white,
     ),
     trackColor: WidgetStateProperty.resolveWith(
-      (states) => states.contains(WidgetState.selected)
-          ? const Color(0xff244d96)
-          : const Color(0xffd6dde7),
+      (states) => states.contains(WidgetState.disabled)
+          ? const Color(0xffaab6c5)
+          : states.contains(WidgetState.selected)
+          ? const Color(0xff3274d7)
+          : const Color(0xff788ba3),
     ),
     trackOutlineColor: WidgetStateProperty.resolveWith(
-      (states) => states.contains(WidgetState.selected)
-          ? const Color(0xff244d96)
-          : const Color(0xff8090a8),
-    ),
-    thumbIcon: WidgetStateProperty.resolveWith(
-      (states) => Icon(
-        states.contains(WidgetState.selected)
-            ? Icons.check_rounded
-            : Icons.close_rounded,
-        size: 16,
-        color: states.contains(WidgetState.selected)
-            ? const Color(0xff244d96)
-            : Colors.white,
-      ),
+      (states) => states.contains(WidgetState.disabled)
+          ? const Color(0xffaab6c5)
+          : states.contains(WidgetState.selected)
+          ? const Color(0xff3274d7)
+          : const Color(0xff788ba3),
     ),
   ),
   iconTheme: const IconThemeData(color: Color(0xff1966ab), size: 26),

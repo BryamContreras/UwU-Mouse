@@ -10,8 +10,8 @@ $after=Get-Content -LiteralPath (Join-Path $CaptureDirectory 'controller-after.j
 $receiverBefore=Get-Content -LiteralPath (Join-Path $CaptureDirectory 'receiver-before.json') -Raw | ConvertFrom-Json
 $receiverAfter=Get-Content -LiteralPath (Join-Path $CaptureDirectory 'receiver-after.json') -Raw | ConvertFrom-Json
 if(!$before.active -or !$after.active -or $before.metricsSessionId -ne $after.metricsSessionId -or
-    $before.backendSessionId -ne $after.backendSessionId -or $before.activePackage -ne 'dev.mobimapper.inputlab' -or
-    $after.activePackage -ne 'dev.mobimapper.inputlab' -or $before.targetDisplayId -ne $after.targetDisplayId -or
+    $before.backendSessionId -ne $after.backendSessionId -or $before.activePackage -ne 'dev.uwumouse.inputlab' -or
+    $after.activePackage -ne 'dev.uwumouse.inputlab' -or $before.targetDisplayId -ne $after.targetDisplayId -or
     $receiverBefore.observationId -ne $receiverAfter.observationId -or $receiverBefore.pid -ne $receiverAfter.pid -or
     $receiverBefore.sequenceErrors -ne $receiverAfter.sequenceErrors) { throw 'Unstable session or independent receiver' }
 $physical=@(Get-Content -LiteralPath (Join-Path $CaptureDirectory 'mouse-kernel-events.txt') | ForEach-Object {

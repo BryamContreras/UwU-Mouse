@@ -73,7 +73,7 @@
       "role": "Optional capture/draw experiment, never a production dependency",
       "kind": "benchmark-application",
       "allowed_dependencies": [],
-      "borrowed_sources": ["android/mapper-core/src/main/kotlin/dev/mobimapper/mobimapper/session/InputLatencyProbe.kt"]
+      "borrowed_sources": ["android/mapper-core/src/main/kotlin/dev/uwumouse/app/session/InputLatencyProbe.kt"]
     },
     "host": {
       "path": "android/platform-build/host",
@@ -83,18 +83,18 @@
     }
   },
   "compatibility": {
-    "production_application_id": "dev.mobimapper.mobimapper",
-    "control_channel": "dev.mobimapper/control.v1",
+    "production_application_id": "dev.uwumouse.app",
+    "control_channel": "dev.uwumouse/control.v1",
     "control_status_protocol": 1,
     "backend_protocol": 4,
     "profile_file": "profiles-v1.json",
     "profile_schema": 9,
-    "shell_entrypoint": "dev.mobimapper.mobimapper.backend.ShellMain",
-    "worker_entrypoint": "dev.mobimapper.mobimapper.backend.InjectionWorkerMain"
+    "shell_entrypoint": "dev.uwumouse.app.backend.ShellMain",
+    "worker_entrypoint": "dev.uwumouse.app.backend.InjectionWorkerMain"
   },
   "aidl_contract": {
-    "path": "android/injection-api/src/main/aidl/dev/mobimapper/mobimapper/backend/IInjector.aidl",
-    "package": "dev.mobimapper.mobimapper.backend",
+    "path": "android/injection-api/src/main/aidl/dev/uwumouse/app/backend/IInjector.aidl",
+    "package": "dev.uwumouse.app.backend",
     "interface": "IInjector",
     "append_methods_allowed": true,
     "preserved_prefix": [

@@ -11,6 +11,8 @@ export '../models/mapper_status.dart';
 /// Control-plane port. UI depends on this contract, never on a transport or capture engine.
 /// Input samples and touch injection remain in the native runtime.
 abstract interface class MapperGateway {
+  Future<String> cursorStyle();
+  Future<void> setCursorStyle(String style);
   Future<NativeStatus> status();
   Future<LocalActivationStatus> activationStatus();
   Future<void> activationStartDiscovery();

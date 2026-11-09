@@ -25,7 +25,7 @@ foreach($inputFile in @($mapperSource,$labSource,$buildInfo)){
     if(!(Test-Path -LiteralPath $inputFile -PathType Leaf)){throw "Required existing artifact is missing: $inputFile"}
 }
 $mapper=Workspace-Path "dist\UwU-Mouse-$versionName-dev.apk"
-$lab=Workspace-Path "dist\MobiMapper-InputLab-$labVersion.apk"
+$lab=Workspace-Path "dist\UwUMouse-InputLab-$labVersion.apk"
 [IO.File]::Copy($mapperSource,$mapper,$true)
 if(Test-Path -LiteralPath $lab -PathType Leaf){
     # An unchanged receiver keeps its real version and its previously verified artifact.

@@ -10,12 +10,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-/** Shell-only test helper: inspect/click only MobiMapper's own UI without suppressing its service. */
+/** Shell-only test helper: inspect/click only UwUMouse's own UI without suppressing its service. */
 public final class OwnUiClick {
-    private static final String OWN = "dev.mobimapper.mobimapper";
+    private static final String OWN = "dev.uwumouse.app";
     private static boolean knownOverlayTitle(CharSequence title) {
-        return title != null && ("MobiMapper \u00b7 Editor".contentEquals(title) ||
-                "MobiMapper \u00b7 Burbuja".contentEquals(title) || "MobiMapper \u00b7 Opciones".contentEquals(title));
+        return title != null && ("UwUMouse \u00b7 Editor".contentEquals(title) ||
+                "UwUMouse \u00b7 Burbuja".contentEquals(title) || "UwUMouse \u00b7 Opciones".contentEquals(title));
     }
     private static boolean knownOwnOverlayRole(AccessibilityWindowInfo window, AccessibilityNodeInfo root) {
         if (root == null || root.getWindowId() != window.getId() || !OWN.contentEquals(root.getPackageName())) return false;
@@ -108,7 +108,7 @@ public final class OwnUiClick {
         };
         if (args.length < 1 || !Arrays.asList("Editar sobre el juego", "Colocar controles",
                 "Guardar", "Cancelar", "Iniciar en laboratorio", "Laboratorio y diagnóstico", "Probar inyección sintética",
-                "Iniciar sesión", "Detener", "Actualizar", "MobiMapper · abrir opciones", "Mapear", "Cerrar",
+                "Iniciar sesión", "Detener", "Actualizar", "UwUMouse · abrir opciones", "Mapear", "Cerrar",
                 "Ajustes", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
                 "Teclas", "WASD", "Cámara", "Acción", "Área", "Opciones del juego", "Cerrar menú", "Cerrar panel", "Cerrar sesión", "Free Fire",
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
@@ -151,7 +151,7 @@ public final class OwnUiClick {
                         pending.add(root);
                     }
                 }
-                if (pending.isEmpty()) throw new IllegalStateException("Own MobiMapper window on selected display required; no action sent");
+                if (pending.isEmpty()) throw new IllegalStateException("Own UwUMouse window on selected display required; no action sent");
                 AccessibilityNodeInfo scroll = null;
                 while (!pending.isEmpty()) {
                     AccessibilityNodeInfo node = pending.removeFirst();

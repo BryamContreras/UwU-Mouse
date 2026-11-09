@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mobimapper.presentation"
+    namespace = "dev.uwumouse.presentation"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
 
@@ -21,4 +21,5 @@ kotlin {
 
 dependencies {
     api(project(":mapper-core"))
+    testImplementation("junit:junit:4.13.2")
 }

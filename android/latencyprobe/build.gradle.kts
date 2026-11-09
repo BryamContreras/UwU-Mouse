@@ -11,7 +11,7 @@ abstract class StageMapperProbe : DefaultTask() {
 
     @TaskAction
     fun stage() {
-        val destination = outputDirectory.file("dev/mobimapper/mobimapper/session/InputLatencyProbe.kt").get().asFile
+        val destination = outputDirectory.file("dev/uwumouse/app/session/InputLatencyProbe.kt").get().asFile
         destination.parentFile.mkdirs()
         sourceFile.get().asFile.copyTo(destination, overwrite = true)
     }
@@ -20,7 +20,7 @@ abstract class StageMapperProbe : DefaultTask() {
 // Compile only the real recorder, without importing the mapper implementation.
 // AGP 9 built-in Kotlin accepts generated sources through the public variant API.
 val stageMapperProbe = tasks.register<StageMapperProbe>("stageMapperProbe") {
-    sourceFile.set(layout.projectDirectory.file("../mapper-core/src/main/kotlin/dev/mobimapper/mobimapper/session/InputLatencyProbe.kt"))
+    sourceFile.set(layout.projectDirectory.file("../mapper-core/src/main/kotlin/dev/uwumouse/app/session/InputLatencyProbe.kt"))
     outputDirectory.set(layout.buildDirectory.dir("generated/mapper-probe/kotlin"))
 }
 
@@ -29,11 +29,11 @@ androidComponents.onVariants { variant ->
 }
 
 android {
-    namespace = "dev.mobimapper.latencyprobe"
+    namespace = "dev.uwumouse.latencyprobe"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     defaultConfig {
-        applicationId = "dev.mobimapper.latencyprobe"
+        applicationId = "dev.uwumouse.latencyprobe"
         minSdk = uwu.versions.minSdk.get().toInt()
         targetSdk = uwu.versions.targetSdk.get().toInt()
         versionCode = 1

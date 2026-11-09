@@ -13,8 +13,8 @@ import java.lang.reflect.Method;
 
 /** Shell-only, InputLab-only display-routing preflight. Never starts the product engine. */
 public final class DisplayTouchProbe {
-    private static final String TARGET = "dev.mobimapper.inputlab";
-    private static final String ACTIVITY = "dev.mobimapper.inputlab.InputLabActivity";
+    private static final String TARGET = "dev.uwumouse.inputlab";
+    private static final String ACTIVITY = "dev.uwumouse.inputlab.InputLabActivity";
     private final Object tasks, manager;
     private final Method focus, inject, setDisplay;
     private final int targetUid, displayId;

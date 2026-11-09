@@ -9,9 +9,16 @@ sink. The core never reads physical devices or injects Android input itself.
 `ProfileStorage` remains the persistence port; the Android `AtomicFile` adapter
 stays outside this module.
 
-The existing package names are preserved when moving source files. This keeps
-serialized profiles, imports, shell entry points and protocol identities stable.
-Changing a physical folder does not require changing those runtime identities.
+Version 0.3.4 adopts UwU Mouse package names while retaining profile schema 9 and
+the serialized profile format. The Android application identity migration is
+documented separately; preserving a file format does not migrate Android data.
+
+`RepeatRunner` supports both held input and press-to-toggle loops. Optional
+`repeatToggle` and `repeatDurationSeconds` fields default to false/zero in older
+profiles; zero disables the timer, and the accepted duration is 0–86400 seconds.
+Each active repeat has one scheduled pulse/deadline boundary. Cancellation
+invalidates its generation and removes pending work; missed intervals never
+produce catch-up bursts. Platform adapters own global pause and touch release.
 
 JSON is a compile-only dependency because Android supplies `org.json`. JVM tests
 use the matching JSON implementation explicitly. Bytecode targets Java 17.

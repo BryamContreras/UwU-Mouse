@@ -5,7 +5,7 @@ function Assert-DeviceFocus([string]$Adb,[string]$Serial,[string]$Expected) {
 function Invoke-DeviceTap([string]$Adb,[string]$Serial,[string]$Expected,[int]$X,[int]$Y) {
     Assert-DeviceFocus $Adb $Serial $Expected
     if($Expected -eq 'com.dts.freefireth'){
-        $wire=((& $Adb -s $Serial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join'')
+        $wire=((& $Adb -s $Serial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join'')
         if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'Cannot confirm paused mapping; no game touch sent'}
         $state=$Matches[1]|ConvertFrom-Json
         if($state.active -or $state.contacts -gt 0 -or $state.releaseUnverified -or $state.backendPossibleContacts -gt 0 -or $state.mode -notin @('paused','stopped')){throw 'Mapping is active, transitioning or uncertain; no ADB game touch sent'}
@@ -17,13 +17,13 @@ function Get-DeviceUi([string]$Adb,[string]$Serial,[string]$Expected) {
     Assert-DeviceFocus $Adb $Serial $Expected
     # Stock uiautomator attaches UiAutomation and temporarily suppresses accessibility services.
     # Never use it to inspect a live editor or mapping gesture; use screencap + diagnostics there.
-    if($Expected -ne 'dev.mobimapper.mobimapper'){throw 'UI automation is restricted to the stopped mapper panel'}
-    $wire=((& $Adb -s $Serial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join'')
+    if($Expected -ne 'dev.uwumouse.app'){throw 'UI automation is restricted to the stopped mapper panel'}
+    $wire=((& $Adb -s $Serial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join'')
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'Cannot confirm stopped mapping before UI automation'}
     $state=$Matches[1]|ConvertFrom-Json
     if($state.active -or $state.editorVisible -or $state.contacts -gt 0 -or $state.releaseUnverified){throw 'Do not suppress accessibility while the editor or a gesture is active'}
-    & $Adb -s $Serial shell uiautomator dump /data/local/tmp/mobimapper-ui.xml|Out-Null
-    [xml]$tree=((& $Adb -s $Serial shell cat /data/local/tmp/mobimapper-ui.xml)-join'')
+    & $Adb -s $Serial shell uiautomator dump /data/local/tmp/uwumouse-ui.xml|Out-Null
+    [xml]$tree=((& $Adb -s $Serial shell cat /data/local/tmp/uwumouse-ui.xml)-join'')
     Start-Sleep -Seconds 2
     return $tree
 }

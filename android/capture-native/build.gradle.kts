@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mobimapper.capture.nativeinput"
+    namespace = "dev.uwumouse.capture.nativeinput"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     ndkVersion = uwu.versions.ndk.get()

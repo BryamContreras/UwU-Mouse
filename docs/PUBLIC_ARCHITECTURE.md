@@ -1,14 +1,16 @@
-# Arquitectura histórica de UwU Mouse 0.2.0+37
+# Arquitectura pública y alcance de UwU Mouse
 
-> Referencia anterior a la migración nativa. La estructura y los contratos actuales están en [ARCHITECTURE.md](../ARCHITECTURE.md). Las secciones de accesibilidad de este documento describen únicamente el APK anterior.
-
-Esta descripción corresponde a **0.2.0+37**. Flutter gestiona juegos, perfiles, ajustes y estado. Kotlin procesa la entrada, el editor nativo, las transiciones y la composición multitáctil. El paquete Android histórico se conserva para permitir actualizaciones con los mismos datos y autorizaciones cuando la firma coincide.
+Esta descripción resume la aplicación actual. El inventario de módulos,
+contratos y resultados históricos está en [ARCHITECTURE.md](../ARCHITECTURE.md).
+Los detalles de accesibilidad de las primeras versiones no describen el APK
+actual: la captura de teclado y ratón y las ventanas del mapeador ya no requieren
+un servicio de accesibilidad.
 
 ```mermaid
 flowchart LR
-    UI[Flutter: biblioteca y conexión] --> Coordinator[Coordinador Kotlin]
-    Editor[Editor nativo por pantalla] --> Coordinator
-    Input[Teclado y ratón] --> Capture[Captura y contexto autorizado]
+    UI[Flutter: biblioteca y ajustes] --> Coordinator[Coordinador Kotlin]
+    Editor[Editor nativo] --> Coordinator
+    Input[Teclado y ratón externos] --> Capture[Captura evdev autorizada]
     Capture --> Engine[Motor y cola acotada]
     Coordinator --> Engine
     Engine --> Composer[Compositor multitáctil]
@@ -17,104 +19,71 @@ flowchart LR
     Worker --> Android[Android: paquete y pantalla autorizados]
 ```
 
-## Perfiles y edición
+## Entrada, ventanas y procesos
 
-El **esquema 9** guarda identidad, nombre, paquete, orientación, dimensiones, área calibrada, joystick, cámara, sensibilidad, acciones, tamaños, macros y atajos. La calibración distingue `phone` y `external` y conserva el marco de la ventana cuando corresponde. El ID numérico de la pantalla se resuelve durante la sesión; no identifica persistentemente un perfil.
+Flutter es el plano de control. Las muestras físicas y los contactos táctiles
+se procesan en los módulos nativos, sin pasar por Dart en cada evento. La captura
+selecciona dispositivos externos por sus capacidades y los adquiere mediante
+`EVIOCGRAB`; una lease y un watchdog independiente permiten devolverlos si se
+pierde el consumidor. El inyector mantiene su proceso separado del guardián.
 
-Un juego puede tener varios perfiles independientes. Al pasar por primera vez a pantalla externa, se crea una copia separada que exige calibración, sin sobrescribir el perfil del teléfono. La selección prefiere el contexto de pantalla actual; los conflictos de atajos se validan por juego y tipo de pantalla. Cambiar de perfil termina las acciones anteriores y no reproduce entradas mantenidas. Eliminar un perfil requiere confirmación y actualiza de forma atómica la selección y su reemplazo; eliminar el último cierra sus herramientas.
+La inyección exige sesión, destino, pantalla y foco verificados. La pérdida de
+contexto pausa las acciones; una recuperación del inyector no reproduce teclas
+o botones mantenidos. Las ventanas de presentación usan el permiso estándar
+**Mostrar sobre otras apps** tanto en teléfono como en pantallas externas. La
+calibración externa conserva el marco de la ventana y exige recalibrar si cambia
+su geometría. Ninguna prueba en DeX acredita por sí sola todos sus modos o juegos.
 
-El repositorio es la única fuente de verdad: valida documentos y usa `AtomicFile`. Los esquemas anteriores se migran en memoria sin sobrescribirlos al leer. Guardar es explícito. Antes de iniciar, el compilador convierte el perfil a coordenadas y asignaciones preparadas; **ningún movimiento del ratón consulta archivos o bases de datos**.
+## Perfiles, bucles y cierre
 
-El editor usa un borrador. Entrar pausa el mapeo y termina contactos, de modo que los clics usados para editar no se convierten simultáneamente en acciones del juego. Guardar valida y cambia la configuración mediante una transición segura; Cancelar conserva la anterior. Los círculos admiten asignación directa, arrastre, cambio de tamaño y eliminación. La paleta incluye Guardar/Cancelar; los paneles evitan asignadores redundantes y usan barras de 6 dp con área táctil accesible.
+El esquema 9 conserva perfiles, calibración, controles, macros y atajos. El
+repositorio valida los documentos y usa escritura atómica; el motor consume una
+configuración preparada y no lee archivos por movimiento. El editor usa un
+borrador: Guardar valida y aplica; Cancelar conserva el perfil anterior.
 
-La biblioteca muestra el estado de accesibilidad y motor antes de los juegos. Ajustes de conexión ofrece el acceso concreto cuando falta cada servicio. Perfiles aparece primero en la burbuja, cuyo estado queda centrado y cuyo cierre es compacto. La preparación de una ventana puede reutilizar un contexto estable validado; se invalida si cambian la geometría, el destino o el servicio.
+**Repetir** funciona al mantener pulsado o mediante **Mantener en bucle**. Una
+pulsación inicia el bucle y otra lo detiene; el temporizador acepta 0–86400
+segundos y `0` deja el bucle sin límite. Cada activación inicia un plazo nuevo.
+El mismo callback acotado controla pulsos y vencimiento, sin hilos adicionales.
+Pausar, cerrar o entrar al cursor cancela sus tareas y libera los contactos; los
+periodos perdidos se omiten sin producir una ráfaga posterior.
 
-## Pantallas, ventanas y coordenadas
+Inicio conserva **Cerrar sesión** mientras existe una sesión, también durante
+bloqueos o cierres pendientes. La liberación debe confirmarse antes de iniciar
+otro mapeo. La desaparición confirmada de la tarea y ventana del juego cierra la
+sesión automáticamente; minimizar o perder foco conserva la pausa. Si Android
+no permite confirmar la salida, se conserva el cierre manual.
 
-La configuración distingue el área calibrada del juego, el marco completo de su ventana y las coordenadas de inyección de la pantalla destino. Un perfil externo confirmado requiere un marco válido que contenga el área. Al iniciar, marco, dimensiones, orientación y tipo de pantalla deben coincidir; mover o redimensionar la ventana suspende y requiere recalibración, aunque algunos controles aún quepan.
+## Activación y actualización
 
-El servicio obtiene las ventanas por pantalla y confirma el paquete y el foco del destino. Un broker en el proceso autorizado aporta la información de foco necesaria para DeX. Las ventanas ajenas superiores también cuentan cuando Android las clasifica como ventanas de aplicación, como ocurre con una barra del escritorio: sus regiones bloquean puntos y su foco puede pausar el mapeo. Salir del contexto o perder la pantalla no permite continuar sobre otra app.
+La activación local usa el emparejamiento de Depuración inalámbrica de Android.
+También puede arrancarse desde un equipo con ADB por USB o Wi-Fi; después de
+activar no hace falta mantener la PC conectada. El hub, ratón y teclado no
+ejecutan ADB por sí solos. [Activar en el teléfono](ACTIVAR_TELEFONO.md) ·
+[Activar desde PC](ACTIVAR_PC.md).
 
-En el teléfono se usan superposiciones de accesibilidad. En pantalla externa se usa **TYPE_APPLICATION_OVERLAY** tras la concesión explícita del permiso estándar **SYSTEM_ALERT_WINDOW**, presentado como **Ventanas de DeX** en Ajustes de conexión. Se crea el contexto para la pantalla destino y se comprueba el permiso antes de abrir la sesión o editor. El HUD de controles es solo presentación y no recibe toques. Las capas pasantes limitan su opacidad combinada según el máximo de Android y un presupuesto de tres capas; ese cálculo no sustituye una prueba física de paso de toques.
+La identidad Android de 0.3.4 es **`dev.uwumouse.app`**. Android la considera una
+app nueva respecto a la instalación anterior: exporta los perfiles antes de
+cambiar, impórtalos después y vuelve a conceder permisos. El formato compatible
+del perfil no transfiere automáticamente los datos privados entre aplicaciones.
+[Migración](MIGRACION_0_3_4.md).
 
-En DeX, la ventana completa del editor puede hacer que la app cubierta deje de aparecer en el inventario de accesibilidad. Un ancla acotada a perfil, paquete, pantalla y marco conserva **solo la presentación de edición** mientras se mantiene su contexto autorizado. En ese modo no hay captura ni sesión de inyección activa. Cerrar el editor elimina el ancla; jugar exige de nuevo una ventana real y foco fresco del juego. El ancla no congela una autorización de inyección.
+## Rendimiento y validación
 
-## Captura y coste de ruteo
+La revisión elimina despertares, dibujados y relayouts redundantes, mantiene
+colas y buffers acotados y cancela trabajo cuando deja de ser necesario.
+El monitor de FPS y batería es opcional y consulta solo mientras se muestra.
+[Revisión y límites de rendimiento](../PERFORMANCE_REVIEW.md).
 
-El motor comparte hasta diez contactos entre joystick, cámara, acciones, macros y comandos. La cámara admite movimiento continuo o limitado a región. Repetir se ejecuta mientras se mantiene su activador y cancela tareas al soltar o pausar; los periodos atrasados se omiten, sin acumular ráfagas.
+Las pruebas automáticas, InputLab y las observaciones en juegos tienen alcances
+separados. InputLab valida secuencias táctiles en su propia ventana; un ACK no
+demuestra una acción dentro de un juego ni la presentación de un frame. Los
+percentiles internos y la terminación CPU de `onDraw` no miden la latencia desde
+el movimiento físico hasta la imagen. `latencyprobe` conserva un experimento
+opcional de accesibilidad para comparar rutas y no forma parte del mapeador.
 
-La captura distingue eventos de ratón físicos de entradas táctiles. El Samsung probado entrega una combinación de fuentes MOUSE y TOUCHSCREEN para un ratón externo. Se admite cuando tanto el evento como el dispositivo tienen capacidad MOUSE y el dispositivo es externo y no virtual; no existe una excepción por un identificador concreto. Las entradas táctiles puras y los dispositivos virtuales no obtienen esa excepción. Avisos de dispositivo con capacidades idénticas no interrumpen la sesión; una retirada o cambio material sigue pausando y liberando contactos.
-
-Con varias pantallas, o con un destino externo, se confirma la pantalla real de **cada MotionEvent** mediante una RPC al backend autorizado antes de procesarlo. No se infiere a partir de coordenadas, del nombre del ratón o de su primer evento. Una pantalla distinta o imposible de confirmar pausa y retira la captura. Se hace una consulta por evento, no por cada muestra histórica; esta RPC añade coste al camino de entrada y se mide aparte. La ruta telefónica de una sola pantalla conserva su recorrido habitual.
-
-## Activación, estados y recuperación
-
-El backend se prepara mediante ADB autorizado como UID 2000 y comprueba el permiso efectivo de inyección. La activación local usa descubrimiento mDNS, emparejamiento TLS con el código de Android y un comando fijo para arrancar las clases del APK instalado. La notificación permite introducir el código sin cerrar el diálogo de emparejamiento. Si no existe una actividad directa de Depuración inalámbrica, se abren Opciones de desarrollador. La app requiere Android 14/API 34 o posterior. [Guía local](ACTIVAR_TELEFONO.md), [alternativa PC](ACTIVAR_PC.md).
-
-La identidad se guarda en archivos privados con escritura atómica y cifrado AES-GCM mediante Android Keystore; el código de seis dígitos solo se usa en memoria. La activación se restringe al mismo teléfono y no expone un terminal de comandos arbitrarios. Se reconecta un guardián vivo antes de arrancar otro y se exige sesión cerrada, ausencia de contactos y liberación verificada. Cancelar cierra el transporte de activación, sin detener un guardián ya activo.
-
-No requiere root ni InputLab instalado. El arranque del motor no abre una sesión ni un juego. Tocar un juego puede reactivar el motor con la identidad guardada si Depuración inalámbrica sigue disponible; esa acción exige la pulsación del usuario. Después de un reinicio puede hacer falta reactivarlo. Accesibilidad sigue siendo necesaria para la captura y coordinación de esta implementación.
-
-Los modos distinguen detenido, edición, juego, recuperación y bloqueo. El guardián conserva la secuencia activa, su pantalla original y los datos necesarios para reemplazar el worker y cancelar contactos sin reiniciar al receptor. Solo se cambia el destino con el journal vacío y la liberación verificada. Si se pierde completamente la capacidad de inyección, no se puede garantizar una cancelación: se mantiene el bloqueo y no se continúa inyectando.
-
-Detener libera la captura, restaura el puntero del sistema y retira las ventanas de sesión. Mantener accesibilidad autorizada no significa consumir entradas fuera de una sesión. Pausar, editar, perder contexto o recuperar el worker no reproduce teclas o botones que seguían mantenidos.
-
-## Verificación y límites
-
-La prueba real de 0.2.0+37 corresponde a **Samsung con Android 14, DeX por HDMI, pantalla completa a 1920×1080 y Free Fire en Entrenamiento**. Con teclado y ratón físicos, el usuario confirmó movimiento, cámara y acciones, incluida la mira, también después de editar/guardar y volver a abrir el juego desde la interfaz. Los registros del mapeador describen su propio procesamiento; no leen eventos internos del juego, y un ACK de inyección no prueba por sí solo que una acción haya ocurrido.
-
-InputLab aporta evidencia independiente de secuencias, liberaciones parciales, F8/F9 y retirada OTG. La recuperación en DeX se probó con un fallo sintético del worker y cancelación real recibida con tres contactos; no es una caída física observada en el juego. El ensayo OTG no aísla continuidad de HDMI durante la operación. Las suites automatizadas cubren perfiles, persistencia, migración, coordenadas, contexto, selección y transiciones; el [workflow Android](CI_ANDROID.md) añade análisis, pruebas y APK por ABI.
-
-La reapertura física del perfil reciente fue una vuelta por Activity/UI con el repositorio conservado en memoria. **No se presenta como reinicio frío del proceso ni como lectura de disco observada.** Esa prueba posterior, WirelessDeX, DeX para PC, ventanas movidas o redimensionadas, otras orientaciones o juegos y todos los botones/macros de cada perfil siguen sin validación física específica.
-
-### Referencia de rendimiento
-
-Una muestra estable de 10.464 s con editor cerrado, sin grabación y con entradas de ratón midió únicamente procesos propios:
-
-| Proceso | CPU equivalente a un núcleo |
-|---|---:|
-| App | 10.03% |
-| Guardián | 13.67% |
-| Inyector | 4.49% |
-
-La suma fue 28.19% de un núcleo; los procesos del juego se excluyeron. Hubo 896 muestras relativas y 897 inyecciones, sin nuevos bordes de teclado durante el intervalo. La cola tuvo máximo 2 y terminó en 0. Los percentiles internos rodantes del mismo SID fueron p95 de cola 0.574 ms e IPC 6.568 ms; no se limitan al intervalo de CPU. El ruteo de 897 eventos costó una media de 0.563 ms por RPC en una ventana diagnóstica de 12.164 s, distinta de la muestra de CPU.
-
-Estas cifras incluyen instrumentación y observación ADB, no son latencia hasta imagen ni FPS y no permiten comparar causalmente con 0.1.1. Una referencia de reposo sin entradas se mantiene separada; cero ticks observados a la resolución del muestreo no significa coste cero. La medición breve tampoco acredita rendimiento sostenido o compatibilidad universal.
-
-### Instrumentación opcional de entrada
-
-`InputLatencyProbe` registra en memoria la llegada a `onMotionEvent`/`onKeyEvent`,
-la recepción de la muestra más reciente en el worker y la terminación CPU del
-dibujo del cursor. Conserva los tiempos originales del mouse; las etapas de
-inyección etiquetadas `syntheticComposition` parten del timestamp táctil nuevo y
-no se presentan como latencia desde el mouse físico. Los históricos se separan de
-la muestra actual. El modo está apagado por defecto, dura hasta 60 s y conserva
-hasta 4096 registros, indicando cuántos se sobrescribieron.
-
-El provider existente, restringido a ADB autorizado, acepta `latencyStart`
-(`durationMs:i:30000`), `latencyStop` y `latencySnapshot` (`offset:i:0`,
-`limit:i:512`). Se detiene antes de paginar para mantener offsets estables.
-`scripts/Measure-InputLatency.ps1 -Serial SERIAL -Instrumented` recoge las etapas;
-sin ese switch observa las métricas ya disponibles en el APK instalado. Sus
-percentiles de cola/IPC siguen describiendo los buffers rodantes de la sesión.
-
-`tools/probes/Correlate-MouseLatency.ps1` correlaciona clics aislados del registro
-kernel con las transiciones del receptor independiente. Rechaza conteos distintos
-o correspondencias ambiguas. Mide hasta el callback receptor; no separa por sí solo
-la entrega de accesibilidad ni acredita dibujo.
-
-El módulo independiente `android/latencyprobe` compara la entrega de mouse a una
-Activity con la entrega a un servicio de accesibilidad usando el mismo View.
-`scripts/Measure-CapturePaths.ps1` repite el orden directo/accesibilidad y después
-accesibilidad/directo. Es un benchmark auxiliar, no una medición del callback del
-APK original ni una implementación alternativa de captura global. La sonda C++
-`tools/probes/NativeMouseLatencyProbe.cpp` mide lectura de un nodo de mouse como
-shell, con reloj monotónico y sin captura exclusiva o inyección. Esa lectura no
-demuestra supresión de la entrada original ni compatibilidad con juegos.
-
-Los relojes de origen y recepción usan la base monotónica de Android, no el tiempo
-de llegada por ADB Wi-Fi. `onDraw` registra comandos de CPU y un ACK solo la vuelta
-de la llamada: ninguno acredita presentación física. No se suman percentiles de
-etapas ni se comparan ventanas como si fueran el mismo conjunto de eventos. Las
-evidencias físicas y los informes de cada dispositivo permanecen en `evidence/`,
-excluido del repositorio público.
+La prueba de repetición en el teléfono confirmó el bucle, su temporizador y
+cancelación con 47 eventos válidos y cero contactos pendientes. No certifica
+estabilidad durante varias horas. Las ejecuciones de CI deben comprobarse sobre
+el commit final y los APK publicados de cada versión. Los perfiles y registros
+del dispositivo permanecen en `evidence/`, excluido del repositorio público.

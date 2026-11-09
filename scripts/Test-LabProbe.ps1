@@ -4,22 +4,22 @@ $adbPath = Get-ProjectAdb
 $targetSerial = Get-ProjectDevice $adbPath $Serial
 $projectRoot = Split-Path -Parent $PSScriptRoot
 function Read-State {
-    $wire = (& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics) -join ''
+    $wire = (& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics) -join ''
     if ($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$') { throw 'No se pudo leer el diagnóstico nativo' }
     return $Matches[1] | ConvertFrom-Json
 }
 $state = Read-State
 if ($state.active) { throw 'Detén primero la sesión física.' }
 if (!$state.backend) { throw 'Activa primero el backend con Activate.ps1.' }
-Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','force-stop','dev.mobimapper.inputlab')
-Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','start','-W','-f','0x10008000','-n','dev.mobimapper.mobimapper/.MainActivity')
+Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','force-stop','dev.uwumouse.inputlab')
+Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','start','-W','-f','0x10008000','-n','dev.uwumouse.app/.MainActivity')
 Start-Sleep -Milliseconds 500
 $selected = $null
 for ($attempt=0; $attempt -lt 4; $attempt++) {
     $foreground = (& $adbPath -s $targetSerial shell dumpsys activity activities | Select-String 'topResumedActivity') -join ''
-    if ($foreground -notmatch 'dev\.mobimapper\.mobimapper/\.MainActivity') { throw 'MobiMapper no tiene foco; resuelve cualquier autorización visible y repite.' }
-    & $adbPath -s $targetSerial shell uiautomator dump /data/local/tmp/mobimapper-test-ui.xml | Out-Null
-    [xml]$tree = ((& $adbPath -s $targetSerial shell cat /data/local/tmp/mobimapper-test-ui.xml) -join "`n")
+    if ($foreground -notmatch 'dev\.uwumouse\.app/\.MainActivity') { throw 'UwUMouse no tiene foco; resuelve cualquier autorización visible y repite.' }
+    & $adbPath -s $targetSerial shell uiautomator dump /data/local/tmp/uwumouse-test-ui.xml | Out-Null
+    [xml]$tree = ((& $adbPath -s $targetSerial shell cat /data/local/tmp/uwumouse-test-ui.xml) -join "`n")
     $selected = $tree.SelectSingleNode('//node[@content-desc="Probar inyección sintética"]')
     if ($selected) { break }
     $bounds = [regex]::Matches($tree.hierarchy.node.bounds,'\d+') | ForEach-Object { [int]$_.Value }
@@ -37,8 +37,8 @@ for ($attempt=0; $attempt -lt 18; $attempt++) {
     if ($state.state -eq 'Pausada') { throw "Diagnóstico interrumpido: $($state.error)" }
 }
 if ($state.state -ne 'Diagnóstico terminado') { throw "No terminó el diagnóstico: $($state.state)" }
-Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','start','-W','-f','0x14000000','-n','dev.mobimapper.mobimapper/.MainActivity')
-$wire = & $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-summary.json
+Invoke-ProjectAdb $adbPath $targetSerial @('shell','am','start','-W','-f','0x14000000','-n','dev.uwumouse.app/.MainActivity')
+$wire = & $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-summary.json
 $summary = ($wire -join "`n") | ConvertFrom-Json
 $wire | Set-Content -LiteralPath (Join-Path $projectRoot 'evidence\release-probe-receiver.json') -Encoding UTF8
 $state | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $projectRoot 'evidence\release-probe-mapper.json') -Encoding UTF8

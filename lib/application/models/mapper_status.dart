@@ -27,6 +27,8 @@ class NativeStatus {
       queueMs = _timings(wire['queueMs']),
       ipcMs = _timings(wire['ipcMs']),
       active = wire['active'] == true,
+      sessionOpen = wire['sessionOpen'] == true,
+      transitioning = wire['transitioning'] == true,
       mode =
           wire['mode'] as String? ??
           (wire['releaseUnverified'] == true
@@ -45,6 +47,10 @@ class NativeStatus {
       overlayPermission = wire.containsKey('overlayPermission')
           ? wire['overlayPermission'] == true
           : wire['drawOverlays'] == true,
+      wirelessDebuggingEnabled = switch (wire['wirelessDebuggingEnabled']) {
+        bool enabled => enabled,
+        _ => null,
+      },
       devices = (wire['devices']! as List<Object?>)
           .cast<Map<Object?, Object?>>()
           .map((value) => value['name']! as String)
@@ -72,11 +78,14 @@ class NativeStatus {
       stopRequested,
       guardianClosurePending,
       active,
+      sessionOpen,
+      transitioning,
       editorVisible,
       drawOverlays,
       overlayPermission,
       captureReady;
   final String? activeProfileId, activePackage, profileName;
+  final bool? wirelessDebuggingEnabled;
   final int contacts,
       keys,
       mouse,
@@ -92,6 +101,31 @@ class NativeStatus {
   bool get recovering => mode == 'recovering';
   bool get blocked => mode == 'blocked' || releaseUnverified;
   bool get editing => mode == 'editing' || editorVisible;
+  // stopRequested records explicit intent even after the native mode settles.
+  bool get closing =>
+      mode == 'closing' ||
+      mode == 'stopping' ||
+      (stopRequested &&
+          (mode != 'stopped' ||
+              sessionOpen ||
+              transitioning ||
+              guardianClosurePending ||
+              active ||
+              editing ||
+              blocked ||
+              recovering ||
+              contacts > 0));
+  bool get hasSession =>
+      sessionOpen ||
+      active ||
+      transitioning ||
+      editing ||
+      closing ||
+      blocked ||
+      recovering ||
+      guardianClosurePending ||
+      contacts > 0 ||
+      (activeProfileId != null && mode != 'stopped');
   String get uiDisplayScope => uiDisplayId == 0 ? 'phone' : 'external';
 
   static List<double> _timings(Object? value) => (value! as List<Object?>)

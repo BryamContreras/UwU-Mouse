@@ -2,7 +2,7 @@ plugins {
     id("com.android.library")
 }
 android {
-    namespace = "dev.mobimapper.activation.transport"
+    namespace = "dev.uwumouse.activation.transport"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     ndkVersion = uwu.versions.ndk.get()

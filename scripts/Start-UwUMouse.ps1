@@ -35,7 +35,7 @@ function Find-UwUPhone {
 }
 
 function Read-UwUStatus {
-    $wire = ((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics) -join "`n").Trim()
+    $wire = ((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics) -join "`n").Trim()
     if ($LASTEXITCODE -ne 0 -or $wire -notmatch '(?s)^Result: Bundle\[\{json=(.*)\}\]$') {
         throw 'No se pudo consultar UwU Mouse. Comprueba que la app esta instalada y abrela una vez.'
     }
@@ -82,7 +82,7 @@ if (!(Test-UwUReady $status)) {
     if (!(Test-UwUReady $status)) {
         if ($status.backend) { throw 'El motor responde, pero su autorizacion no es valida.' }
         if ($CheckOnly) { throw 'El servicio esta apagado. Ejecuta Activar-UwU-Mouse.cmd para activarlo desde esta PC.' }
-        $existing = ((& $adbPath -s $targetSerial shell pidof mobimapper_backend) -join ' ').Trim()
+        $existing = ((& $adbPath -s $targetSerial shell pidof uwumouse_backend) -join ' ').Trim()
         $probeExit = $LASTEXITCODE
         if ($probeExit -eq 0) {
             if ($existing -notmatch '^\d+(?:\s+\d+)*$') { throw 'No se pudo confirmar el proceso existente. No se inicio otra copia.' }
@@ -100,7 +100,7 @@ if (!(Test-UwUReady $status)) { throw 'No se pudo verificar el servicio con UID 
 if (Assert-UwUIdleOrPreserved $status) { return }
 Write-Host 'Motor de toques activo y verificado.'
 if (!$CheckOnly) {
-    Invoke-ProjectAdb $adbPath $targetSerial @('shell', 'am', 'start', '-n', 'dev.mobimapper.mobimapper/.MainActivity')
+    Invoke-ProjectAdb $adbPath $targetSerial @('shell', 'am', 'start', '-n', 'dev.uwumouse.app/.MainActivity')
 }
 if (!(Test-UwUCaptureReady $status)) {
     throw 'La captura nativa no esta preparada. Instala el APK actualizado y reinicia el motor desde UwU Mouse; revisa su mensaje de captura.'

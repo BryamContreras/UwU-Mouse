@@ -24,6 +24,7 @@
 #include <unistd.h>
 #include <vector>
 #include "capture_policy.h"
+#include "capture_lease_watchdog.h"
 
 // Original implementation. Privileged evdev transport, with no Android UI or injector.
 namespace {
@@ -267,7 +268,9 @@ struct Capture : std::enable_shared_from_this<Capture> {
             std::lock_guard<std::mutex> lock(reasonMutex);
             if (reason.empty()) reason=why;
         }
-        stopRequested=true;
+        // Pair the state change with the watchdog's wait lock so shutdown cannot
+        // lose its notification between checking the predicate and sleeping.
+        { std::lock_guard<std::mutex> lock(completionMutex); stopRequested=true; }
         // Separate watchdog can relinquish grabs even if a Java/Binder callback stalls.
         // Normal closing belongs to the reader. If release ioctl fails, a serialized
         // close is mandatory even when the Java callback has not returned.
@@ -469,7 +472,8 @@ struct Capture : std::enable_shared_from_this<Capture> {
                 const int64_t now=monotonic();
                 const int64_t remaining=deadline.load()-now;
                 if (remaining<=0) { stop("lease_expired"); break; }
-                int64_t wait=std::min<int64_t>(remaining,100'000'000LL);
+                // Stop and rate changes wake eventfd; an idle reader needs no ticker.
+                int64_t wait=remaining;
                 const int64_t movementWait=mouseBatcher.waitNanos(now);
                 if (movementWait>=0) wait=std::min(wait,movementWait);
                 const timespec timeout{static_cast<time_t>(wait/1'000'000'000LL),static_cast<long>(wait%1'000'000'000LL)};
@@ -513,14 +517,9 @@ struct Capture : std::enable_shared_from_this<Capture> {
         completion.notify_all();
     }
     void runWatcher() {
-        while (!stopRequested) {
-            std::unique_lock<std::mutex> lock(completionMutex);
-            watchWake.wait_for(lock,std::chrono::milliseconds(25),[this]{return stopRequested.load();});
-            lock.unlock();
-            if (stopRequested) break;
-            try { if (monotonic()>=deadline.load()) { stop("lease_expired"); break; } }
-            catch (...) { stop("watchdog_clock_failed"); break; }
-        }
+        try {
+            if (uwu::waitForLeaseExpiry(completionMutex,watchWake,stopRequested,deadline,monotonic)) stop("lease_expired");
+        } catch (...) { stop("watchdog_clock_failed"); }
         // A blocked Binder callback cannot prevent releasing exclusive grabs or reporting loss.
         JNIEnv* env=nullptr;
         if (vm->AttachCurrentThread(&env,nullptr)==JNI_OK) { notifyLost(env); vm->DetachCurrentThread(); }
@@ -545,9 +544,14 @@ struct Capture : std::enable_shared_from_this<Capture> {
         if (watcher.joinable()) { if (watcherDone && watcher.get_id()!=std::this_thread::get_id()) watcher.join(); else watcher.detach(); }
     }
     bool renew() {
-        if (stopRequested || monotonic()>=deadline.load()) { stop("lease_expired"); return false; }
-        deadline=monotonic()+leaseNanos;
-        return !stopRequested;
+        bool renewed=false;
+        {
+            std::lock_guard<std::mutex> lock(completionMutex);
+            const auto now=monotonic();
+            if (!stopRequested && now<deadline.load()) { deadline=now+leaseNanos;renewed=true; }
+        }
+        if (!renewed) stop("lease_expired");
+        return renewed && !stopRequested;
     }
     std::string json() {
         const auto delivered=mouseBatcher.deliveredSamples.load();
@@ -582,12 +586,12 @@ void javaFailure(JNIEnv* env,const char* message) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeInventory(JNIEnv* env,jobject) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeInventory(JNIEnv* env,jobject) {
     try { return env->NewStringUTF(inventory().c_str()); }
     catch (const std::exception& failure) { javaFailure(env,failure.what()); return nullptr; }
 }
 extern "C" JNIEXPORT jlong JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeStart(JNIEnv* env,jobject owner,jobjectArray paths,jobjectArray expectedIdentities,jint leaseMillis,jboolean mouse,jboolean keyboard,jint mouseRateHz) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeStart(JNIEnv* env,jobject owner,jobjectArray paths,jobjectArray expectedIdentities,jint leaseMillis,jboolean mouse,jboolean keyboard,jint mouseRateHz) {
     try {
         shellOnly();
         const jsize count=env->GetArrayLength(paths);
@@ -619,17 +623,17 @@ Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeStart(JNIEnv* en
     } catch (const std::exception& failure) { javaFailure(env,failure.what()); return 0; }
 }
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeConfigureMouseRate(JNIEnv* env,jobject,jlong id,jint rateHz) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeConfigureMouseRate(JNIEnv* env,jobject,jlong id,jint rateHz) {
     try { shellOnly();auto capture=lookup(id);return capture && capture->configureMouseRate(rateHz); }
     catch (const std::exception& failure) { javaFailure(env,failure.what());return false; }
 }
 extern "C" JNIEXPORT jboolean JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeRenew(JNIEnv* env,jobject,jlong id) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeRenew(JNIEnv* env,jobject,jlong id) {
     try { shellOnly(); auto capture=lookup(id); return capture && capture->renew(); }
     catch (const std::exception& failure) { javaFailure(env,failure.what()); return false; }
 }
 extern "C" JNIEXPORT void JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeStop(JNIEnv* env,jobject,jlong id) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeStop(JNIEnv* env,jobject,jlong id) {
     try {
         shellOnly(); std::shared_ptr<Capture> capture;
         { std::lock_guard<std::mutex> lock(registryMutex); auto found=registry.find(id); if(found==registry.end()) return; capture=found->second; registry.erase(found); }
@@ -637,7 +641,7 @@ Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeStop(JNIEnv* env
     } catch (const std::exception& failure) { javaFailure(env,failure.what()); }
 }
 extern "C" JNIEXPORT jstring JNICALL
-Java_dev_mobimapper_capture_nativeinput_ShellEvdevCapture_nativeStatus(JNIEnv* env,jobject,jlong id) {
+Java_dev_uwumouse_capture_nativeinput_ShellEvdevCapture_nativeStatus(JNIEnv* env,jobject,jlong id) {
     try {
         shellOnly(); auto capture=lookup(id);
         return env->NewStringUTF(capture?capture->json().c_str():"{\"running\":false,\"reason\":\"capture_closed\",\"devices\":[]}");

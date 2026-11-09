@@ -1,10 +1,10 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobimapper/platform/android/method_channel_mapper_gateway.dart';
+import 'package:uwu_mouse/platform/android/method_channel_mapper_gateway.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-  const channel = MethodChannel('dev.mobimapper/control.v1');
+  const channel = MethodChannel('dev.uwumouse/control.v1');
   const gateway = MethodChannelMapperGateway();
   tearDown(
     () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

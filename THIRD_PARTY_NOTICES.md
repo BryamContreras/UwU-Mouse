@@ -12,7 +12,7 @@ and its [native pairing implementation](https://github.com/RikkaApps/Shizuku/blo
 Pinned revision: `b844bc491f1790c72328e1a8e5b2349f8978f0ea`.
 Authors: Shizuku contributors. License: Apache License 2.0.
 
-Adapted files live in `android/activation-transport/src/main/kotlin/dev/mobimapper/mobimapper/activation/adb`
+Adapted files live in `android/activation-transport/src/main/kotlin/dev/uwumouse/app/activation/adb`
 and `android/activation-transport/src/main/cpp/adb/adb_pairing.cpp`. Changes include the namespace,
 standalone key storage, public Conscrypt provider, network timeouts, bounded
 ADB payloads, JNI registration, cleanup, logging and focused protocol tests.

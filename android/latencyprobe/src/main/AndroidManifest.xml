@@ -16,6 +16,6 @@
         </service>
         <provider android:name=".ProbeControlProvider" android:exported="true"
             android:permission="android.permission.DUMP"
-            android:authorities="dev.mobimapper.latencyprobe.control" />
+            android:authorities="dev.uwumouse.latencyprobe.control" />
     </application>
 </manifest>

@@ -5,7 +5,15 @@ import '../../application/ports/mapper_gateway.dart';
 /// Android adapter for the existing versioned control protocol.
 class MethodChannelMapperGateway implements MapperGateway {
   const MethodChannelMapperGateway();
-  static const _channel = MethodChannel('dev.mobimapper/control.v1');
+  static const _channel = MethodChannel('dev.uwumouse/control.v1');
+
+  @override
+  Future<String> cursorStyle() async =>
+      await _channel.invokeMethod<String>('cursorStyle') ?? 'classic';
+
+  @override
+  Future<void> setCursorStyle(String style) =>
+      _channel.invokeMethod<void>('setCursorStyle', {'style': style});
 
   @override
   Future<NativeStatus> status() async {

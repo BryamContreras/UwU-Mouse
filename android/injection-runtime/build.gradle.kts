@@ -2,7 +2,7 @@ plugins {
     id("com.android.library")
 }
 android {
-    namespace = "dev.mobimapper.injection.runtime"
+    namespace = "dev.uwumouse.injection.runtime"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     defaultConfig { minSdk = uwu.versions.minSdk.get().toInt() }

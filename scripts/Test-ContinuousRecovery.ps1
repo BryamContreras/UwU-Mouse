@@ -6,17 +6,17 @@ $targetSerial=Get-ProjectDevice $adbPath $Serial
 $destination=Join-Path (Split-Path -Parent $PSScriptRoot) "evidence\v020\$Case"
 New-Item -ItemType Directory -Force $destination|Out-Null
 function State {
-    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join''
+    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join''
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'No mapper status'}
     $Matches[1]|ConvertFrom-Json
 }
-function Observe { ((& $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-live.json)-join'')|ConvertFrom-Json }
+function Observe { ((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json)-join'')|ConvertFrom-Json }
 function Save($Value,[string]$Name){$Value|ConvertTo-Json -Depth 22|Set-Content -Encoding UTF8 (Join-Path $destination $Name)}
 $before=Observe;$initial=State
 Assert-ProjectLiveReceiver $adbPath $targetSerial $before $initial.uptimeMs
 if(!$before.windowFocused-or!$before.activityResumed-or@($before.pendingContactIds).Count-ne0-or$initial.active-or$initial.releaseUnverified){throw 'Visible empty InputLab required'}
 Save $before 'before.json'
-& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method labMapped --extra hold:b:true
+& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method labMapped --extra hold:b:true
 $held=$null
 for($i=0;$i-lt40;$i++){
     Start-Sleep -Milliseconds 150
@@ -33,7 +33,7 @@ if(!$active.active-or!$active.continuousCameraSession-or$active.backendCoordinat
 Save $held 'held.json';Save $active 'held-controller.json'
 $workerProcess=[string]$active.workerPid
 $identity=(& $adbPath -s $targetSerial shell ps -p $workerProcess -o UID,NAME)-join' '
-if($identity-notmatch '\b2000\s+mobimapper_injector\b'){throw 'Unexpected worker identity'}
+if($identity-notmatch '\b2000\s+uwumouse_injector\b'){throw 'Unexpected worker identity'}
 & $adbPath -s $targetSerial shell kill -9 $workerProcess
 $after=$null
 for($i=0;$i-lt40;$i++){
@@ -56,7 +56,7 @@ for($i=0;$i-lt3;$i++){
     if($old.id-ne$current.id-or[Math]::Abs($old.x-$current.x)-gt.05-or[Math]::Abs($old.y-$current.y)-gt.05){throw 'Recovery changed original IDs or exterior coordinates'}
 }
 Start-Sleep -Milliseconds 500
-& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method labMapped --extra hold:b:true
+& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method labMapped --extra hold:b:true
 $newHeld=$null
 for($i=0;$i-lt40;$i++){
     Start-Sleep -Milliseconds 150
@@ -66,13 +66,13 @@ for($i=0;$i-lt40;$i++){
 if(!$newHeld){throw 'New held session did not start'}
 $newActive=State
 if(!$newActive.active-or$newActive.backendSessionId-eq$active.backendSessionId){throw 'New session did not receive a new ID'}
-$stale=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method labStale)-join'')
+$stale=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method labStale)-join'')
 $stale|Set-Content (Join-Path $destination 'stale-result.txt') -Encoding UTF8
 if($stale-notmatch'staleReleaseRejected=true'-or$stale-notmatch'staleInjectRejected=true'){throw 'Old work was not explicitly rejected'}
 $still=Observe
 if(@($still.pendingContactIds).Count-ne3-or$still.observationId-ne$before.observationId-or$still.sequenceErrors-ne$before.sequenceErrors){throw 'Old work changed the new gesture'}
 Save $still 'new-held-after-stale.json'
-& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method labStop
+& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method labStop
 for($i=0;$i-lt40;$i++){
     Start-Sleep -Milliseconds 150
     $candidate=Observe

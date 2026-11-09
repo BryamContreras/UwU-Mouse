@@ -24,7 +24,7 @@ public final class WindowCacheProbe {
             }
             if (Looper.myLooper() == null) Looper.prepareMainLooper();
             Class.forName("android.app.ActivityThread").getMethod("systemMain").invoke(null);
-            Class<?> type = Class.forName("dev.mobimapper.windowcontext.ShellWindowContextProvider");
+            Class<?> type = Class.forName("dev.uwumouse.windowcontext.ShellWindowContextProvider");
             Constructor<?> constructor = type.getConstructor(long.class, long.class,
                     Class.forName("kotlin.jvm.functions.Function0"));
             provider = constructor.newInstance(stress ? 250L : 1000L, stress ? 750L : 2000L, null);

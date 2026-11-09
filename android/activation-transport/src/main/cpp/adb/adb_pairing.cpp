@@ -233,7 +233,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
             {"nativeDestroy",     "(J)V",    (void *) PairingContext_Destroy},
     };
 
-    jclass pairing_context = env->FindClass("dev/mobimapper/mobimapper/activation/adb/PairingContext");
+    jclass pairing_context = env->FindClass("dev/uwumouse/app/activation/adb/PairingContext");
     if (!pairing_context || env->RegisterNatives(pairing_context, methods_PairingContext,
                          sizeof(methods_PairingContext) / sizeof(JNINativeMethod)) != JNI_OK) return JNI_ERR;
 

@@ -3,8 +3,8 @@ param(
     [ValidateSet('Prepare','Start','Edit','Pause','Menu','Stop','Snapshot')][string]$Action='Snapshot',
     [ValidatePattern('^[a-zA-Z0-9_-]{1,128}$')][string]$ProfileId,
     [ValidateRange(0,32)][int]$DisplayId=0,
-    [ValidatePattern('^dev\.mobimapper\.mobimapper(?:\.[a-z][a-z0-9_]*)?$')]
-    [string]$ApplicationId='dev.mobimapper.mobimapper.nativepreview',
+    [ValidatePattern('^dev\.uwumouse\.app(?:\.[a-z][a-z0-9_]*)?$')]
+    [string]$ApplicationId='dev.uwumouse.app.nativepreview',
     [string]$Destination
 )
 . "$PSScriptRoot\AndroidTools.ps1"

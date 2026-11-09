@@ -6,10 +6,10 @@ $targetSerial=Get-ProjectDevice $adbPath $Serial
 $destination=Join-Path (Split-Path -Parent $PSScriptRoot) "evidence\v011\$Case"
 New-Item -ItemType Directory -Force $destination|Out-Null
 function Observe {
-    ((& $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-live.json)-join"`n")|ConvertFrom-Json
+    ((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json)-join"`n")|ConvertFrom-Json
 }
 function State {
-    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join'')
+    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join'')
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw $wire}
     $Matches[1]|ConvertFrom-Json
 }
@@ -49,7 +49,7 @@ Save $active 'active.json'
 Save $live 'active-controller.json'
 $workerProcess=[string]$live.workerPid
 $identity=(& $adbPath -s $targetSerial shell ps -p $workerProcess -o UID,NAME)-join' '
-if($identity -notmatch '\b2000\s+mobimapper_injector\b'){throw 'Unexpected injector identity'}
+if($identity -notmatch '\b2000\s+uwumouse_injector\b'){throw 'Unexpected injector identity'}
 & $adbPath -s $targetSerial shell kill -9 $workerProcess
 if($LASTEXITCODE -ne 0){throw 'Could not provoke injector death'}
 $timer.Restart()
@@ -61,7 +61,7 @@ do {
 } while($timer.Elapsed.TotalSeconds -lt 10)
 Save $after 'after.json'
 Save $end 'controller.json'
-& $adbPath -s $targetSerial logcat -d "--pid=$workerProcess" -v brief -s MobiInjectWorker:I '*:S'|
+& $adbPath -s $targetSerial logcat -d "--pid=$workerProcess" -v brief -s UwuInjectWorker:I '*:S'|
     Set-Content (Join-Path $destination 'dead-worker.log') -Encoding UTF8
 if($after.observationId -ne $before.observationId -or $after.activityId -ne $before.activityId -or
     !$after.windowFocused -or $after.sequenceErrors -ne $before.sequenceErrors -or

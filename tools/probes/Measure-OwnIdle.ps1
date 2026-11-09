@@ -4,17 +4,17 @@ $ErrorActionPreference='Stop'
 $adb=Get-ProjectAdb
 New-Item -ItemType Directory -Path $Destination -Force | Out-Null
 function Read-State {
-  $wire=(& $adb -s $Serial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join''
+  $wire=(& $adb -s $Serial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join''
   [regex]::Match($wire,'(?s)Result: Bundle\[\{json=(.*)\}\]\s*$').Groups[1].Value|ConvertFrom-Json
 }
 $state=Read-State
 if($state.active -or $state.editorVisible -or $state.contacts-ne 0 -or $state.releaseUnverified -or $state.mouseCaptured){throw 'Idle measurement requires stopped input and closed editor'}
 $focus=((& $adb -s $Serial shell dumpsys window)|Select-String 'mCurrentFocus=')-join''
-if($focus -notmatch 'dev\.mobimapper\.mobimapper/(?:dev\.mobimapper\.mobimapper)?\.MainActivity'){throw 'Main library required'}
-$appPid=[int]((& $adb -s $Serial shell pidof dev.mobimapper.mobimapper)-join'')
+if($focus -notmatch 'dev\.uwumouse\.app/(?:dev\.uwumouse\.app)?\.MainActivity'){throw 'Main library required'}
+$appPid=[int]((& $adb -s $Serial shell pidof dev.uwumouse.app)-join'')
 $processIds=@($appPid,[int]$state.supervisorPid,[int]$state.workerPid)
 if(@($processIds|Where-Object{$_-le 0}).Count){throw 'Missing own process'}
-$names=@('dev.mobimapper.mobimapper','mobimapper_backend','mobimapper_injector')
+$names=@('dev.uwumouse.app','uwumouse_backend','uwumouse_injector')
 function Read-Processes {
   $paths=@($processIds|ForEach-Object{"/proc/$_/stat"})+@('/proc/uptime')
   $lines=@(& $adb -s $Serial shell cat @paths)
@@ -44,7 +44,7 @@ $valid=!$end.active -and !$end.editorVisible -and $end.contacts-eq 0 -and !$end.
 if(!$valid){throw 'Not a stable idle interval'}
 $state|ConvertTo-Json -Depth 15|Set-Content -Encoding UTF8 (Join-Path $Destination 'controller-before.json')
 $end|ConvertTo-Json -Depth 15|Set-Content -Encoding UTF8 (Join-Path $Destination 'controller-after.json')
-[pscustomobject]@{validStableIdle=$valid;durationSeconds=$duration;clockTicks=$ticks;screenRecording=$false;editorClosed=$true;foreground='MobiMapper Main library';cpu=$rows;inputDelta=0;injectionDelta=0;gameCpuExcluded=$true;scope='Idle own processes only; not game play throughput or end-to-end latency'}|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $Destination 'result.json')
+[pscustomobject]@{validStableIdle=$valid;durationSeconds=$duration;clockTicks=$ticks;screenRecording=$false;editorClosed=$true;foreground='UwUMouse Main library';cpu=$rows;inputDelta=0;injectionDelta=0;gameCpuExcluded=$true;scope='Idle own processes only; not game play throughput or end-to-end latency'}|ConvertTo-Json -Depth 7|Set-Content -Encoding UTF8 (Join-Path $Destination 'result.json')
 for($i=0;$i-lt$names.Count;$i++){
   # app_process aliases are not package names; meminfo resolves these daemons by PID.
   & $adb -s $Serial shell dumpsys meminfo $processIds[$i]|Set-Content -Encoding UTF8 (Join-Path $Destination "$($names[$i])-memory.txt")

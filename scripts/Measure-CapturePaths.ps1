@@ -14,11 +14,11 @@ New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 $Destination=(Resolve-Path -LiteralPath $Destination).Path
 function Save($Value,[string]$Path) { $Value|ConvertTo-Json -Depth 30|Set-Content -LiteralPath $Path -Encoding UTF8 }
 function Helper([string]$Method,[string[]]$Extra=@()) {
-    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.latencyprobe.control --method $Method @Extra)-join '')
+    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.latencyprobe.control --method $Method @Extra)-join '')
     if($LASTEXITCODE -ne 0 -or $wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$') { throw "Helper call failed: $Method" }
     $Matches[1]|ConvertFrom-Json
 }
-$mapperWire=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join '')
+$mapperWire=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join '')
 if($mapperWire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$') { throw 'Cannot verify mapper state' }
 $mapper=$Matches[1]|ConvertFrom-Json
 if($mapper.active -or $mapper.contacts -gt 0 -or $mapper.releaseUnverified -or $mapper.mouseCaptured) { throw 'Stop the mapper before comparing capture paths' }

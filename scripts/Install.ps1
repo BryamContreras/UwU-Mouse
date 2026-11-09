@@ -10,4 +10,4 @@ foreach ($apk in @($mapperApk, $labApk)) {
     if (!(Test-Path -LiteralPath $apk)) { throw "Compila primero: falta $apk" }
     Invoke-ProjectAdb $adbPath $targetSerial @('install', '-r', $apk)
 }
-Invoke-ProjectAdb $adbPath $targetSerial @('shell', 'am', 'start', '-n', 'dev.mobimapper.mobimapper/.MainActivity')
+Invoke-ProjectAdb $adbPath $targetSerial @('shell', 'am', 'start', '-n', 'dev.uwumouse.app/.MainActivity')

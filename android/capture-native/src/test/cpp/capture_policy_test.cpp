@@ -1,7 +1,10 @@
 #include "../../main/cpp/capture_policy.h"
+#include "../../main/cpp/capture_lease_watchdog.h"
 #include <cmath>
+#include <future>
 #include <iostream>
 #include <set>
+#include <thread>
 #include <vector>
 
 using uwu::MouseMotionBatcher;
@@ -127,6 +130,64 @@ void boundedCapacityFailsInsteadOfDroppingRawPrecisionSamples() {
     check(batcher.rawSamples.load()==MouseMotionBatcher::kCapacity,"failed append altered accepted count");
 }
 
+int64_t steadyNanos() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+struct LeaseWatchdogHarness {
+    std::mutex mutex;
+    std::condition_variable wake;
+    std::atomic<bool> stopped{false};
+    std::atomic<int64_t> deadline;
+    std::atomic<unsigned> clockCalls{0};
+    std::promise<void> entered,rechecked;
+    std::future<void> first=entered.get_future(),second=rechecked.get_future();
+    std::packaged_task<bool()> task;
+    std::future<bool> result;
+    std::thread worker;
+    explicit LeaseWatchdogHarness(int64_t leaseNanos,bool alreadyStopped=false):stopped(alreadyStopped),deadline(steadyNanos()+leaseNanos),task([this]{
+        return uwu::waitForLeaseExpiry(mutex,wake,stopped,deadline,[this]{
+            const auto call=clockCalls.fetch_add(1);
+            if (call==0) entered.set_value();
+            if (call==1) rechecked.set_value();
+            return steadyNanos();
+        });
+    }),result(task.get_future()),worker([this]{task();}) {}
+    void stop() {
+        { std::lock_guard<std::mutex> lock(mutex);stopped=true; }
+        wake.notify_all();
+    }
+    ~LeaseWatchdogHarness() { stop();worker.join(); }
+};
+void leaseWatchdogStopWakesALongIdleWait() {
+    LeaseWatchdogHarness watcher(30'000'000'000LL);
+    check(watcher.first.wait_for(std::chrono::seconds(2))==std::future_status::ready,"watchdog did not start");
+    watcher.stop();
+    check(watcher.result.wait_for(std::chrono::seconds(2))==std::future_status::ready,"stop did not wake idle watchdog");
+    check(!watcher.result.get(),"stopped capture was reported expired");
+    check(watcher.clockCalls.load()==1,"idle watchdog polled instead of waiting");
+}
+void leaseWatchdogRenewalSurvivesOriginalExpiryWithoutPolling() {
+    LeaseWatchdogHarness watcher(100'000'000LL);
+    check(watcher.first.wait_for(std::chrono::seconds(2))==std::future_status::ready,"watchdog did not start");
+    { std::lock_guard<std::mutex> lock(watcher.mutex);watcher.deadline=steadyNanos()+30'000'000'000LL; }
+    check(watcher.second.wait_for(std::chrono::seconds(2))==std::future_status::ready,"watchdog did not recheck original expiry");
+    check(watcher.result.wait_for(std::chrono::milliseconds(25))==std::future_status::timeout,"renewed capture expired at its old deadline");
+    check(watcher.clockCalls.load()==2,"renewed idle watchdog kept polling");
+    watcher.stop();
+    check(watcher.result.wait_for(std::chrono::seconds(2))==std::future_status::ready,"renewed watchdog ignored stop");
+    check(!watcher.result.get(),"renewed capture was reported expired");
+}
+void leaseWatchdogExpiresWithoutAReaderOrConsumer() {
+    LeaseWatchdogHarness watcher(25'000'000LL);
+    check(watcher.result.wait_for(std::chrono::seconds(2))==std::future_status::ready,"independent lease watchdog failed to expire");
+    check(watcher.result.get(),"lease expiry was not reported");
+}
+void leaseWatchdogAlreadyStoppedCannotLoseItsWakeup() {
+    LeaseWatchdogHarness watcher(30'000'000'000LL,true);
+    check(watcher.result.wait_for(std::chrono::seconds(2))==std::future_status::ready,"stop before wait was lost");
+    check(!watcher.result.get() && watcher.clockCalls.load()==0,"already stopped watchdog inspected or expired a lease");
+}
+
 int main() {
     try {
         compactAndProgrammableKeyboardsNeedNoQwertySignature();
@@ -141,7 +202,11 @@ int main() {
         reconfigurationFlushesOldSamplesWithoutDiscardOrReplayingEdges();
         stopAndConsumerFailureNeverReplayPendingMovement();
         boundedCapacityFailsInsteadOfDroppingRawPrecisionSamples();
-        std::cout << "{\"tests\":12,\"failures\":0}\n";
+        leaseWatchdogStopWakesALongIdleWait();
+        leaseWatchdogRenewalSurvivesOriginalExpiryWithoutPolling();
+        leaseWatchdogExpiresWithoutAReaderOrConsumer();
+        leaseWatchdogAlreadyStoppedCannotLoseItsWakeup();
+        std::cout << "{\"tests\":16,\"failures\":0}\n";
         return 0;
     } catch(const std::exception& error) {
         std::cerr << "Native capture policy failure: " << error.what() << '\n';return 1;

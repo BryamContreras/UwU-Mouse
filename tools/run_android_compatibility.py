@@ -9,7 +9,7 @@ import re
 import subprocess
 from pathlib import Path
 
-APP = "dev.mobimapper.mobimapper"
+APP = "dev.uwumouse.app"
 TEST_CLASS = f"{APP}.runtime.AndroidCompatibilityTest"
 RUNNER = f"{APP}.test/androidx.test.runner.AndroidJUnitRunner"
 LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"

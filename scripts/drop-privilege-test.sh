@@ -7,7 +7,7 @@ for pid in "$worker" "$guardian"; do
   line=$(ps -p "$pid" -o UID,NAME | tail -n 1)
   set -- $line
   [ "${1-}" = 2000 ] || exit 3
-  case "${2-}" in mobimapper_backend|mobimapper_injector) ;; *) exit 4 ;; esac
+  case "${2-}" in uwumouse_backend|uwumouse_injector) ;; *) exit 4 ;; esac
 done
 # Freeze injector first so guardian EOF cleanup cannot race this complete-authority-loss test.
 kill -STOP "$worker"

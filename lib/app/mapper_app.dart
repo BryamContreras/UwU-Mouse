@@ -6,8 +6,8 @@ import '../platform/android/method_channel_mapper_gateway.dart';
 import 'theme.dart';
 
 /// Composition root: the only UI layer that selects a platform adapter.
-class MobiMapperApp extends StatelessWidget {
-  const MobiMapperApp({
+class UwUMouseApp extends StatelessWidget {
+  const UwUMouseApp({
     super.key,
     this.gateway = const MethodChannelMapperGateway(),
   });

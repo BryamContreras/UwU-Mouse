@@ -1,7 +1,7 @@
 # Laboratorio independiente
 
-`dev.mobimapper.inputlab` tiene un UID distinto del mapeador. Solo observa lo que
-Android entrega a su propia ventana. No contiene IPC hacia MobiMapper, permisos de
+`dev.uwumouse.inputlab` tiene un UID distinto del mapeador. Solo observa lo que
+Android entrega a su propia ventana. No contiene IPC hacia UwUMouse, permisos de
 accesibilidad, inyección, red, captura de puntero ni reenvío de teclado/ratón.
 Es uno de los laboratorios independientes del [inventario de 13 proyectos
 Gradle](../../ARCHITECTURE.md); el APK de producción no depende de él.
@@ -11,8 +11,8 @@ Instalar usando siempre el serial confirmado:
 
 ```powershell
 & $adb -s $serial install -r ..\build\inputlab\outputs\apk\debug\inputlab-debug.apk
-& $adb -s $serial shell am start -n dev.mobimapper.inputlab/.InputLabActivity
-& $adb -s $serial logcat -s MobiInputLab:I '*:S'
+& $adb -s $serial shell am start -n dev.uwumouse.inputlab/.InputLabActivity
+& $adb -s $serial logcat -s UwuInputLab:I '*:S'
 ```
 
 El lienzo usa coordenadas lógicas de la ventana de borde a borde; oculta barras
@@ -38,7 +38,7 @@ deliberada teclas sin asignación; recibirlas no demuestra una fuga de controles
 asignados. El contador de ratón filtra exclusivamente
 `SOURCE_MOUSE` y `SOURCE_MOUSE_RELATIVE`; no cuenta joystick ni stylus como ratón.
 
-Cada transición táctil escribe `MobiInputLab`: secuencia, acción, índice, IDs,
+Cada transición táctil escribe `UwuInputLab`: secuencia, acción, índice, IDs,
 coordenadas, downTime, eventTime, receiptUptime, fuente y dispositivo. Los movimientos
 se retienen en memoria circular (256 muestras), sin disco ni log por movimiento.
 Los contadores y muestras representan callbacks recibidos. No desglosan el historial
@@ -54,7 +54,7 @@ estado de Activity permiten comprobar que el archivo pertenece a la observación
 actual y sigue actualizándose. Se puede extraer del APK debug:
 
 ```powershell
-& $adb -s $serial shell run-as dev.mobimapper.inputlab cat files/input-lab-summary.json
+& $adb -s $serial shell run-as dev.uwumouse.inputlab cat files/input-lab-summary.json
 ```
 
 `MotionEvent.eventTime`, `downTime` y `SystemClock.uptimeMillis()` comparten base

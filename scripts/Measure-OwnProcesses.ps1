@@ -6,7 +6,7 @@ $targetSerial=Get-ProjectDevice $adbPath $Serial
 $destination=Join-Path (Split-Path -Parent $PSScriptRoot) "evidence\v020\performance-$Case"
 New-Item -ItemType Directory -Force $destination|Out-Null
 function Read-State {
-    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join'')
+    $wire=((& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join'')
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw 'No mapper diagnostic available'}
     $Matches[1]|ConvertFrom-Json
 }
@@ -24,7 +24,7 @@ function Read-Process([string]$ProcessName){
 if(((& $adbPath -s $targetSerial shell pidof screenrecord)-join'').Trim()){throw 'Stop screen recording before measuring performance'}
 $before=Read-State
 if($before.editorVisible){throw 'Close the editor before measuring performance'}
-$names=@('dev.mobimapper.mobimapper','mobimapper_backend','mobimapper_injector')
+$names=@('dev.uwumouse.app','uwumouse_backend','uwumouse_injector')
 $processBefore=@($names|ForEach-Object{Read-Process $_})
 Save-Json $before 'controller-before.json'
 Save-Json $processBefore 'processes-before.json'

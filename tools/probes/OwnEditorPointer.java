@@ -34,10 +34,10 @@ import org.json.JSONObject;
  * Mouse events use InputManager's fixed target-UID overload, never unscoped automation injection.
  */
 public final class OwnEditorPointer {
-    private static final String OWN = "dev.mobimapper.mobimapper";
-    private static final String EDITOR_TITLE = "MobiMapper \u00b7 Editor";
-    private static final String BUBBLE_TITLE = "MobiMapper \u00b7 Burbuja";
-    private static final String MENU_TITLE = "MobiMapper \u00b7 Opciones";
+    private static final String OWN = "dev.uwumouse.app";
+    private static final String EDITOR_TITLE = "UwUMouse \u00b7 Editor";
+    private static final String BUBBLE_TITLE = "UwUMouse \u00b7 Burbuja";
+    private static final String MENU_TITLE = "UwUMouse \u00b7 Opciones";
     private static final int MAX_DIAGNOSTIC_BYTES = 1_048_576;
     private final UiAutomation automation;
     private final Object input;

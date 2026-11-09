@@ -7,12 +7,12 @@ if($Case -notmatch '^[a-zA-Z0-9_-]+$'){throw 'Invalid case label'}
 $destination=Join-Path $projectRoot "evidence\$EvidenceVersion\$Case"
 New-Item -ItemType Directory -Force -Path $destination|Out-Null
 function State {
-    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method diagnostics)-join''
+    $wire=(& $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method diagnostics)-join''
     if($wire -notmatch '^Result: Bundle\[\{json=(.*)\}\]$'){throw "No native status: $wire"}
     return $Matches[1]|ConvertFrom-Json
 }
 function Observe {
-    $wire=(& $adbPath -s $targetSerial shell run-as dev.mobimapper.inputlab cat files/input-lab-live.json)-join"`n"
+    $wire=(& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json)-join"`n"
     return $wire|ConvertFrom-Json
 }
 function Await-Contacts([int]$Expected,[int]$Attempts=16) {
@@ -24,7 +24,7 @@ function Await-Contacts([int]$Expected,[int]$Attempts=16) {
     throw "Observer did not reach $Expected contacts"
 }
 function Call([string]$Method,[string[]]$Extra=@()) {
-    & $adbPath -s $targetSerial shell content call --uri content://dev.mobimapper.mobimapper.backend --method $Method @Extra
+    & $adbPath -s $targetSerial shell content call --uri content://dev.uwumouse.app.backend --method $Method @Extra
 }
 $before=Observe
 $before|ConvertTo-Json -Depth 14|Set-Content -LiteralPath (Join-Path $destination 'before.json') -Encoding UTF8
@@ -42,7 +42,7 @@ if($FaultStage -eq 0){
     if($Case -like 'worker-*'){
         $workerProcess=[string]$live.workerPid
         $identity=(& $adbPath -s $targetSerial shell ps -p $workerProcess -o UID,NAME)-join' '
-        if($identity -notmatch '\b2000\s+mobimapper_injector\b'){throw 'Unexpected injector identity'}
+        if($identity -notmatch '\b2000\s+uwumouse_injector\b'){throw 'Unexpected injector identity'}
         & $adbPath -s $targetSerial shell kill -9 $workerProcess
     } elseif($Case -like 'activity-recreate*'){
         Call 'labRecreateUi'
@@ -76,10 +76,10 @@ if($FaultStage -gt 0 -or $Case -like 'worker-*'){
     $finished|ConvertTo-Json -Depth 14|Set-Content -LiteralPath (Join-Path $destination 'new-session.json') -Encoding UTF8
     if($finished.observationId -ne $before.observationId -or $finished.sequenceErrors -ne $before.sequenceErrors){throw 'New session did not preserve observer'}
 }
-foreach($processName in @('dev.mobimapper.mobimapper','dev.mobimapper.inputlab','mobimapper_backend','mobimapper_injector')){
+foreach($processName in @('dev.uwumouse.app','dev.uwumouse.inputlab','uwumouse_backend','uwumouse_injector')){
     $processId=((& $adbPath -s $targetSerial shell pidof $processName)-join'').Trim()
     if($processId -match '^\d+$'){
-        & $adbPath -s $targetSerial logcat -d "--pid=$processId" -v brief -s MobiMapper:I MobiSupervisor:I MobiInjectWorker:I MobiActivity:I MobiInputLab:I '*:S'|Set-Content -LiteralPath (Join-Path $destination "$processName.log") -Encoding UTF8
+        & $adbPath -s $targetSerial logcat -d "--pid=$processId" -v brief -s UwUMouse:I UwuSupervisor:I UwuInjectWorker:I UwuActivity:I UwuInputLab:I '*:S'|Set-Content -LiteralPath (Join-Path $destination "$processName.log") -Encoding UTF8
     }
 }
 Write-Host "PASS $Case count=$Count sameObserver=$($before.observationId) zeroContacts=true receiverErrors=$($after.sequenceErrors) recovery=$($end.recoveryState)"

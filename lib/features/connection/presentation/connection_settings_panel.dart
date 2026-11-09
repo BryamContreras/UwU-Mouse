@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../application/ports/mapper_gateway.dart';
 import '../../../application/policies/session_readiness.dart';
-import '../../../shared/widgets/mobi_icon.dart';
+import '../../../shared/widgets/uwu_icon.dart';
 import 'connection_indicators.dart';
 
 /// Connection and diagnostics presentation. Commands are provided by the host.
@@ -12,6 +12,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
     required this.status,
     required this.onCheck,
     required this.onActivate,
+    required this.onWirelessDebugging,
     required this.onCommand,
     required this.busy,
     this.checking = false,
@@ -21,6 +22,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
   final NativeStatus? status;
   final VoidCallback onCheck;
   final VoidCallback onActivate;
+  final VoidCallback onWirelessDebugging;
   final ValueChanged<NativeCommand> onCommand;
   final bool busy, checking;
   final String? error;
@@ -32,7 +34,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
   Widget _command(String label, IconData icon, NativeCommand command) =>
       OutlinedButton.icon(
         onPressed: busy ? null : () => onCommand(command),
-        icon: MobiIcon(icon, size: 25),
+        icon: UwuIcon(icon, size: 25),
         label: Text(label),
       );
 
@@ -49,21 +51,17 @@ class ConnectionSettingsPanel extends StatelessWidget {
   Widget _details(NativeStatus? status) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
-      _connectionBlock('Captura nativa', status?.captureReady, feminine: true),
+      _wirelessDebugging(status),
       const SizedBox(height: 10),
-      _connectionBlock(
-        'Motor de toques',
-        status?.backend,
-        action: status != null && !status.backend
-            ? FilledButton.icon(
-                onPressed: !_safeStatus(status) || status.active
-                    ? null
-                    : onActivate,
-                icon: const MobiIcon(Icons.cable_rounded, size: 23),
-                label: const Text('Activar motor'),
-              )
-            : null,
-      ),
+      if (status != null && !status.backend) ...[
+        FilledButton.icon(
+          onPressed: !_safeStatus(status) || status.active ? null : onActivate,
+          icon: const UwuIcon(Icons.cable_rounded, size: 23),
+          label: const Text('Activar motor'),
+        ),
+      ],
+      if (status != null && !status.captureReady)
+        const Text('La captura de teclado y ratón no está disponible.'),
       if (status != null) ...[
         const SizedBox(height: 10),
         _overlayPermission(status),
@@ -77,7 +75,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
             textStyle: const TextStyle(fontSize: 13),
           ),
           onPressed: checking ? null : onCheck,
-          icon: const MobiIcon(Icons.refresh_rounded, size: 22),
+          icon: const UwuIcon(Icons.refresh_rounded, size: 22),
           label: Text(checking ? 'Comprobando…' : 'Comprobar servicio'),
         ),
       ),
@@ -102,6 +100,59 @@ class ConnectionSettingsPanel extends StatelessWidget {
         style: const TextStyle(fontSize: 12, color: Color(0xff527394)),
       ),
     ],
+  );
+
+  Widget _wirelessDebugging(NativeStatus? status) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: BoxDecoration(
+      color: const Color(0xfff0f8ff),
+      border: Border.all(color: const Color(0xffc4e0f5)),
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Row(
+      children: [
+        connectionIcon(status?.wirelessDebuggingEnabled, size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Depuración inalámbrica',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+              ),
+              Text(
+                connectionState(
+                  status?.wirelessDebuggingEnabled,
+                  feminine: true,
+                ),
+                style: TextStyle(
+                  fontSize: 12,
+                  color: connectionColor(status?.wirelessDebuggingEnabled),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 112,
+          child: TextButton(
+            key: const ValueKey('connection-wireless-debugging'),
+            style: TextButton.styleFrom(
+              minimumSize: const Size(44, 44),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              textStyle: const TextStyle(fontSize: 12),
+            ),
+            onPressed: busy ? null : onWirelessDebugging,
+            child: const Text(
+              'Configurar en Android',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ],
+    ),
   );
 
   Widget _overlayPermission(NativeStatus status) => Container(
@@ -158,61 +209,13 @@ class ConnectionSettingsPanel extends StatelessWidget {
     ),
   );
 
-  Widget _connectionBlock(
-    String label,
-    bool? enabled, {
-    bool feminine = false,
-    Widget? action,
-  }) => Container(
-    padding: const EdgeInsets.all(14),
-    decoration: BoxDecoration(
-      color: const Color(0xfff0f8ff),
-      border: Border.all(color: const Color(0xffc4e0f5)),
-      borderRadius: BorderRadius.circular(16),
-    ),
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            connectionIcon(enabled, size: 24),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    connectionState(enabled, feminine: feminine),
-                    style: TextStyle(
-                      color: connectionColor(enabled),
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        if (action != null) ...[const SizedBox(height: 10), action],
-      ],
-    ),
-  );
-
   Widget _laboratory(NativeStatus? status) {
     String timing(List<double>? data) => data == null || data.isEmpty
         ? 'Sin muestras'
         : data.map((value) => '${value.toStringAsFixed(3)} ms').join(' / ');
     return ExpansionTile(
-      leading: const MobiIcon(Icons.science_outlined, size: 27),
-      trailing: const MobiIcon(Icons.expand_more_rounded, size: 26),
+      leading: const UwuIcon(Icons.science_outlined, size: 27),
+      trailing: const UwuIcon(Icons.expand_more_rounded, size: 26),
       title: const Text('Laboratorio y diagnóstico'),
       childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       expandedCrossAxisAlignment: CrossAxisAlignment.start,

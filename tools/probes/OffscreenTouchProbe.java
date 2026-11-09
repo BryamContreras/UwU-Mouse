@@ -10,7 +10,7 @@ import java.lang.reflect.Method;
 
 /** Shell-only, InputLab-only capability experiment. Not a product injection/recovery path. */
 public final class OffscreenTouchProbe {
-    private static final String TARGET = "dev.mobimapper.inputlab";
+    private static final String TARGET = "dev.uwumouse.inputlab";
     private final Object tasks, manager;
     private final Method focus, inject, display;
     private final int uid;

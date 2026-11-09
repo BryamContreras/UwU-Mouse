@@ -14,13 +14,14 @@ Flutter ni el canal de métodos.
 | `platform/android/` | Adaptador `MethodChannelMapperGateway` para Android |
 | `features/library/presentation/` | Biblioteca, perfiles y sus diálogos |
 | `features/connection/presentation/` | Permisos, diagnóstico y activación local |
+| `features/settings/presentation/` | Acceso a Conexión y selección del estilo del cursor |
 | `shared/widgets/` | Elementos visuales compartidos |
 
-`MobiMapperApp` es la raíz de composición. Selecciona el adaptador Android por
+`UwUMouseApp` es la raíz de composición. Selecciona el adaptador Android por
 defecto y admite otro `MapperGateway` por constructor. Las pantallas y los
 controladores consumen ese contrato; no crean canales ni importan el adaptador.
 Para reemplazar el transporte, implementar el puerto y cambiar esa composición.
-El adaptador conserva `dev.mobimapper/control.v1`, nombres de comandos y mapas
+El adaptador conserva `dev.uwumouse/control.v1`, nombres de comandos y mapas
 del protocolo existente.
 
 `ProfileLauncher` coordina exclusivamente una pulsación explícita del usuario.
@@ -37,6 +38,17 @@ valor explícito tiene prioridad sobre el antiguo `drawOverlays`.
 El contrato no presupone que captura, inyección o activación compartan proceso.
 Cambiar esos módulos nativos requiere conservar o versionar el plano de control,
 no modificar las pantallas para cada implementación.
+
+Inicio muestra accesos a los ajustes reales de Depuración inalámbrica y Mostrar
+sobre otras apps. Los indicadores diferencian activo, inactivo y desconocido.
+La tarjeta Cerrar sesión aparece solo mientras existe una sesión y mantiene la
+acción disponible durante bloqueos o cierres pendientes; una lectura anterior
+al cierre no confirma su resultado ni reactiva un inicio cancelado.
+
+La depuración inalámbrica también se configura desde Ajustes → Conexión. Se
+abre Android en lugar de representar un interruptor local que no cambie el
+estado del sistema. El motor se ofrece para activación cuando falta y la
+captura permanece gestionada por el ciclo de vida nativo.
 
 Las pruebas de widgets y protocolo están en `test/`; sus datos comunes están en
 `test/support/`. `mapper_gateway_injection_test.dart` comprueba la interfaz sin

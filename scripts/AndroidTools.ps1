@@ -59,7 +59,7 @@ function Assert-ProjectLiveReceiver([string]$Adb,[string]$Serial,$Snapshot,$Cont
     $age=$controller-$captured
     # Both values use uptimeMillis; tolerate a capture up to 250 ms after controller status.
     if($age -lt -250 -or $age -gt 2000){throw "Receiver snapshot is stale or from a different boot (ageMs=$age)"}
-    $livePid=((& $Adb -s $Serial shell pidof dev.mobimapper.inputlab)-join' ').Trim()
+    $livePid=((& $Adb -s $Serial shell pidof dev.uwumouse.inputlab)-join' ').Trim()
     if($LASTEXITCODE -ne 0 -or $livePid -notmatch '^\d+$' -or [long]$livePid -ne $snapshotPid){
         throw 'Receiver snapshot does not match exactly one currently running InputLab process'
     }

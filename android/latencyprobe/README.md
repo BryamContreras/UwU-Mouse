@@ -1,6 +1,6 @@
 # Laboratorio temporal de latencia
 
-App auxiliar `dev.mobimapper.latencyprobe`, separada del mapeador instalado. No es
+App auxiliar `dev.uwumouse.latencyprobe`, separada del mapeador instalado. No es
 una implementación alternativa del mapeador ni mide su cola, conversión o inyector.
 No modifica ni reemplaza la app original ni sus perfiles o permisos.
 Compila el archivo real `InputLatencyProbe.kt` mediante una tarea de fuente generada de AGP, sin incluir el resto del motor.
@@ -17,11 +17,11 @@ habilitarse para la prueba y quitarse al terminar.
 Control ADB autorizado (siempre seleccionar el serial):
 
 ```powershell
-adb -s SERIAL shell am start -n dev.mobimapper.latencyprobe/.ProbeActivity
-adb -s SERIAL shell content call --uri content://dev.mobimapper.latencyprobe.control --method start --extra mode:s:native --extra durationMs:i:30000
+adb -s SERIAL shell am start -n dev.uwumouse.latencyprobe/.ProbeActivity
+adb -s SERIAL shell content call --uri content://dev.uwumouse.latencyprobe.control --method start --extra mode:s:native --extra durationMs:i:30000
 # Mover el mouse físico durante la ventana. Cambiar mode:s:accessibility para el otro modo.
-adb -s SERIAL shell content call --uri content://dev.mobimapper.latencyprobe.control --method stop
-adb -s SERIAL shell content call --uri content://dev.mobimapper.latencyprobe.control --method snapshot --extra offset:i:0 --extra limit:i:512
+adb -s SERIAL shell content call --uri content://dev.uwumouse.latencyprobe.control --method stop
+adb -s SERIAL shell content call --uri content://dev.uwumouse.latencyprobe.control --method snapshot --extra offset:i:0 --extra limit:i:512
 ```
 
 El snapshot usa la paginación del recorder real: leer `nextRecordsOffset` hasta

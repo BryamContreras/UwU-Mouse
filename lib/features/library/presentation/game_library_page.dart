@@ -6,10 +6,11 @@ import 'package:flutter/services.dart';
 import '../../../application/ports/mapper_gateway.dart';
 import '../../../application/controllers/profile_launcher.dart';
 import '../../../application/policies/session_readiness.dart';
-import '../../../shared/widgets/mobi_icon.dart';
+import '../../../shared/widgets/uwu_icon.dart';
 import '../../connection/presentation/connection_indicators.dart';
 import '../../connection/presentation/connection_settings_panel.dart';
 import '../../connection/presentation/local_activation_sheet.dart';
+import '../../settings/presentation/cursor_settings.dart';
 import 'widgets/app_picker.dart';
 import 'widgets/profile_name_dialog.dart';
 
@@ -32,8 +33,13 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   String? _selectedPackage, _selectedId, _failure;
   Timer? _timer;
   int _launchEpoch = 0;
+  int _statusEpoch = 0;
   bool _foreground = true;
   bool _busy = false, _reading = false, _loadingCatalog = false;
+  bool _closeInFlight = false, _closeRequested = false;
+  bool _closeReturned = false, _closureConfirmed = false;
+  int _tab = 0;
+  bool get _working => _busy || _closeInFlight || _closeRequested;
 
   String get _uiDisplayScope => _status?.uiDisplayScope ?? 'phone';
   List<LocalProfile> _profilesForGame(String? packageName) {
@@ -93,12 +99,20 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   Future<NativeStatus> _readStatus() {
     final pending = _statusRead;
     if (pending != null) return pending;
+    final epoch = _statusEpoch;
+    final mayConfirmClosure = _closeReturned;
     late final Future<NativeStatus> request;
     request = _api
         .status()
         .then((next) {
-          if (mounted) {
-            setState(() => _status = next);
+          if (mounted && epoch == _statusEpoch) {
+            setState(() {
+              _status = next;
+              if (mayConfirmClosure && !next.hasSession) {
+                _closureConfirmed = true;
+                if (!_busy) _closeRequested = false;
+              }
+            });
             _connectionStatus.value = next;
           }
           return next;
@@ -112,15 +126,22 @@ class _GameLibraryPageState extends State<GameLibraryPage>
 
   Future<void> _poll() async {
     if (_reading || !_foreground) return;
+    final epoch = _statusEpoch;
     _reading = true;
     try {
       await _readStatus();
     } catch (error) {
-      if (mounted) setState(() => _failure = _errorText(error));
+      if (mounted && epoch == _statusEpoch && !_transientSnapshot(error)) {
+        setState(() => _failure = _errorText(error));
+      }
     } finally {
       _reading = false;
     }
   }
+
+  bool _transientSnapshot(Object error) =>
+      error is PlatformException &&
+      (error.code == 'STATUS_STALE' || error.code == 'STATUS_IN_PROGRESS');
 
   Future<void> _refreshAll({bool reloadApps = false}) async {
     await _poll();
@@ -155,7 +176,8 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     Future<void> Function() action, {
     bool profiles = false,
   }) async {
-    if (_busy) return;
+    if (_busy || _closeRequested || _closeInFlight) return;
+    final runEpoch = _launchEpoch;
     var needsOverlaySettings = false;
     setState(() {
       _busy = true;
@@ -166,7 +188,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
       if (profiles) await _refreshAll();
       await _poll();
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || runEpoch != _launchEpoch || _transientSnapshot(error)) {
+        return;
+      }
       if (error is PlatformException &&
           error.code == 'EXTERNAL_OVERLAY_PERMISSION_REQUIRED') {
         needsOverlaySettings = true;
@@ -177,15 +201,74 @@ class _GameLibraryPageState extends State<GameLibraryPage>
             .showSnackBar(SnackBar(content: Text(message)));
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          if (_closureConfirmed) _closeRequested = false;
+        });
+      }
     }
-    if (needsOverlaySettings && mounted) {
+    if (needsOverlaySettings &&
+        mounted &&
+        runEpoch == _launchEpoch &&
+        !_closeRequested &&
+        !_closeInFlight) {
       try {
         await _readStatus();
       } catch (_) {
         // The connection panel keeps its normal status retry available.
       }
       if (mounted) _showSettings();
+    }
+  }
+
+  /// Closing bypasses ordinary UI work and invalidates launches awaiting a reply.
+  Future<void> _requestClose({bool recover = false}) async {
+    if (_closeInFlight) return;
+    _launchEpoch++;
+    final epoch = ++_statusEpoch;
+    setState(() {
+      _closeInFlight = true;
+      _closeRequested = true;
+      _closeReturned = false;
+      _closureConfirmed = false;
+      _failure = null;
+    });
+    try {
+      try {
+        if (recover) {
+          await _api.recoverPendingSession();
+        } else {
+          await _api.execute(NativeCommand.stop);
+        }
+      } finally {
+        _closeReturned = true;
+      }
+    } catch (error) {
+      if (mounted) setState(() => _failure = _errorText(error));
+    } finally {
+      if (mounted) setState(() => _closeInFlight = false);
+      unawaited(_refreshClosure(epoch));
+    }
+  }
+
+  Future<void> _refreshClosure(int epoch) async {
+    // A read begun before stop returned cannot prove that this request closed.
+    final pending = _statusRead;
+    if (pending != null) {
+      try {
+        await pending;
+      } catch (_) {
+        // Read a new snapshot even if the superseded poll failed.
+      }
+    }
+    if (!mounted || epoch != _statusEpoch) return;
+    try {
+      await _readStatus();
+    } catch (error) {
+      if (mounted && epoch == _statusEpoch && !_transientSnapshot(error)) {
+        setState(() => _failure = _errorText(error));
+      }
     }
   }
 
@@ -292,14 +375,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     _ => error.toString(),
   };
 
-  Widget _command(String label, IconData icon, NativeCommand command) =>
-      OutlinedButton.icon(
-        onPressed: _busy ? null : () => _run(() => _api.execute(command)),
-        icon: MobiIcon(icon, size: 25),
-        label: Text(label),
-      );
-
   bool _safeStatus(NativeStatus? status) =>
+      !_closeRequested &&
+      !_closeInFlight &&
       SessionReadiness.mayConfigure(status);
 
   bool get _safe => _safeStatus(_status);
@@ -315,10 +393,14 @@ class _GameLibraryPageState extends State<GameLibraryPage>
               needsClosure ? Icons.shield_outlined : Icons.gamepad_rounded,
             ),
             title: Text(
-              status.recovering
+              _closeRequested || status.closing
+                  ? 'Cerrando sesión'
+                  : status.recovering
                   ? 'Recuperando'
                   : needsClosure
                   ? 'Cierre pendiente'
+                  : status.transitioning
+                  ? 'Preparando sesión'
                   : status.active
                   ? (status.pointerMode == 'cursor' ? 'Cursor' : 'En control')
                   : 'En pausa',
@@ -330,9 +412,17 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
-            trailing: needsClosure
-                ? null
-                : _command('Cerrar sesión', Icons.close, NativeCommand.stop),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: OutlinedButton.icon(
+              key: const ValueKey('close-session'),
+              onPressed: _closeInFlight ? null : () => _requestClose(),
+              icon: const UwuIcon(Icons.stop_circle_outlined, size: 24),
+              label: Text(
+                _closeInFlight ? 'Solicitando cierre…' : 'Cerrar sesión',
+              ),
+            ),
           ),
           if (needsClosure)
             Padding(
@@ -341,21 +431,17 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    'Completa el cierre en el juego anterior antes de volver a jugar.',
+                    'Si Android mantiene toques pendientes, vuelve al juego anterior para verificar su liberación.',
                   ),
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     key: const ValueKey('recover-pending-session'),
-                    onPressed: _busy
+                    onPressed: _closeInFlight
                         ? null
-                        : () => _run(() async {
-                            await _api.recoverPendingSession();
-                          }),
-                    icon: const MobiIcon(Icons.close_rounded, size: 25),
+                        : () => _requestClose(recover: true),
+                    icon: const UwuIcon(Icons.close_rounded, size: 25),
                     label: const Text('Cerrar sesión anterior'),
                   ),
-                  const SizedBox(height: 8),
-                  _command('Cerrar sesión', Icons.close, NativeCommand.stop),
                 ],
               ),
             ),
@@ -396,20 +482,25 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   }
 
   bool _launchCurrent(int request) =>
-      mounted && _foreground && request == _launchEpoch;
+      mounted &&
+      _foreground &&
+      !_closeRequested &&
+      !_closeInFlight &&
+      request == _launchEpoch;
 
   Future<void> _editProfile(LocalProfile profile) async {
+    final request = ++_launchEpoch;
     var needsSetup = false;
     await _run(() async {
       final current = await _readStatus();
-      if (!_safeStatus(current)) return;
+      if (!_launchCurrent(request) || !_safeStatus(current)) return;
       if (_needsOverlayPermission(current)) {
         needsSetup = true;
         return;
       }
       await _api.openEditor(profile.id);
     });
-    if (mounted && needsSetup) _showSettings();
+    if (_launchCurrent(request) && needsSetup) _showSettings();
   }
 
   void _showSettings() {
@@ -436,8 +527,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                     const SizedBox(height: 16),
                     ConnectionSettingsPanel(
                       status: status,
-                      busy: _busy,
+                      busy: _working,
                       onActivate: _activateOnPhone,
+                      onWirelessDebugging: () =>
+                          _run(_api.wirelessDebuggingSettings),
                       onCommand: (command) => _run(() => _api.execute(command)),
                       checking: checking,
                       error: checkError,
@@ -544,9 +637,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.light,
           statusBarBrightness: Brightness.dark,
-          systemNavigationBarColor: Colors.white,
-          systemNavigationBarDividerColor: Colors.white,
-          systemNavigationBarIconBrightness: Brightness.dark,
+          systemNavigationBarColor: Color(0xff203e79),
+          systemNavigationBarDividerColor: Color(0xff203e79),
+          systemNavigationBarIconBrightness: Brightness.light,
         ),
         flexibleSpace: const SizedBox.expand(
           child: DecoratedBox(
@@ -575,8 +668,8 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                 border: Border.all(color: Colors.white.withValues(alpha: .3)),
                 shape: BoxShape.circle,
               ),
-              child: const MobiIcon(
-                MobiIcons.brand,
+              child: const UwuIcon(
+                UwuIcons.brand,
                 size: 30,
                 color: Colors.white,
                 semanticLabel: 'UwU Mouse',
@@ -598,90 +691,126 @@ class _GameLibraryPageState extends State<GameLibraryPage>
             ),
           ],
         ),
-        actions: [
-          IconButton(
-            onPressed: _showSettings,
-            style: IconButton.styleFrom(
-              backgroundColor: Colors.white.withValues(alpha: .16),
-              foregroundColor: Colors.white,
-            ),
-            icon: const MobiIcon(
-              Icons.tune_rounded,
-              size: 27,
-              color: Colors.white,
-            ),
-            tooltip: 'Ajustes',
-          ),
-          const SizedBox(width: 12),
-        ],
       ),
-      body: RefreshIndicator(
-        onRefresh: () => _refreshAll(reloadApps: true),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-          children: [
-            _connectionSummary(status),
-            const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Mis juegos',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -.8,
-                    ),
-                  ),
-                ),
-                _pill('${library.length}', Icons.sports_esports_rounded),
-              ],
-            ),
-            const SizedBox(height: 18),
-            if (_loadingCatalog || _busy)
-              const Padding(
-                padding: EdgeInsets.only(bottom: 14),
-                child: LinearProgressIndicator(minHeight: 2),
+      bottomNavigationBar: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xff142c59), Color(0xff203e79), Color(0xff2c5095)],
+            stops: [0, .62, 1],
+          ),
+        ),
+        child: NavigationBarTheme(
+          data: NavigationBarThemeData(
+            iconTheme: WidgetStateProperty.resolveWith(
+              (states) => IconThemeData(
+                color: states.contains(WidgetState.selected)
+                    ? Colors.white
+                    : Colors.white70,
               ),
-            if (status?.blocked == true ||
-                status?.recovering == true ||
-                status?.guardianClosurePending == true ||
-                status?.active == true ||
-                (status?.activeProfileId != null && status?.mode != 'stopped'))
-              _sessionCard(status!),
-            if (_failure != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  _failure!,
-                  style: const TextStyle(color: Color(0xffb94f09)),
-                ),
-              ),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                const gap = 16.0;
-                final columns = ((constraints.maxWidth + gap) / 112)
-                    .floor()
-                    .clamp(1, 6);
-                final width =
-                    (constraints.maxWidth - gap * (columns - 1)) / columns;
-                final diameter = width.clamp(0.0, 112.0);
-                return Wrap(
-                  spacing: gap,
-                  runSpacing: 24,
-                  children: [
-                    for (final profile in library.values)
-                      SizedBox(
-                        width: width,
-                        child: _gameTile(profile, diameter),
-                      ),
-                    SizedBox(width: width, child: _addGameTile(diameter)),
-                  ],
-                );
-              },
             ),
-          ],
+            labelTextStyle: WidgetStateProperty.all(
+              const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ),
+          child: NavigationBar(
+            backgroundColor: Colors.transparent,
+            surfaceTintColor: Colors.transparent,
+            indicatorColor: Colors.white.withValues(alpha: .18),
+            selectedIndex: _tab,
+            onDestinationSelected: (index) => setState(() => _tab = index),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined),
+                selectedIcon: Icon(Icons.home_rounded),
+                label: 'Inicio',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                selectedIcon: Icon(Icons.settings_rounded),
+                label: 'Ajustes',
+              ),
+            ],
+          ),
         ),
       ),
+      body: _tab == 1
+          ? CursorSettings(gateway: _api, onConnection: _showSettings)
+          : RefreshIndicator(
+              onRefresh: () => _refreshAll(reloadApps: true),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+                children: [
+                  if (status != null &&
+                      (status.hasSession ||
+                          _closeRequested ||
+                          _closeInFlight)) ...[
+                    _sessionCard(status),
+                    const SizedBox(height: 14),
+                  ],
+                  _connectionSummary(status),
+                  const SizedBox(height: 18),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Mis juegos',
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -.8,
+                              ),
+                        ),
+                      ),
+                      _pill('${library.length}', Icons.sports_esports_rounded),
+                    ],
+                  ),
+                  const SizedBox(height: 18),
+                  if (_loadingCatalog || _busy || _closeInFlight)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 14),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  if (_failure != null)
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(
+                        _failure!,
+                        style: const TextStyle(color: Color(0xffb94f09)),
+                      ),
+                    ),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      const gap = 16.0;
+                      final columns = ((constraints.maxWidth + gap) / 112)
+                          .floor()
+                          .clamp(1, 6);
+                      final width =
+                          (constraints.maxWidth - gap * (columns - 1)) /
+                          columns;
+                      final diameter = width.clamp(0.0, 112.0);
+                      return Wrap(
+                        spacing: gap,
+                        runSpacing: 24,
+                        children: [
+                          for (final profile in library.values)
+                            SizedBox(
+                              width: width,
+                              child: _gameTile(profile, diameter),
+                            ),
+                          SizedBox(width: width, child: _addGameTile(diameter)),
+                        ],
+                      );
+                    },
+                  ),
+                ],
+              ),
+            ),
     );
   }
 
@@ -693,32 +822,13 @@ class _GameLibraryPageState extends State<GameLibraryPage>
       color: Color(0xffedf5fc),
       shape: BoxShape.circle,
     ),
-    child: MobiIcon(icon, color: const Color(0xff1966ab), size: 27),
+    child: UwuIcon(icon, color: const Color(0xff1966ab), size: 27),
   );
 
   Widget _connectionSummary(NativeStatus? status) {
-    Widget stateLine(String label, bool? enabled, {bool feminine = false}) =>
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            connectionIcon(enabled, size: 18),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                '$label: ${connectionState(enabled, feminine: feminine)}',
-                style: TextStyle(
-                  color: connectionColor(enabled),
-                  fontSize: 13,
-                  height: 1.3,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          ],
-        );
     return Container(
       key: const ValueKey('connection-summary'),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           colors: [Color(0xfff0f8ff), Color(0xffe8f4ff)],
@@ -726,43 +836,99 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         border: Border.all(color: const Color(0xffbeddf5)),
         borderRadius: BorderRadius.circular(18),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                stateLine(
-                  'Captura nativa',
-                  status?.captureReady,
-                  feminine: true,
-                ),
-                const SizedBox(height: 8),
-                stateLine('Motor de toques', status?.backend),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 96,
-            child: TextButton(
-              key: const ValueKey('connection-settings'),
-              style: TextButton.styleFrom(
-                minimumSize: const Size(44, 48),
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-                textStyle: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final wide = constraints.maxWidth >= 600;
+          Widget option(Widget child) => wide ? Expanded(child: child) : child;
+          return Flex(
+            direction: wide ? Axis.horizontal : Axis.vertical,
+            crossAxisAlignment: wide
+                ? CrossAxisAlignment.start
+                : CrossAxisAlignment.stretch,
+            children: [
+              option(
+                ListTile(
+                  key: const ValueKey('wireless-debugging-settings'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  minTileHeight: 56,
+                  minVerticalPadding: 4,
+                  visualDensity: VisualDensity.compact,
+                  minLeadingWidth: 28,
+                  horizontalTitleGap: 8,
+                  titleTextStyle: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    color: Color(0xff10315e),
+                  ),
+                  subtitleTextStyle: const TextStyle(
+                    fontSize: 12,
+                    height: 1.2,
+                    color: Color(0xff527394),
+                  ),
+                  leading: const Icon(
+                    Icons.wifi_rounded,
+                    color: Color(0xff1966ab),
+                    size: 28,
+                  ),
+                  title: const Text('Depuración inalámbrica'),
+                  subtitle: Text(switch (status?.wirelessDebuggingEnabled) {
+                    true => 'Activada',
+                    false => 'Desactivada',
+                    null => 'Configurar en Android',
+                  }),
+                  trailing: connectionIcon(
+                    status?.wirelessDebuggingEnabled,
+                    size: 24,
+                  ),
+                  onTap: _working
+                      ? null
+                      : () => _run(_api.wirelessDebuggingSettings),
                 ),
               ),
-              onPressed: _showSettings,
-              child: const Text(
-                'Ajustes de conexión',
-                textAlign: TextAlign.center,
+              if (!wide) const Divider(height: 1, indent: 8, endIndent: 8),
+              option(
+                ListTile(
+                  key: const ValueKey('overlay-settings'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  minTileHeight: 56,
+                  minVerticalPadding: 4,
+                  visualDensity: VisualDensity.compact,
+                  minLeadingWidth: 28,
+                  horizontalTitleGap: 8,
+                  titleTextStyle: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    color: Color(0xff10315e),
+                  ),
+                  subtitleTextStyle: const TextStyle(
+                    fontSize: 12,
+                    height: 1.2,
+                    color: Color(0xff527394),
+                  ),
+                  leading: const Icon(
+                    Icons.layers_outlined,
+                    color: Color(0xff1966ab),
+                    size: 28,
+                  ),
+                  title: const Text('Mostrar sobre otras apps'),
+                  subtitle: Text(switch (status?.overlayPermission) {
+                    true => 'Permitida',
+                    false => 'Necesita permiso',
+                    null => 'Comprobar permiso en Android',
+                  }),
+                  trailing: connectionIcon(status?.overlayPermission, size: 24),
+                  onTap: _working
+                      ? null
+                      : () => _run(
+                          () => _api.execute(NativeCommand.openOverlaySettings),
+                        ),
+                ),
               ),
-            ),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -777,7 +943,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     child: Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        MobiIcon(icon, size: 24, color: const Color(0xff2677b8)),
+        UwuIcon(icon, size: 24, color: const Color(0xff2677b8)),
         const SizedBox(width: 7),
         Text(
           text,
@@ -885,7 +1051,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            MobiIcon(
+            UwuIcon(
               icon,
               size: 18,
               color: available
@@ -920,9 +1086,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         button: true,
         child: _libraryCircle(
           diameter,
-          onTap: _busy || _loadingCatalog || !_safe ? null : _chooseGame,
+          onTap: _working || _loadingCatalog || !_safe ? null : _chooseGame,
           child: const Center(
-            child: MobiIcon(
+            child: UwuIcon(
               Icons.add_rounded,
               size: 52,
               color: Color(0xff2589cf),
@@ -941,7 +1107,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     final available = app != null;
     final label = _labelFor(profile.packageName);
     final fallback = Center(
-      child: MobiIcon(
+      child: UwuIcon(
         Icons.sports_esports_rounded,
         size: diameter * .5,
         color: const Color(0xff3087c7),
@@ -1007,10 +1173,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         OutlinedButton.icon(
-          onPressed: _busy || _loadingCatalog
+          onPressed: _working || _loadingCatalog
               ? null
               : () => updateAfter(_chooseGame()),
-          icon: const MobiIcon(Icons.sports_esports_outlined, size: 27),
+          icon: const UwuIcon(Icons.sports_esports_outlined, size: 27),
           label: Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
             child: Text(_gameLabel),
@@ -1030,7 +1196,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
               ),
               initialValue: chosen?.id,
               isExpanded: true,
-              icon: const MobiIcon(Icons.expand_more_rounded, size: 26),
+              icon: const UwuIcon(Icons.expand_more_rounded, size: 26),
               decoration: const InputDecoration(labelText: 'Perfil'),
               items: profiles
                   .map(
@@ -1040,7 +1206,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                     ),
                   )
                   .toList(growable: false),
-              onChanged: _busy
+              onChanged: _working
                   ? null
                   : (id) {
                       if (id != null) {
@@ -1051,47 +1217,50 @@ class _GameLibraryPageState extends State<GameLibraryPage>
           else
             const Text('Crea un perfil para empezar.'),
           const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: _working
+                      ? null
+                      : () => updateAfter(_createProfile()),
+                  icon: const UwuIcon(Icons.add, size: 26),
+                  label: const FittedBox(child: Text('Nuevo perfil')),
+                ),
+              ),
+              Expanded(
+                child: TextButton.icon(
+                  onPressed: _working
+                      ? null
+                      : () => updateAfter(_importProfileFile()),
+                  icon: const UwuIcon(Icons.file_open_outlined, size: 26),
+                  label: const FittedBox(child: Text('Importar perfil')),
+                ),
+              ),
+            ],
+          ),
           Wrap(
             spacing: 8,
             runSpacing: 4,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => updateAfter(_createProfile()),
-                    icon: const MobiIcon(Icons.add, size: 26),
-                    label: const Text('Nuevo perfil'),
-                  ),
-                  TextButton.icon(
-                    onPressed: _busy
-                        ? null
-                        : () => updateAfter(_importProfileFile()),
-                    icon: const MobiIcon(Icons.file_open_outlined, size: 26),
-                    label: const Text('Importar perfil'),
-                  ),
-                ],
-              ),
               if (chosen != null)
                 TextButton.icon(
-                  onPressed: _busy
+                  onPressed: _working
                       ? null
                       : () => updateAfter(_exportProfileFile(chosen)),
-                  icon: const MobiIcon(Icons.save_alt_rounded, size: 24),
+                  icon: const UwuIcon(Icons.save_alt_rounded, size: 24),
                   label: const Text('Exportar'),
                 ),
               if (chosen != null)
                 TextButton(
-                  onPressed: _busy
+                  onPressed: _working
                       ? null
                       : () => updateAfter(_renameProfile(chosen)),
                   child: const Text('Renombrar'),
                 ),
               if (chosen != null)
                 TextButton(
-                  onPressed: _busy
+                  onPressed: _working
                       ? null
                       : () => updateAfter(_deleteProfile(chosen)),
                   child: const Text('Eliminar'),
@@ -1101,8 +1270,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         ],
         if (_selectedPackage == null)
           TextButton.icon(
-            onPressed: _busy ? null : () => updateAfter(_importProfileFile()),
-            icon: const MobiIcon(Icons.file_open_outlined, size: 26),
+            onPressed: _working
+                ? null
+                : () => updateAfter(_importProfileFile()),
+            icon: const UwuIcon(Icons.file_open_outlined, size: 26),
             label: const Text('Importar perfil'),
           ),
       ],
@@ -1143,7 +1314,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         const SizedBox(height: 12),
         FilledButton.icon(
           onPressed: canEdit ? () => _editProfile(profile) : null,
-          icon: const MobiIcon(Icons.tune, size: 27),
+          icon: const UwuIcon(Icons.tune, size: 27),
           label: Text(
             profile.calibrated ? 'Editar sobre el juego' : 'Colocar controles',
           ),

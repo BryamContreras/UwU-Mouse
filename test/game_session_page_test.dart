@@ -3,12 +3,18 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mobimapper/app/mapper_app.dart';
+import 'package:uwu_mouse/app/mapper_app.dart';
 
 import 'support/profile_fixtures.dart' show displayProfileWire, profileWire;
 
 void main() {
-  const channel = MethodChannel('dev.mobimapper/control.v1');
+  const channel = MethodChannel('dev.uwumouse/control.v1');
+  Future<void> openConnectionSettings(WidgetTester tester) async {
+    await tester.tap(find.text('Ajustes'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Conexión'));
+    await tester.pumpAndSettle();
+  }
 
   Map<String, Object?> status({
     bool blocked = false,
@@ -91,7 +97,7 @@ void main() {
             null,
           ),
         );
-        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpWidget(const UwUMouseApp());
         await tester.pumpAndSettle();
         final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
         await tester.tap(game);
@@ -181,7 +187,7 @@ void main() {
             null,
           ),
         );
-        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpWidget(const UwUMouseApp());
         await tester.pumpAndSettle();
         await tester.longPress(
           find.byKey(const ValueKey('game-com.dts.freefireth')),
@@ -270,9 +276,11 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
       final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.ensureVisible(game);
+      await tester.pumpAndSettle();
       await tester.tap(game);
       await tester.pumpAndSettle();
       expect(launched, 'phone-profile');
@@ -318,7 +326,7 @@ void main() {
         null,
       ),
     );
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     expect(find.text('Free Fire'), findsOneWidget);
     final initialReads = reads;
@@ -359,15 +367,504 @@ void main() {
         null,
       ),
     );
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     final play = find.byKey(const ValueKey('game-com.dts.freefireth'));
+    await tester.scrollUntilVisible(
+      play,
+      150,
+      scrollable: find.descendant(
+        of: find.byType(RefreshIndicator),
+        matching: find.byType(Scrollable),
+      ),
+    );
     expect(tester.widget<InkWell>(play).onTap, isNull);
     final stop = find.ancestor(
       of: find.text('Cerrar sesión'),
       matching: find.byWidgetPredicate((widget) => widget is ButtonStyleButton),
     );
     expect(tester.widget<ButtonStyleButton>(stop.first).onPressed, isNotNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('idle home has no session close or bottom menu action', (
+    tester,
+  ) async {
+    var wire = status()
+      ..['mode'] = 'stopped'
+      ..['stopRequested'] = true;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => switch (call.method) {
+        'status' => wire,
+        'listApps' || 'listProfiles' => <Object?>[],
+        _ => null,
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    await tester.pumpWidget(const UwUMouseApp());
+    await tester.pumpAndSettle();
+    final close = find.byKey(const ValueKey('close-session'));
+    expect(close, findsNothing);
+    expect(find.byType(NavigationDestination), findsNWidgets(2));
+    wire = status()..['sessionOpen'] = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(close, findsOneWidget);
+    expect(
+      tester.getTopLeft(close).dy,
+      lessThan(
+        tester.getTopLeft(find.byKey(const ValueKey('connection-summary'))).dy,
+      ),
+    );
+    wire = status()
+      ..['mode'] = 'stopped'
+      ..['stopRequested'] = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(close, findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final enabled in <bool?>[true, false, null]) {
+    testWidgets(
+      'home system options open Android with real wireless state $enabled',
+      (tester) async {
+        final calls = <String>[];
+        var wire = status(drawOverlays: enabled == true)
+          ..['wirelessDebuggingEnabled'] = enabled;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            calls.add(call.method);
+            return switch (call.method) {
+              'status' => wire,
+              'listApps' || 'listProfiles' => <Object?>[],
+              _ => null,
+            };
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(const UwUMouseApp());
+        await tester.pumpAndSettle();
+        final wireless = find.byKey(
+          const ValueKey('wireless-debugging-settings'),
+        );
+        final overlay = find.byKey(const ValueKey('overlay-settings'));
+        expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+        expect(tester.getSize(wireless).height, inInclusiveRange(48, 56));
+        expect(tester.getSize(overlay).height, inInclusiveRange(48, 56));
+        final expected = enabled == null
+            ? 'Configurar en Android'
+            : enabled
+            ? 'Activada'
+            : 'Desactivada';
+        expect(
+          (tester.widget<ListTile>(wireless).subtitle as Text).data,
+          expected,
+        );
+        expect(
+          (tester.widget<ListTile>(overlay).subtitle as Text).data,
+          enabled == true ? 'Permitida' : 'Necesita permiso',
+        );
+        expect(find.text('Captura nativa'), findsNothing);
+        expect(find.text('Motor de toques'), findsNothing);
+        expect(find.byKey(const ValueKey('connection-settings')), findsNothing);
+        final wirelessIcon =
+            (tester.widget<ListTile>(wireless).trailing! as ExcludeSemantics)
+                    .child
+                as Icon;
+        expect(
+          wirelessIcon.icon,
+          enabled == null
+              ? Icons.more_horiz_rounded
+              : enabled
+              ? Icons.check_circle_rounded
+              : Icons.cancel_rounded,
+        );
+        expect(
+          wirelessIcon.color,
+          enabled == null
+              ? const Color(0xff62758a)
+              : enabled
+              ? const Color(0xff1f7a4f)
+              : const Color(0xffb83537),
+        );
+        final overlayIcon =
+            (tester.widget<ListTile>(overlay).trailing! as ExcludeSemantics)
+                    .child
+                as Icon;
+        expect(
+          overlayIcon.icon,
+          enabled == true ? Icons.check_circle_rounded : Icons.cancel_rounded,
+        );
+        expect(
+          overlayIcon.color,
+          enabled == true ? const Color(0xff1f7a4f) : const Color(0xffb83537),
+        );
+        expect(find.byType(Switch), findsNothing);
+        await tester.tap(wireless);
+        await tester.pumpAndSettle();
+        expect(
+          calls.where((method) => method == 'wirelessDebuggingSettings'),
+          hasLength(1),
+        );
+        expect(
+          (tester.widget<ListTile>(wireless).subtitle as Text).data,
+          expected,
+        );
+        await tester.tap(overlay);
+        await tester.pumpAndSettle();
+        expect(
+          calls.where((method) => method == 'openOverlaySettings'),
+          hasLength(1),
+        );
+        expect(calls, isNot(contains('activationStartDiscovery')));
+        expect(calls, isNot(contains('stop')));
+        wire = status()..['wirelessDebuggingEnabled'] = true;
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        expect(
+          (tester.widget<ListTile>(wireless).subtitle as Text).data,
+          'Activada',
+        );
+        expect(
+          (tester.widget<ListTile>(overlay).subtitle as Text).data,
+          'Permitida',
+        );
+        expect(find.byKey(const ValueKey('close-session')), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets('landscape home keeps system options side by side', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(850, 400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      channel,
+      (call) async => switch (call.method) {
+        'status' => status(),
+        'listApps' => [
+          {
+            'packageName': 'com.dts.freefireth',
+            'label': 'Free Fire',
+            'gameHint': true,
+          },
+        ],
+        'listProfiles' => [profileWire()],
+        'selectedProfile' => profileWire(),
+        _ => null,
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    await tester.pumpWidget(const UwUMouseApp());
+    await tester.pumpAndSettle();
+    final wireless = find.byKey(const ValueKey('wireless-debugging-settings'));
+    final overlay = find.byKey(const ValueKey('overlay-settings'));
+    expect(tester.getTopLeft(wireless).dy, tester.getTopLeft(overlay).dy);
+    final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+    expect(
+      tester.getCenter(game).dy,
+      lessThan(tester.getTopLeft(find.byType(NavigationBar)).dy),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  for (final (name, fields) in <(String, Map<String, Object?>)>[
+    ('playing', {'mode': 'playing', 'active': true, 'sessionOpen': true}),
+    ('paused without profile', {'sessionOpen': true}),
+    ('closing without profile', {'stopRequested': true, 'mode': 'stopping'}),
+    ('transitioning without profile', {'transitioning': true}),
+    ('blocked', {'mode': 'blocked', 'releaseUnverified': true, 'contacts': 3}),
+    ('recovering', {'mode': 'recovering', 'guardianClosurePending': true}),
+  ]) {
+    testWidgets('session card keeps close while $name outside navigation', (
+      tester,
+    ) async {
+      var wire = status()..addAll(fields);
+      final calls = <String>[];
+      final stopped = Completer<void>();
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        return switch (call.method) {
+          'status' => wire,
+          'listApps' || 'listProfiles' => <Object?>[],
+          'selectedProfile' => null,
+          'cursorStyle' => 'classic',
+          'stop' => stopped.future,
+          _ => null,
+        };
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(const UwUMouseApp());
+      await tester.pumpAndSettle();
+      final close = find.byKey(const ValueKey('close-session'));
+      expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+      expect(
+        find.ancestor(of: close, matching: find.byType(Card)),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: find.byType(NavigationBar), matching: close),
+        findsNothing,
+      );
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Ajustes'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(close, findsNothing);
+      await tester.tap(
+        find.descendant(
+          of: find.byType(NavigationBar),
+          matching: find.text('Inicio'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+      await tester.tap(close);
+      await tester.pump();
+      expect(tester.widget<OutlinedButton>(close).onPressed, isNull);
+      await tester.tap(close);
+      expect(calls.where((method) => method == 'stop'), hasLength(1));
+      expect(calls, isNot(contains('recoverPendingSession')));
+      expect(calls, isNot(contains('startProfile')));
+      wire = status()..['mode'] = 'stopped';
+      stopped.complete();
+      await tester.pumpAndSettle();
+      expect(close, findsNothing);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
+  for (final calibrated in [true, false]) {
+    testWidgets(
+      'close bypasses pending ${calibrated ? 'launch' : 'mapping'} read without replay',
+      (tester) async {
+        var holdRead = false;
+        final pendingRead = Completer<Map<String, Object?>>();
+        final stopReply = Completer<void>();
+        final calls = <String>[];
+        var wire = status()..['sessionOpen'] = true;
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          (call) async {
+            calls.add(call.method);
+            return switch (call.method) {
+              'status' => holdRead ? pendingRead.future : wire,
+              'listApps' => [
+                {
+                  'packageName': 'com.dts.freefireth',
+                  'label': 'Free Fire',
+                  'gameHint': true,
+                },
+              ],
+              'listProfiles' => [profileWire(calibrated: calibrated)],
+              'selectedProfile' => profileWire(calibrated: calibrated),
+              'stop' => stopReply.future,
+              _ => null,
+            };
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            channel,
+            null,
+          ),
+        );
+        await tester.pumpWidget(const UwUMouseApp());
+        await tester.pumpAndSettle();
+        calls.clear();
+        holdRead = true;
+        final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+        await tester.tap(game);
+        await tester.pump();
+        expect(calls, ['status']);
+        final close = find.byKey(const ValueKey('close-session'));
+        expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+        await tester.tap(close);
+        await tester.pump();
+        expect(calls, ['status', 'stop']);
+        expect(tester.widget<InkWell>(game).onTap, isNull);
+        stopReply.complete();
+        await tester.pump();
+        expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+        expect(tester.widget<InkWell>(game).onTap, isNull);
+        wire = status()
+          ..['mode'] = 'stopped'
+          ..['stopRequested'] = true;
+        holdRead = false;
+        pendingRead.complete(
+          status()
+            ..['active'] = true
+            ..['sessionOpen'] = true
+            ..['mode'] = 'playing',
+        );
+        await tester.pumpAndSettle();
+        expect(calls.where((method) => method == 'stop'), hasLength(1));
+        expect(calls, isNot(contains('startProfile')));
+        expect(calls, isNot(contains('openEditor')));
+        expect(calls, isNot(contains('recoverPendingSession')));
+        expect(tester.widget<InkWell>(game).onTap, isNotNull);
+        expect(find.text('En control'), findsNothing);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+      },
+    );
+  }
+
+  testWidgets(
+    'transient status replies during close retry without a sticky error',
+    (tester) async {
+      final pendingRead = Completer<Map<String, Object?>>();
+      final calls = <String>[];
+      var reads = 0;
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        calls.add(call.method);
+        if (call.method == 'status') {
+          return switch (reads++) {
+            0 => status()..['sessionOpen'] = true,
+            1 => pendingRead.future,
+            2 => throw PlatformException(
+              code: 'STATUS_IN_PROGRESS',
+              message: 'snapshot ocupado',
+            ),
+            3 => throw PlatformException(
+              code: 'STATUS_STALE',
+              message: 'snapshot anterior',
+            ),
+            _ =>
+              status()
+                ..['mode'] = 'stopped'
+                ..['stopRequested'] = true,
+          };
+        }
+        return switch (call.method) {
+          'listApps' => [
+            {
+              'packageName': 'com.dts.freefireth',
+              'label': 'Free Fire',
+              'gameHint': true,
+            },
+          ],
+          'listProfiles' => [profileWire()],
+          'selectedProfile' => profileWire(),
+          _ => null,
+        };
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(const UwUMouseApp());
+      await tester.pumpAndSettle();
+      final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.tap(game);
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.byKey(const ValueKey('close-session')));
+      await tester.pump();
+      pendingRead.completeError(
+        PlatformException(code: 'STATUS_STALE', message: 'snapshot anterior'),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('snapshot ocupado'), findsNothing);
+      expect(find.text('snapshot anterior'), findsNothing);
+      expect(tester.widget<InkWell>(game).onTap, isNull);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('snapshot anterior'), findsNothing);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(tester.widget<InkWell>(game).onTap, isNotNull);
+      expect(find.text('Cerrando sesión'), findsNothing);
+      expect(find.text('snapshot ocupado'), findsNothing);
+      expect(find.text('snapshot anterior'), findsNothing);
+      expect(reads, greaterThanOrEqualTo(5));
+      expect(calls.where((method) => method == 'stop'), hasLength(1));
+      expect(calls, isNot(contains('startProfile')));
+      expect(calls, isNot(contains('openEditor')));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('last known session keeps close when native status fails', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    var firstRead = true;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+      call,
+    ) async {
+      calls.add(call.method);
+      if (call.method == 'status') {
+        if (firstRead) {
+          firstRead = false;
+          return status()..['sessionOpen'] = true;
+        }
+        throw PlatformException(code: 'STATUS_UNAVAILABLE');
+      }
+      return switch (call.method) {
+        'listApps' || 'listProfiles' => <Object?>[],
+        _ => null,
+      };
+    });
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        null,
+      ),
+    );
+    await tester.pumpWidget(const UwUMouseApp());
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    final close = find.byKey(const ValueKey('close-session'));
+    expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+    await tester.tap(close);
+    await tester.pumpAndSettle();
+    expect(calls.where((method) => method == 'stop'), hasLength(1));
+    expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+    expect(calls, isNot(contains('recoverPendingSession')));
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -414,15 +911,20 @@ void main() {
             null,
           ),
         );
-        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpWidget(const UwUMouseApp());
         await tester.pumpAndSettle();
         final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
         final recover = find.byKey(const ValueKey('recover-pending-session'));
+        final mainScroll = find.descendant(
+          of: find.byType(RefreshIndicator),
+          matching: find.byType(Scrollable),
+        );
+        await tester.scrollUntilVisible(game, 150, scrollable: mainScroll);
         expect(tester.widget<InkWell>(game).onTap, isNull);
         expect(tester.widget<InkWell>(game).onLongPress, isNull);
         expect(find.text('Cerrar sesión anterior'), findsOneWidget);
         calls.clear();
-        await tester.ensureVisible(recover);
+        await tester.scrollUntilVisible(recover, -150, scrollable: mainScroll);
         await tester.tap(recover);
         await tester.pump();
         expect(tester.widget<FilledButton>(recover).onPressed, isNull);
@@ -430,9 +932,10 @@ void main() {
 
         recovery.complete(true);
         await tester.pumpAndSettle();
+        await tester.scrollUntilVisible(game, 150, scrollable: mainScroll);
         expect(tester.widget<InkWell>(game).onTap, isNull);
         expect(tester.widget<InkWell>(game).onLongPress, isNull);
-        expect(recover, findsOneWidget);
+        expect(find.byKey(const ValueKey('close-session')), findsOneWidget);
         expect(calls, isNot(contains('startProfile')));
         expect(calls, isNot(contains('openEditor')));
         expect(calls, isNot(contains('stop')));
@@ -442,7 +945,9 @@ void main() {
         );
 
         // A focus request alone does not clear the barrier. Only native proof does.
-        wire = status()..['mode'] = 'stopped';
+        wire = status()
+          ..['mode'] = 'stopped'
+          ..['stopRequested'] = true;
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpAndSettle();
         expect(recover, findsNothing);
@@ -489,7 +994,7 @@ void main() {
             null,
           ),
         );
-        await tester.pumpWidget(const MobiMapperApp());
+        await tester.pumpWidget(const UwUMouseApp());
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
         await tester.pumpAndSettle();
@@ -552,12 +1057,27 @@ void main() {
         calls,
         () => status(uiDisplayId: 2, drawOverlays: allowed),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
       final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
+      await tester.scrollUntilVisible(
+        game,
+        150,
+        scrollable: find.descendant(
+          of: find.byType(RefreshIndicator),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(game);
       await tester.pumpAndSettle();
-      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('overlay-permission')),
+          matching: find.text('Mostrar sobre otras apps'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Listo para abrir tu juego'), findsNothing);
       expect(calls, isNot(contains('startProfile')));
       expect(calls, isNot(contains('openEditor')));
@@ -595,7 +1115,7 @@ void main() {
   ) async {
     final calls = <String>[];
     mockActivation(calls, () => status(uiDisplayId: 2, drawOverlays: false));
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     await tester.longPress(
       find.byKey(const ValueKey('game-com.dts.freefireth')),
@@ -606,7 +1126,13 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(edit);
     await tester.pumpAndSettle();
-    expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('overlay-permission')),
+        matching: find.text('Mostrar sobre otras apps'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Permitir superposición'), findsOneWidget);
     expect(calls, isNot(contains('openEditor')));
     expect(calls, isNot(contains('startProfile')));
@@ -623,7 +1149,7 @@ void main() {
         calls,
         () => status(uiDisplayId: displayId, drawOverlays: true),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
       final game = find.byKey(const ValueKey('game-com.dts.freefireth'));
       await tester.tap(game);
@@ -639,9 +1165,14 @@ void main() {
       expect(calls.where((call) => call == 'openEditor'), hasLength(1));
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('connection-settings')));
-      await tester.pumpAndSettle();
-      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+      await openConnectionSettings(tester);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('overlay-permission')),
+          matching: find.text('Mostrar sobre otras apps'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Permitir superposición'), findsNothing);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
@@ -681,11 +1212,17 @@ void main() {
         null,
       ),
     );
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
-    expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('overlay-permission')),
+        matching: find.text('Mostrar sobre otras apps'),
+      ),
+      findsOneWidget,
+    );
     expect(find.text('Permitir superposición'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
@@ -710,21 +1247,22 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pump();
-      expect(find.text('Captura nativa: Comprobando'), findsOneWidget);
-      expect(find.text('Motor de toques: Comprobando'), findsOneWidget);
+      expect(find.text('Depuración inalámbrica'), findsOneWidget);
+      expect(find.text('Configurar en Android'), findsOneWidget);
+      expect(find.text('Comprobar permiso en Android'), findsOneWidget);
+      expect(find.text('Captura nativa'), findsNothing);
+      expect(find.text('Motor de toques'), findsNothing);
       expect(find.textContaining('Desactivad'), findsNothing);
-      final settings = find.byKey(const ValueKey('connection-settings'));
-      expect(settings, findsOneWidget);
-      await tester.tap(settings);
-      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('connection-settings')), findsNothing);
+      await openConnectionSettings(tester);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
       pending.complete(status());
       await tester.pumpAndSettle();
-      expect(find.text('Captura nativa: Activada'), findsOneWidget);
-      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Captura nativa'), findsNothing);
+      expect(find.text('Motor de toques'), findsNothing);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
@@ -740,13 +1278,14 @@ void main() {
         calls,
         () => status(captureReady: captureReady, backend: backend),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
-      expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
-      expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
+      expect(find.text('Depuración inalámbrica'), findsOneWidget);
+      expect(find.text('Mostrar sobre otras apps'), findsOneWidget);
+      expect(find.text('Captura nativa'), findsNothing);
+      expect(find.text('Motor de toques'), findsNothing);
       expect(find.text('Preparar conexión'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('connection-settings')));
-      await tester.pumpAndSettle();
+      await openConnectionSettings(tester);
       expect(find.text('Ajustes de conexión'), findsWidgets);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsOneWidget);
@@ -756,13 +1295,13 @@ void main() {
       captureReady = true;
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(find.text('Captura nativa: Activada'), findsOneWidget);
+      expect(find.text('Captura nativa'), findsNothing);
       expect(find.text('Activar accesibilidad'), findsNothing);
       expect(find.text('Activar motor'), findsOneWidget);
       backend = true;
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Motor de toques'), findsNothing);
       expect(find.text('Activar motor'), findsNothing);
       expect(find.text('Listo para abrir tu juego'), findsOneWidget);
       expect(calls, isNot(contains('startProfile')));
@@ -784,11 +1323,10 @@ void main() {
         calls,
         () => status(captureReady: false, backend: false, drawOverlays: false),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
-      await tester.tap(find.byKey(const ValueKey('connection-settings')));
-      await tester.pumpAndSettle();
+      await openConnectionSettings(tester);
       final overlay = find.text('Permitir superposición');
       await tester.ensureVisible(overlay);
       await tester.pumpAndSettle();
@@ -801,45 +1339,46 @@ void main() {
     },
   );
 
-  testWidgets('missing motor offers local activation and checks a live service', (
-    tester,
-  ) async {
-    var backend = false;
-    final calls = <String>[];
-    mockActivation(calls, () => status(backend: backend));
-    await tester.pumpWidget(const MobiMapperApp());
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
-    // The launch action allows a bounded time for an existing Binder to attach.
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.pumpAndSettle();
-    expect(find.text('Captura nativa: Activada'), findsOneWidget);
-    expect(find.text('Motor de toques: Desactivado'), findsOneWidget);
-    expect(find.text('Activar motor'), findsOneWidget);
-    expect(find.text('Activar accesibilidad'), findsNothing);
-    expect(calls, isNot(contains('startProfile')));
-    expect(calls, isNot(contains('openEditor')));
-    expect(calls, isNot(contains('activationStartDiscovery')));
-    expect(calls, isNot(contains('activationConnect')));
-    expect(calls, isNot(contains('activationCancel')));
-    final check = find.text('Comprobar servicio');
-    await tester.ensureVisible(check);
-    final readsBefore = calls.where((method) => method == 'status').length;
-    backend = true;
-    await tester.tap(check);
-    await tester.pumpAndSettle();
-    expect(
-      calls.where((method) => method == 'status').length,
-      greaterThan(readsBefore),
-    );
-    expect(find.text('Motor de toques: Activado'), findsOneWidget);
-    expect(find.text('Activar motor'), findsNothing);
-    expect(find.text('Listo para abrir tu juego'), findsOneWidget);
-    expect(calls, isNot(contains('startProfile')));
-    expect(calls, isNot(contains('openEditor')));
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
+  testWidgets(
+    'missing motor offers local activation and checks a live service',
+    (tester) async {
+      var backend = false;
+      final calls = <String>[];
+      mockActivation(calls, () => status(backend: backend));
+      await tester.pumpWidget(const UwUMouseApp());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
+      // The launch action allows a bounded time for an existing Binder to attach.
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+      expect(find.text('Captura nativa'), findsNothing);
+      expect(find.text('Motor de toques'), findsNothing);
+      expect(find.text('Activar motor'), findsOneWidget);
+      expect(find.text('Activar accesibilidad'), findsNothing);
+      expect(calls, isNot(contains('startProfile')));
+      expect(calls, isNot(contains('openEditor')));
+      expect(calls, isNot(contains('activationStartDiscovery')));
+      expect(calls, isNot(contains('activationConnect')));
+      expect(calls, isNot(contains('activationCancel')));
+      final check = find.text('Comprobar servicio');
+      await tester.ensureVisible(check);
+      final readsBefore = calls.where((method) => method == 'status').length;
+      backend = true;
+      await tester.tap(check);
+      await tester.pumpAndSettle();
+      expect(
+        calls.where((method) => method == 'status').length,
+        greaterThan(readsBefore),
+      );
+      expect(find.text('Motor de toques'), findsNothing);
+      expect(find.text('Activar motor'), findsNothing);
+      expect(find.text('Listo para abrir tu juego'), findsOneWidget);
+      expect(calls, isNot(contains('startProfile')));
+      expect(calls, isNot(contains('openEditor')));
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
 
   testWidgets(
     'local activation validates code then pairs without starting play',
@@ -878,10 +1417,9 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Ajustes'));
-      await tester.pumpAndSettle();
+      await openConnectionSettings(tester);
       await tester.tap(find.text('Activar motor'));
       await tester.pumpAndSettle();
       expect(
@@ -932,7 +1470,7 @@ void main() {
       await tester.tap(find.text('Listo'));
       await tester.pumpAndSettle();
       expect(calls.where((c) => c.method == 'activationCancel'), hasLength(1));
-      expect(find.text('Motor de toques: Activado'), findsOneWidget);
+      expect(find.text('Motor de toques'), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
@@ -965,10 +1503,9 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const MobiMapperApp());
+      await tester.pumpWidget(const UwUMouseApp());
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Ajustes'));
-      await tester.pumpAndSettle();
+      await openConnectionSettings(tester);
       await tester.tap(find.text('Activar motor'));
       await tester.pumpAndSettle();
       final connect = find.byKey(const ValueKey('activation-connect'));
@@ -989,6 +1526,28 @@ void main() {
       expect(calls.where((c) => c == 'activationConnect'), hasLength(1));
       expect(calls, isNot(contains('activationPair')));
       await tester.pump(const Duration(seconds: 2));
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+      final backgroundReads = calls
+          .where((c) => c == 'activationStatus')
+          .length;
+      await tester.pump(const Duration(seconds: 3));
+      expect(
+        calls.where((c) => c == 'activationStatus').length,
+        backgroundReads,
+      );
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      final resumedReads = calls.where((c) => c == 'activationStatus').length;
+      expect(resumedReads, greaterThan(backgroundReads));
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+        calls.where((c) => c == 'activationStatus').length,
+        resumedReads + 1,
+      );
       await tester.scrollUntilVisible(
         find.byTooltip('Cerrar activación'),
         -150,
@@ -1011,7 +1570,7 @@ void main() {
     var backend = false;
     final calls = <String>[];
     mockActivation(calls, () => status(backend: backend));
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     backend = true;
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
@@ -1026,6 +1585,7 @@ void main() {
     required Map<String, Object?> Function() activation,
     required bool Function() backend,
     void Function(String method)? onMethod,
+    bool sessionOpen = false,
   }) {
     final messenger =
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
@@ -1033,7 +1593,7 @@ void main() {
       calls.add(call.method);
       onMethod?.call(call.method);
       return switch (call.method) {
-        'status' => status(backend: backend()),
+        'status' => status(backend: backend())..['sessionOpen'] = sessionOpen,
         'activationStatus' => activation(),
         'listApps' => [
           {'packageName': 'com.dts.freefireth', 'label': 'Free Fire'},
@@ -1047,7 +1607,7 @@ void main() {
   }
 
   Future<void> tapColdGame(WidgetTester tester) async {
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pump(const Duration(milliseconds: 300));
@@ -1126,6 +1686,46 @@ void main() {
     },
   );
 
+  testWidgets('main close invalidates cold setup before its completion', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    var connecting = false, ready = false;
+    mockColdLaunch(
+      calls,
+      sessionOpen: true,
+      activation: () => {
+        'phase': ready
+            ? 'ready'
+            : connecting
+            ? 'connecting'
+            : 'idle',
+        'message': '',
+        'busy': connecting && !ready,
+        'paired': true,
+      },
+      backend: () => ready,
+      onMethod: (method) {
+        if (method == 'activationConnect') connecting = true;
+      },
+    );
+    await tapColdGame(tester);
+    expect(calls, contains('activationConnect'));
+    final close = find.byKey(const ValueKey('close-session'));
+    expect(tester.widget<OutlinedButton>(close).onPressed, isNotNull);
+    await tester.tap(close);
+    await tester.pump();
+    expect(calls.where((method) => method == 'stop'), hasLength(1));
+    ready = true;
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pumpAndSettle();
+    expect(calls, isNot(contains('startProfile')));
+    expect(calls, isNot(contains('openEditor')));
+    expect(calls.where((method) => method == 'activationCancel'), hasLength(1));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets('game tap leaves an existing pairing operation untouched', (
     tester,
   ) async {
@@ -1200,17 +1800,23 @@ void main() {
   ) async {
     final calls = <String>[];
     mockActivation(calls, () => status(captureReady: false));
-    await tester.pumpWidget(const MobiMapperApp());
+    await tester.pumpWidget(const UwUMouseApp());
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('game-com.dts.freefireth')));
     await tester.pumpAndSettle();
-    expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
-    expect(find.text('Motor de toques: Activado'), findsOneWidget);
+    expect(
+      find.text('La captura de teclado y ratón no está disponible.'),
+      findsOneWidget,
+    );
+    expect(find.text('Motor de toques'), findsNothing);
     expect(find.text('Activar motor'), findsNothing);
     expect(find.textContaining('Activar-UwU-Mouse.cmd'), findsNothing);
     expect(calls, isNot(contains('accessibilitySettings')));
     expect(calls, isNot(contains('startProfile')));
-    expect(find.text('Captura nativa: Desactivada'), findsOneWidget);
+    expect(
+      find.text('La captura de teclado y ratón no está disponible.'),
+      findsOneWidget,
+    );
     expect(find.text('Activar accesibilidad'), findsNothing);
     expect(calls, isNot(contains('accessibilitySettings')));
     await tester.pumpWidget(const SizedBox.shrink());

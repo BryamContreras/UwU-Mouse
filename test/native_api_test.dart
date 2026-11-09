@@ -2,8 +2,8 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
-import 'package:mobimapper/application/ports/mapper_gateway.dart';
-import 'package:mobimapper/platform/android/method_channel_mapper_gateway.dart';
+import 'package:uwu_mouse/application/ports/mapper_gateway.dart';
+import 'package:uwu_mouse/platform/android/method_channel_mapper_gateway.dart';
 
 import 'support/profile_fixtures.dart';
 
@@ -98,6 +98,31 @@ void main() {
     expect(older.guardianSessionId, 0);
     expect(older.guardianTargetPackage, isEmpty);
   });
+  test('session ownership and transitions survive inactive mapping', () {
+    final idle = status()
+      ..['contacts'] = 0
+      ..['releaseUnverified'] = false
+      ..['mode'] = 'paused';
+    expect(NativeStatus.fromWire(idle).hasSession, isFalse);
+    final open = NativeStatus.fromWire({...idle, 'sessionOpen': true});
+    expect(open.active, isFalse);
+    expect(open.sessionOpen, isTrue);
+    expect(open.hasSession, isTrue);
+    final transition = NativeStatus.fromWire({...idle, 'transitioning': true});
+    expect(transition.transitioning, isTrue);
+    expect(transition.hasSession, isTrue);
+    final closing = NativeStatus.fromWire({...idle, 'stopRequested': true});
+    expect(closing.closing, isTrue);
+    expect(closing.hasSession, isTrue);
+    final stopped = NativeStatus.fromWire({
+      ...idle,
+      'mode': 'stopped',
+      'stopRequested': true,
+    });
+    expect(stopped.stopRequested, isTrue);
+    expect(stopped.closing, isFalse);
+    expect(stopped.hasSession, isFalse);
+  });
   test('launcher category is a hint and may be missing', () {
     final app = LaunchableApp.fromWire({
       'packageName': 'com.dts.freefireth',
@@ -164,7 +189,7 @@ void main() {
     }
   });
   test('overlay settings command uses the explicit native action', () async {
-    const channel = MethodChannel('dev.mobimapper/control.v1');
+    const channel = MethodChannel('dev.uwumouse/control.v1');
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -346,6 +371,49 @@ void main() {
       final partial = LocalProfile.fromWire(wire);
       expect(partial.actionCadenceEnabled, isFalse);
       expect(partial.actionCadenceYPercent, -35);
+    }
+  });
+  test('cadence start and duration are validated on every action', () {
+    final wire = profileWire();
+    final action = wire['action']! as Map;
+    final old = LocalProfile.fromWire(wire);
+    expect(old.actionCadenceStartMs, 500);
+    expect(old.actionCadenceDurationMs, 0);
+    action['cadenceStartMs'] = 0;
+    action['cadenceDurationMs'] = 1250;
+    final selected = LocalProfile.fromWire(wire);
+    expect(selected.actionCadenceStartMs, 0);
+    expect(selected.actionCadenceDurationMs, 1250);
+    expect(selected.actionCadenceDurationEnabled, isTrue);
+    action['cadenceDurationEnabled'] = false;
+    expect(LocalProfile.fromWire(wire).actionCadenceDurationEnabled, isFalse);
+    action['cadenceDurationEnabled'] = true;
+    action['cadenceDurationMs'] = 0;
+    expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+    action['cadenceDurationMs'] = 1250;
+    action['cadenceDurationEnabled'] = 'true';
+    expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+    for (final field in ['cadenceStartMs', 'cadenceDurationMs']) {
+      for (final value in [
+        null,
+        true,
+        '1',
+        1.5,
+        -1,
+        field == 'cadenceStartMs' ? 5001 : 10001,
+      ]) {
+        for (final additional in [false, true]) {
+          final invalid = profileWire();
+          final row = Map<Object?, Object?>.from(invalid['action']! as Map)
+            ..[field] = value;
+          if (additional) {
+            invalid['additionalActions'] = [row];
+          } else {
+            invalid['action'] = row;
+          }
+          expect(() => LocalProfile.fromWire(invalid), throwsFormatException);
+        }
+      }
     }
   });
   test('cadence metadata rejects malformed base and additional actions', () {
@@ -651,82 +719,75 @@ void main() {
       );
     }
   });
-  test(
-    'schema 7 preserves action behavior and excludes the disabled base from the budget',
-    () {
-      final wire = profileWire();
+  test('schema 7 preserves action behavior and excludes the disabled base from the budget', () {
+    final wire = profileWire();
+    (wire['joystick']! as Map)['enabled'] = false;
+    (wire['camera']! as Map)['enabled'] = false;
+    (wire['action']! as Map)
+      ..['enabled'] = false
+      ..['code'] = 0;
+    final repeat = Map<Object?, Object?>.from(wire['action']! as Map)
+      ..['enabled'] = true
+      ..['triggerKind'] = 'key'
+      ..['code'] = 35
+      ..['behavior'] = 'repeat'
+      ..['repeatIntervalMs'] = 50;
+    final cursor = Map<Object?, Object?>.from(repeat)
+      ..['code'] = 36
+      ..['behavior'] = 'cursorToggle';
+    wire['additionalActions'] = [repeat, cursor];
+    final decoded = LocalProfile.fromWire(wire);
+    expect(decoded.schemaVersion, 7);
+    expect(decoded.joystickEnabled, isFalse);
+    expect(decoded.cameraEnabled, isFalse);
+    expect(decoded.actionEnabled, isFalse);
+    expect(decoded.actionCount, 2);
+    wire['additionalActions'] = <Object?>[];
+    expect(LocalProfile.fromWire(wire).actionCount, 0);
+    wire['additionalActions'] = List.generate(
+      24,
+      (index) => Map<Object?, Object?>.from(repeat)..['code'] = 100 + index,
+    );
+    expect(LocalProfile.fromWire(wire).actionCount, 24);
+    (wire['additionalActions']! as List).add(cursor);
+    expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+  });
+  test('schema 7 metadata is typed and legacy metadata cannot silently activate new behavior', () {
+    for (final version in [1, 2, 3, 4, 5, 6]) {
+      final wire = profileWire()..['schemaVersion'] = version;
       (wire['joystick']! as Map)['enabled'] = false;
       (wire['camera']! as Map)['enabled'] = false;
       (wire['action']! as Map)
         ..['enabled'] = false
-        ..['code'] = 0;
-      final repeat = Map<Object?, Object?>.from(wire['action']! as Map)
-        ..['enabled'] = true
-        ..['triggerKind'] = 'key'
-        ..['code'] = 35
         ..['behavior'] = 'repeat'
         ..['repeatIntervalMs'] = 50;
-      final cursor = Map<Object?, Object?>.from(repeat)
-        ..['code'] = 36
-        ..['behavior'] = 'cursorToggle';
-      wire['additionalActions'] = [repeat, cursor];
-      final decoded = LocalProfile.fromWire(wire);
-      expect(decoded.schemaVersion, 7);
-      expect(decoded.joystickEnabled, isFalse);
-      expect(decoded.cameraEnabled, isFalse);
-      expect(decoded.actionEnabled, isFalse);
-      expect(decoded.actionCount, 2);
-      wire['additionalActions'] = <Object?>[];
-      expect(LocalProfile.fromWire(wire).actionCount, 0);
-      wire['additionalActions'] = List.generate(
-        24,
-        (index) => Map<Object?, Object?>.from(repeat)..['code'] = 100 + index,
-      );
-      expect(LocalProfile.fromWire(wire).actionCount, 24);
-      (wire['additionalActions']! as List).add(cursor);
-      expect(() => LocalProfile.fromWire(wire), throwsFormatException);
-    },
-  );
-  test(
-    'schema 7 metadata is typed and legacy metadata cannot silently activate new behavior',
-    () {
-      for (final version in [1, 2, 3, 4, 5, 6]) {
-        final wire = profileWire()..['schemaVersion'] = version;
-        (wire['joystick']! as Map)['enabled'] = false;
-        (wire['camera']! as Map)['enabled'] = false;
-        (wire['action']! as Map)
-          ..['enabled'] = false
-          ..['behavior'] = 'repeat'
-          ..['repeatIntervalMs'] = 50;
-        final legacy = LocalProfile.fromWire(wire);
-        expect(legacy.joystickEnabled, isTrue);
-        expect(legacy.cameraEnabled, isTrue);
-        expect(legacy.actionEnabled, isTrue);
-        expect(legacy.actionBehavior, 'tap');
-        expect(legacy.repeatIntervalMs, 100);
-        expect(legacy.actionCount, 1);
+      final legacy = LocalProfile.fromWire(wire);
+      expect(legacy.joystickEnabled, isTrue);
+      expect(legacy.cameraEnabled, isTrue);
+      expect(legacy.actionEnabled, isTrue);
+      expect(legacy.actionBehavior, 'tap');
+      expect(legacy.repeatIntervalMs, 100);
+      expect(legacy.actionCount, 1);
+    }
+    for (final section in ['joystick', 'camera', 'action']) {
+      final missing = profileWire();
+      (missing[section]! as Map).remove('enabled');
+      expect(() => LocalProfile.fromWire(missing), throwsFormatException);
+      for (final invalidValue in [null, 0, 'true']) {
+        final wire = profileWire();
+        wire[section] = Map<Object?, Object?>.from(wire[section]! as Map)
+          ..['enabled'] = invalidValue;
+        expect(() => LocalProfile.fromWire(wire), throwsFormatException);
       }
-      for (final section in ['joystick', 'camera', 'action']) {
-        final missing = profileWire();
-        (missing[section]! as Map).remove('enabled');
-        expect(() => LocalProfile.fromWire(missing), throwsFormatException);
-        for (final invalidValue in [null, 0, 'true']) {
-          final wire = profileWire();
-          wire[section] = Map<Object?, Object?>.from(wire[section]! as Map)
-            ..['enabled'] = invalidValue;
-          expect(() => LocalProfile.fromWire(wire), throwsFormatException);
-        }
-      }
-      final extra = Map<Object?, Object?>.from(profileWire()['action']! as Map)
-        ..['enabled'] = false;
-      expect(
-        () => LocalProfile.fromWire(
-          profileWire()..['additionalActions'] = [extra],
-        ),
-        throwsFormatException,
-      );
-    },
-  );
+    }
+    final extra = Map<Object?, Object?>.from(profileWire()['action']! as Map)
+      ..['enabled'] = false;
+    expect(
+      () =>
+          LocalProfile.fromWire(profileWire()..['additionalActions'] = [extra]),
+      throwsFormatException,
+    );
+  });
   test(
     'schema 7 action behavior and interval reject missing or unsafe metadata',
     () {
@@ -735,7 +796,7 @@ void main() {
         (wire['action']! as Map)['behavior'] = behavior;
         expect(LocalProfile.fromWire(wire).actionBehavior, behavior);
       }
-      for (final interval in [50, 100, 5000]) {
+      for (final interval in [30, 50, 100, 5000]) {
         final wire = profileWire();
         (wire['action']! as Map)['repeatIntervalMs'] = interval;
         expect(LocalProfile.fromWire(wire).repeatIntervalMs, interval);
@@ -745,7 +806,7 @@ void main() {
         (missing['action']! as Map).remove(field);
         expect(() => LocalProfile.fromWire(missing), throwsFormatException);
       }
-      for (final interval in [null, 49, 5001, 100.5, '100', true]) {
+      for (final interval in [null, 29, 5001, 100.5, '100', true]) {
         final wire = profileWire();
         wire['action'] = Map<Object?, Object?>.from(wire['action']! as Map)
           ..['repeatIntervalMs'] = interval;
@@ -758,8 +819,75 @@ void main() {
       }
     },
   );
+  test('repeat loops preserve their timer and default to held input for old profiles', () {
+    final legacy = LocalProfile.fromWire(profileWire());
+    expect(legacy.repeatToggle, isFalse);
+    expect(legacy.repeatDurationSeconds, 0);
+
+    final wire = displayProfileWire('phone', 'loop-profile');
+    final action = wire['action']! as Map;
+    action['behavior'] = 'repeat';
+    action['repeatToggle'] = true;
+    for (final seconds in [0, 1, 60, 86400]) {
+      action['repeatDurationSeconds'] = seconds;
+      final loop = LocalProfile.fromWire(wire);
+      expect(loop.repeatToggle, isTrue);
+      expect(loop.repeatDurationSeconds, seconds);
+    }
+    action['repeatToggle'] = false;
+    final held = LocalProfile.fromWire(wire);
+    expect(held.repeatToggle, isFalse);
+    expect(held.repeatDurationSeconds, 86400);
+  });
+
+  test(
+    'repeat loop metadata rejects invalid types and timers in every action',
+    () {
+      for (final additional in [false, true]) {
+        for (final field in ['repeatToggle', 'repeatDurationSeconds']) {
+          final invalidValues = field == 'repeatToggle'
+              ? <Object?>[null, 0, 'true']
+              : <Object?>[null, -1, 86401, 1.5, '10', true];
+          for (final invalidValue in invalidValues) {
+            final wire = profileWire();
+            final action = Map<Object?, Object?>.from(wire['action']! as Map)
+              ..['behavior'] = 'repeat'
+              ..[field] = invalidValue;
+            if (additional) {
+              wire['additionalActions'] = [action];
+            } else {
+              wire['action'] = action;
+            }
+            expect(
+              () => LocalProfile.fromWire(wire),
+              throwsFormatException,
+              reason: '$field=$invalidValue, additional=$additional',
+            );
+          }
+        }
+        for (final behavior in ['tap', 'cursorToggle']) {
+          for (final option in [
+            <String, Object>{'repeatToggle': true},
+            <String, Object>{'repeatDurationSeconds': 30},
+          ]) {
+            final wire = profileWire();
+            final action = Map<Object?, Object?>.from(wire['action']! as Map)
+              ..['behavior'] = behavior
+              ..addAll(option);
+            if (additional) {
+              wire['additionalActions'] = [action];
+            } else {
+              wire['action'] = action;
+            }
+            expect(() => LocalProfile.fromWire(wire), throwsFormatException);
+          }
+        }
+      }
+    },
+  );
+
   test('editor and play commands transfer profile identity only', () async {
-    const channel = MethodChannel('dev.mobimapper/control.v1');
+    const channel = MethodChannel('dev.uwumouse/control.v1');
     final calls = <MethodCall>[];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -792,7 +920,7 @@ void main() {
   test(
     'pending closure route forwards native outcome without a new profile',
     () async {
-      const channel = MethodChannel('dev.mobimapper/control.v1');
+      const channel = MethodChannel('dev.uwumouse/control.v1');
       final calls = <MethodCall>[];
       Object? outcome = true;
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -820,7 +948,7 @@ void main() {
   test(
     'local activation transfers pairing once and supports discovered reconnect',
     () async {
-      const channel = MethodChannel('dev.mobimapper/control.v1');
+      const channel = MethodChannel('dev.uwumouse/control.v1');
       final calls = <MethodCall>[];
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (call) async {

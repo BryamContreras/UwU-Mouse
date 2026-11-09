@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "dev.mobimapper.mobimapper"
+    namespace = "dev.uwumouse.app"
     compileSdk = uwu.versions.compileSdk.get().toInt()
     buildToolsVersion = uwu.versions.buildTools.get()
     ndkVersion = uwu.versions.ndk.get()
@@ -17,7 +17,7 @@ android {
 
     defaultConfig {
         // Stable identity used by the authorized backend and the independent laboratory.
-        applicationId = "dev.mobimapper.mobimapper"
+        applicationId = "dev.uwumouse.app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = uwu.versions.minSdk.get().toInt()

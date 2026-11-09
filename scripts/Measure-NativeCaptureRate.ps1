@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Serial,
     [ValidateRange(2,15)][int]$SecondsPerRate=5,
     [int[]]$Rates=@(100,500,1000,0),
-    [ValidatePattern('^dev\.mobimapper\.mobimapper(?:\.[a-z][a-z0-9_]*)?$')]
-    [string]$ApplicationId='dev.mobimapper.mobimapper.nativepreview',
+    [ValidatePattern('^dev\.uwumouse\.app(?:\.[a-z][a-z0-9_]*)?$')]
+    [string]$ApplicationId='dev.uwumouse.app.nativepreview',
     [string]$Destination
 )
 Set-StrictMode -Version Latest
