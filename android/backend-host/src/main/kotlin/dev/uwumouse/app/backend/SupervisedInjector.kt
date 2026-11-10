@@ -143,11 +143,19 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             { task -> Thread(task,"UwuDisplayResolution").apply { isDaemon=true } },ThreadPoolExecutor.AbortPolicy())
     }
     private val displayResolution=DisplayResolutionManager(context,identity,::requestDisplayResolutionRestoration)
+    @Volatile private var inheritedDisplayResolutionUnknown=displayResolution.hasPendingRestoration
+    private val inheritedDisplayResolutionProof=DisplayResolutionInheritedProof(
+        { DisplayResolutionProducerPids.read(identity.injectorProcess) },
+        { DisplayResolutionProducerPids.read(identity.guardianProcess) },
+        DispatcherTouchState::isDefinitelyUntouched,Process.myPid())
     init {
-        // No Binder has been published and no input can exist yet. Recover a previous
-        // process's durable before-image before accepting the first begin/capture.
-        if(displayResolution.hasPendingRestoration)
-            privileged { displayResolution.restorePending();true }
+        // This new journal cannot describe the previous guardian's worker or Android
+        // contacts. Restore only after proving old producers exited and no down remains.
+        if(inheritedDisplayResolutionUnknown && reserveDisplayResolutionChange()) {
+            try {
+                if(confirmInheritedDisplayResolutionClosure()) privileged { displayResolution.restorePending();true }
+            } finally { finishDisplayResolutionChange() }
+        }
     }
 
     private fun displayResolutionIdleLocked():Boolean {
@@ -165,6 +173,27 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         synchronized(this) { displayResolutionChanging=false }
         if(schedulePending && displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
     }
+    private data class DisplayResolutionProducerSnapshot(val current:WorkerConnection?)
+    private fun displayResolutionProducersLocked():DisplayResolutionProducerSnapshot? {
+        if(!displayResolutionChanging || !displayResolutionIdleLocked()) return null
+        val current=connection?.takeIf { it.alive }
+        // The live current connection is also retained in this ownership set. Every
+        // other member is an unretired producer, even if its close flag is already set.
+        if(unretiredWorkers.any { it!==current }) return null
+        return DisplayResolutionProducerSnapshot(current)
+    }
+    private fun confirmInheritedDisplayResolutionClosure():Boolean {
+        if(!inheritedDisplayResolutionUnknown) return true
+        val before=synchronized(this) { displayResolutionProducersLocked() } ?: return false
+        // Process queries and the global dispatcher dump are cold IO, outside this
+        // guardian's monitor and recovery handler. No PID is killed by this proof.
+        if(!privileged { inheritedDisplayResolutionProof.verified(before.current?.pid) }) return false
+        return synchronized(this) {
+            val after=displayResolutionProducersLocked()
+            if(after==null || after.current!==before.current) false
+            else { inheritedDisplayResolutionUnknown=false;true }
+        }
+    }
     private fun requestDisplayResolutionRestoration() {
         if(!displayResolutionRestoreQueued.compareAndSet(false,true)) return
         try {
@@ -172,7 +201,9 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                 // A later owner-death event may enqueue one replacement while this runs.
                 displayResolutionRestoreQueued.set(false)
                 if(!reserveDisplayResolutionChange()) return@execute
-                try { privileged { displayResolution.restorePending();true } }
+                try {
+                    if(confirmInheritedDisplayResolutionClosure()) privileged { displayResolution.restorePending();true }
+                }
                 finally { finishDisplayResolutionChange() }
             }
         } catch(_:java.util.concurrent.RejectedExecutionException) { displayResolutionRestoreQueued.set(false) }
@@ -183,26 +214,46 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putString("message","Pausa la sesión y espera a que se liberen los contactos y la captura antes de cambiar la resolución")
         }
     }
+    private fun inheritedDisplayResolutionBlocked(displayId:Int):Bundle=privilegedBundle {
+        displayResolution.status(displayId).apply { describeInheritedDisplayResolution(this) }
+    }
+    private fun describeInheritedDisplayResolution(result:Bundle) {
+        if(inheritedDisplayResolutionUnknown) {
+            result.putBoolean("canRestore",false)
+            result.putBoolean("operationSucceeded",false);result.putBoolean("changed",false)
+            result.putString("message","No se pudo verificar el cierre de la sesión anterior; la resolución se conserva para reintentar")
+        }
+    }
     override fun getDisplayResolution(displayId:Int):Bundle {
         authorize()
         if(displayResolution.hasPendingRestoration && reserveDisplayResolutionChange()) {
-            try { privileged { displayResolution.restorePending();true } }
+            try {
+                if(confirmInheritedDisplayResolutionClosure()) privileged { displayResolution.restorePending();true }
+            }
             finally { finishDisplayResolutionChange() }
         }
-        return privilegedBundle { displayResolution.status(displayId) }
+        return privilegedBundle { displayResolution.status(displayId).apply { describeInheritedDisplayResolution(this) } }
     }
     override fun applyDisplayResolution(displayId:Int,displayUniqueId:String,width:Int,height:Int,owner:IBinder):Bundle {
         authorize()
         if(!reserveDisplayResolutionChange()) return blockedDisplayResolution(displayId)
-        return try { privilegedBundle {
-            displayResolution.restorePending()
-            displayResolution.apply(displayId,displayUniqueId,width,height,owner)
-        } } finally { finishDisplayResolutionChange(schedulePending=true) }
+        var verified=false
+        return try {
+            verified=confirmInheritedDisplayResolutionClosure()
+            if(!verified) inheritedDisplayResolutionBlocked(displayId)
+            else privilegedBundle {
+                displayResolution.restorePending()
+                displayResolution.apply(displayId,displayUniqueId,width,height,owner)
+            }
+        } finally { finishDisplayResolutionChange(schedulePending=verified) }
     }
     override fun restoreDisplayResolution(displayId:Int,displayUniqueId:String):Bundle {
         authorize()
         if(!reserveDisplayResolutionChange()) return blockedDisplayResolution(displayId)
-        return try { privilegedBundle { displayResolution.restore(displayId,displayUniqueId) } }
+        return try {
+            if(!confirmInheritedDisplayResolutionClosure()) inheritedDisplayResolutionBlocked(displayId)
+            else privilegedBundle { displayResolution.restore(displayId,displayUniqueId) }
+        }
         finally { finishDisplayResolutionChange() }
     }
 
@@ -1095,6 +1146,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         } }
     }
     private fun ensureWorker() {
+        check(!displayResolutionChanging) { "Espera a que termine la verificación y el cambio de resolución" }
         check(!terminalRetirementPending()) { "Terminal closure cannot restart an input worker" }
         if(connection?.alive==true) return
         check(!closed && !forceStopped && !appIsStopped()) { "Worker restart inhibited" }
@@ -1152,6 +1204,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("gameFpsMonitorSupported",true)
             putBoolean("displayResolutionSupported",displayResolution.supported)
             putBoolean("displayResolutionChanging",displayResolutionChanging)
+            putBoolean("displayResolutionInheritedPending",inheritedDisplayResolutionUnknown)
             putBoolean("trustedCursorCleanupWithoutTokenSupported",true)
             putString("trustedCursorError",visualCursor.error)
             putString("captureProvider","native-evdev")
@@ -1209,7 +1262,9 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             displayResolutionIdleLocked().also { displayResolutionChanging=it }
         }
         // Restore only after input closure, and never hold the injection/recovery monitor.
-        try { if(restore) privileged { displayResolution.restoreAll();true } }
+        try {
+            if(restore && confirmInheritedDisplayResolutionClosure()) privileged { displayResolution.restoreAll();true }
+        }
         finally {
             displayResolution.close()
             synchronized(this) {

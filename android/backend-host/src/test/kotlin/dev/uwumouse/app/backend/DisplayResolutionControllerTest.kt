@@ -20,6 +20,7 @@ class DisplayResolutionControllerTest {
             2 to DisplayResolutionSnapshot(2,"local:monitor","Monitor",0,1920,1080,1920,1080))
         val writes=mutableListOf<String>()
         var nextSet:((Int,String,Int,Int)->Unit)?=null
+        var nextClear:((Int,String)->Unit)?=null
         var reads=0
         var beforeRead:((Int)->Unit)?=null
         override fun read(displayId:Int):DisplayResolutionSnapshot? {
@@ -36,7 +37,9 @@ class DisplayResolutionControllerTest {
         override fun clearSize(displayId:Int,expectedUniqueId:String) {
             val old=requireNotNull(values[displayId]);check(old.uniqueId==expectedUniqueId)
             writes+="clear:$displayId"
-            values[displayId]=old.copy(width=old.physicalWidth,height=old.physicalHeight)
+            val intercepted=nextClear;nextClear=null
+            if(intercepted!=null) intercepted(displayId,expectedUniqueId)
+            else values[displayId]=old.copy(width=old.physicalWidth,height=old.physicalHeight)
         }
     }
 
@@ -208,5 +211,160 @@ class DisplayResolutionControllerTest {
         assertFalse(allowed(closed=false));assertFalse(allowed(possible=1));assertFalse(allowed(confirmed=1))
         assertFalse(allowed(release=true));assertFalse(allowed(keys=1));assertFalse(allowed(keyRelease=true))
         assertFalse(allowed(capture=true));assertFalse(allowed(recovery=true))
+    }
+
+    @Test fun partiallyRestoredOverrideRollsBackAndRetainsTheOriginalRetryTarget() {
+        for(throwAfterMutation in listOf(false,true)) {
+            val displays=Displays();val journal=Journal()
+            displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+            val controller=DisplayResolutionController(displays,journal)
+            assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+            displays.nextSet={ id,_,_,_ ->
+                displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810)
+                if(throwAfterMutation) error("Restoration reply failed after a partial mutation")
+            }
+            val failed=controller.restore(2,"local:monitor")
+            assertFalse(failed.operationSucceeded);assertFalse(failed.changed);assertTrue(failed.canRestore)
+            assertEquals(1280,displays.values.getValue(2).width)
+            assertEquals(1600,journal.records.single().previousWidth)
+            assertTrue(controller.restore(2,"local:monitor").operationSucceeded)
+            assertEquals(1600,displays.values.getValue(2).width);assertTrue(journal.records.isEmpty())
+        }
+    }
+
+    @Test fun failedRollbackPersistsObservedPartialSizeWithoutLosingTheBeforeImage() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        displays.nextSet={ id,_,_,_ ->
+            displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810)
+            displays.nextSet={ _,_,_,_ -> } // The rollback returns without changing anything.
+        }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertTrue(failed.changed);assertTrue(failed.canRestore)
+        assertEquals(1440,journal.records.single().ownedWidth)
+        assertEquals(1600,journal.records.single().previousWidth)
+        val restarted=DisplayResolutionController(displays,journal)
+        assertTrue(restarted.status(2).canRestore)
+        assertTrue(restarted.restore(2,"local:monitor").operationSucceeded)
+        assertEquals(1600,displays.values.getValue(2).width);assertTrue(journal.records.isEmpty())
+    }
+
+    @Test fun rollbackThatAlsoClampsAndThrowsRetainsItsActualSizeForRestartRecovery() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        displays.nextSet={ id,_,_,_ ->
+            displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810)
+            displays.nextSet={ rollbackId,_,_,_ ->
+                displays.values[rollbackId]=displays.values.getValue(rollbackId).copy(width=1536,height=864)
+                error("Rollback reply failed")
+            }
+        }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertTrue(failed.canRestore)
+        assertEquals(1536,journal.records.single().ownedWidth)
+        assertEquals(1600,journal.records.single().previousWidth)
+        assertTrue(DisplayResolutionController(displays,journal).restore(2,"local:monitor").operationSucceeded)
+        assertEquals(1600,displays.values.getValue(2).width)
+    }
+
+    @Test fun partiallyClearedDefaultSizeRemainsRecoverableWithoutCreatingAnOriginalOverride() {
+        val displays=Displays();val journal=Journal();val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        displays.nextClear={ id,_ ->
+            displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810)
+            error("Clear failed after changing the size")
+        }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertTrue(failed.canRestore)
+        assertEquals(1280,displays.values.getValue(2).width)
+        assertFalse(journal.records.single().previousHadOverride)
+        assertTrue(controller.restore(2,"local:monitor").operationSucceeded)
+        assertEquals(1920,displays.values.getValue(2).width);assertTrue(journal.records.isEmpty())
+    }
+
+    @Test fun partialRestoreWithJournalFailureStillOffersAnInProcessRetry() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        journal.failSave=true
+        displays.nextSet={ id,_,_,_ ->
+            displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810)
+            displays.nextSet={ _,_,_,_ -> }
+        }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertTrue(failed.canRestore)
+        assertEquals(1600,controller.ownedRecords().single().previousWidth)
+        assertEquals(1600,journal.records.single().previousWidth)
+        assertTrue(failed.message.contains("antes de cerrar el motor"))
+        journal.failSave=false
+        assertTrue(controller.restore(2,"local:monitor").operationSucceeded)
+        assertEquals(1600,displays.values.getValue(2).width);assertTrue(journal.records.isEmpty())
+    }
+
+    @Test fun externalChangeAfterPartialRestoreIsNotOverwrittenByRollback() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        val readsBefore=displays.reads
+        displays.nextSet={ id,_,_,_ -> displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810) }
+        displays.beforeRead={ count -> if(count==readsBefore+3)
+            displays.values[2]=displays.values.getValue(2).copy(width=1800,height=1000) }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertFalse(failed.canRestore)
+        assertEquals(1800,displays.values.getValue(2).width)
+        assertEquals(listOf("set:2:1280:720","set:2:1600:900"),displays.writes)
+        controller.restore(2,"local:monitor")
+        assertEquals(2,displays.writes.size);assertTrue(journal.records.isEmpty())
+    }
+
+    @Test fun aDisplayIdentityChangeDuringPartialRestoreNeverWritesTheReplacement() {
+        val displays=Displays();val phone=displays.values.getValue(0);val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        val readsBefore=displays.reads
+        displays.nextSet={ id,_,_,_ -> displays.values[id]=displays.values.getValue(id).copy(width=1440,height=810) }
+        displays.beforeRead={ count -> if(count==readsBefore+3)
+            displays.values[2]=displays.values.getValue(2).copy(uniqueId="local:replacement",width=1800,height=1000) }
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertFalse(failed.canRestore)
+        assertEquals("local:replacement",displays.values.getValue(2).uniqueId)
+        assertEquals(1800,displays.values.getValue(2).width)
+        assertEquals(2,displays.writes.size);assertEquals(phone,displays.values[0])
+    }
+
+    @Test fun restorationReadbackConfirmsSuccessEvenIfTheReplyThrowsAfterMutation() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        displays.nextSet={ id,_,width,height ->
+            displays.values[id]=displays.values.getValue(id).copy(width=width,height=height)
+            error("Reply failed after the baseline was restored")
+        }
+        assertTrue(controller.restore(2,"local:monitor").operationSucceeded)
+        assertEquals(1600,displays.values.getValue(2).width)
+        assertEquals(2,displays.writes.size);assertTrue(journal.records.isEmpty())
+    }
+
+    @Test fun journalCleanupFailureRetainsARetryWithoutAnotherDisplayMutation() {
+        val displays=Displays();val journal=Journal()
+        displays.values[2]=displays.values.getValue(2).copy(width=1600,height=900)
+        val controller=DisplayResolutionController(displays,journal)
+        assertTrue(controller.apply(2,"local:monitor",1280,720).operationSucceeded)
+        journal.failSave=true
+        val failed=controller.restore(2,"local:monitor")
+        assertFalse(failed.operationSucceeded);assertTrue(failed.changed);assertTrue(failed.canRestore)
+        assertEquals(1600,displays.values.getValue(2).width)
+        journal.failSave=false
+        val retry=controller.restore(2,"local:monitor")
+        assertTrue(retry.operationSucceeded);assertFalse(retry.changed)
+        assertEquals(2,displays.writes.size);assertTrue(journal.records.isEmpty())
     }
 }

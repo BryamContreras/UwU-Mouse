@@ -128,17 +128,63 @@ internal class DisplayResolutionController(
             if(!commit(expectedUniqueId,null)) return before.copy(message="No se pudo retirar el registro anterior")
             return status(displayId).copy(message="La resolución fue cambiada fuera de UwU Mouse; se conservó ese cambio")
         }
-        val sent=runCatching {
+        // A previous restoration may have reached its destination while journal cleanup
+        // failed. Retry only that cleanup, not another WMS mutation.
+        if(isRestored(current,owned)) return completeRestoration(displayId,owned,current,changed=false)
+        runCatching {
             if(owned.previousHadOverride) access.setSize(displayId,expectedUniqueId,owned.previousWidth,owned.previousHeight)
             else access.clearSize(displayId,expectedUniqueId)
-        }.isSuccess
+        }
         val after=read(displayId)
-        val restored=after!=null && after.uniqueId==expectedUniqueId && if(owned.previousHadOverride)
-            after.sameSize(owned.previousWidth,owned.previousHeight) else !after.hasOverride
-        if(!restored || !sent) return status(displayId).copy(message="No se pudo verificar la restauración; se conserva el registro para reintentar")
-        if(!commit(expectedUniqueId,null)) return status(displayId).copy(
-            changed=true,message="La resolución se restauró, pero no se pudo actualizar su registro")
-        return status(displayId).copy(operationSucceeded=true,changed=true)
+        // A Binder reply can fail after WMS already restored the exact before-image.
+        if(after!=null && after.uniqueId==expectedUniqueId && isRestored(after,owned))
+            return completeRestoration(displayId,owned,after,changed=true)
+
+        var durable=true
+        if(after!=null && after.uniqueId==expectedUniqueId && !after.sameSize(current.width,current.height)) {
+            // An unsuccessful restore can itself clamp or partially mutate the size.
+            // Recheck our last observation before attempting one bounded rollback.
+            val stillOurs=read(displayId)?.let { it.uniqueId==expectedUniqueId &&
+                it.sameSize(after.width,after.height) }==true
+            if(stillOurs) {
+                runCatching {
+                    if(current.hasOverride) access.setSize(displayId,expectedUniqueId,current.width,current.height)
+                    else access.clearSize(displayId,expectedUniqueId)
+                }
+                val rollback=read(displayId)
+                if(rollback!=null && rollback.uniqueId==expectedUniqueId) {
+                    if(isRestored(rollback,owned))
+                        return completeRestoration(displayId,owned,rollback,changed=true)
+                    if(!rollback.sameSize(current.width,current.height)) {
+                        // Preserve the original before-image while owning only the size
+                        // actually left by our failed rollback, never the requested one.
+                        val observed=owned.copy(ownedWidth=rollback.width,ownedHeight=rollback.height)
+                        durable=commit(expectedUniqueId,observed)
+                        if(!durable) records[expectedUniqueId]=observed
+                    }
+                }
+            }
+        }
+        val result=status(displayId)
+        return result.copy(changed=result.snapshot?.let { it.uniqueId==expectedUniqueId &&
+            !it.sameSize(current.width,current.height) } ?: false,
+            message=if(durable) "Android no confirmó la restauración; se conserva la configuración anterior para reintentar"
+                else "No se pudo guardar el estado de recuperación; reintenta Restaurar antes de cerrar el motor")
+    }
+
+    private fun isRestored(current:DisplayResolutionSnapshot,owned:OwnedDisplayResolution):Boolean =
+        if(owned.previousHadOverride) current.sameSize(owned.previousWidth,owned.previousHeight) else !current.hasOverride
+
+    private fun completeRestoration(displayId:Int,owned:OwnedDisplayResolution,current:DisplayResolutionSnapshot,
+                                    changed:Boolean):DisplayResolutionResult {
+        if(!commit(owned.uniqueId,null)) {
+            // Keep an in-process retry usable even when removing the durable record fails.
+            // Its next restore recognizes the confirmed baseline and retries cleanup only.
+            records[owned.uniqueId]=owned.copy(ownedWidth=current.width,ownedHeight=current.height)
+            return status(displayId).copy(changed=changed,
+                message="La resolución se restauró, pero no se pudo actualizar su registro; reintenta Restaurar")
+        }
+        return status(displayId).copy(operationSucceeded=true,changed=changed)
     }
 
     private fun read(displayId:Int):DisplayResolutionSnapshot? = if(displayId<0) null else runCatching { access.read(displayId) }

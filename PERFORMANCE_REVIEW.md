@@ -144,10 +144,11 @@ entrada. La app y el backend conservan como máximo una operación en vuelo y
 trabajo pendiente acotado; sus workers expiran tras diez segundos sin trabajo.
 El formulario no retiene Activities destruidas mientras espera un resultado.
 
-La compilación release completó **103 pruebas Flutter y 948 pruebas JVM**,
-incluidas 16 nuevas de resolución con acceso WMS y diario simulados. Cubren
+La compilación release completó **103 pruebas Flutter y 964 pruebas JVM**,
+incluidas 32 nuevas de resolución con acceso WMS, procesos y diario simulados. Cubren
 verificación, rollback, identidad reutilizada, override previo, cambio externo y
-admisión con contactos/teclas/captura pendientes. También aprobaron lint,
+admisión con contactos/teclas/captura pendientes, cierre de productores heredados
+y restauración parcial. También aprobaron lint,
 arquitectura, ABI JSON de 143 clases y la alineación de las bibliotecas nativas.
 La suite de framework incorpora una undécima prueba que modifica únicamente
 una pantalla virtual propia, restaura su tamaño y comprueba que no cambien la

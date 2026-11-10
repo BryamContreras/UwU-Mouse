@@ -447,8 +447,13 @@ El diario privado del shell registra antes de modificar: identidad de pantalla,
 tamaño base previo, presencia de override y tamaño propio esperado. Restaurar
 conserva un override anterior y no borra un cambio ajeno posterior. Un ID
 reutilizado nunca sustituye a la identidad original. La recuperación pendiente
-se intenta antes de publicar el motor; las operaciones posteriores exigen cierre
-de entradas. La propiedad pertenece al Binder del proceso de la app, no a la
+se intenta antes de publicar el motor sólo después de verificar que terminaron
+los productores anteriores y que el dispatcher no conserva contactos. Un diario
+nuevo vacío no sustituye esa prueba; si no puede completarse, se conserva el
+registro para reintentar. Las operaciones posteriores exigen cierre de entradas.
+Una restauración parcial conserva el antes y el tamaño observado como propios,
+o vuelve al tamaño propio anterior, para permitir reintentos sin borrar el registro.
+La propiedad pertenece al Binder del proceso de la app, no a la
 Activity del formulario. El cierre del propietario o del motor solicita restaurar
 cuando sea seguro; no se cambia geometría sobre contactos sin liberar.
 
