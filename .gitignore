@@ -61,6 +61,8 @@ app.*.map.json
 !/docs/ACTIVATE_PC.md
 !/docs/ACTIVATE_PHONE.md
 !/docs/MIGRATION_0_3_4.md
+!/docs/ARCHITECTURE_EN.md
+!/docs/CI_EN.md
 /attachments/
 /.codex/
 /.vscode/

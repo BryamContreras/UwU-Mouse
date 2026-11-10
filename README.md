@@ -28,7 +28,7 @@ The engine runs on the device under an authorized ADB shell identity. External i
 
 The minimum supported version is Android 14 (API 34). CI checks Android 14–17 framework behavior and builds the same application for **arm64-v8a**, **armeabi-v7a** and **x86_64**. Automated tests do not certify every manufacturer, accessory or game. The custom resolution feature was checked on a Samsung Android 14 phone with HDMI mirroring; physical DeX testing of the latest inline controls remains outstanding. Long gaming sessions and end-to-end latency require separate physical testing.
 
-Further technical details and historical measurements are available in the [architecture](ARCHITECTURE.md), [performance review](PERFORMANCE_REVIEW.md), [Android compatibility](docs/ANDROID_COMPATIBILITY.md) and [CI guide](docs/CI_ANDROID.md). These detailed documents are currently in Spanish; the [module READMEs](android/) are in English.
+See the English [architecture overview](docs/ARCHITECTURE_EN.md), [CI guide](docs/CI_EN.md) and [module READMEs](android/). Detailed historical measurements and compatibility contracts remain available in Spanish in the [architecture](ARCHITECTURE.md), [performance review](PERFORMANCE_REVIEW.md), [Android compatibility](docs/ANDROID_COMPATIBILITY.md) and [CI guide](docs/CI_ANDROID.md).
 
 ## Build and install
 
