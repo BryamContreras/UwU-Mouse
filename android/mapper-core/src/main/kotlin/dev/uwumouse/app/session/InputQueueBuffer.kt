@@ -9,6 +9,7 @@ data class InputQueueMetrics(
     val mergedMoves: Long,
     val relativeMergedMoves: Long,
     val cursorMergedMoves: Long,
+    val coalescedMotionEntries: Long = 0L,
 )
 
 /** Reused by the single consumer, never retained by the producer. */
@@ -58,6 +59,14 @@ class InputQueueBuffer {
     private var preserveCameraSamples = false
     private var cameraMaxDx = 0.0
     private var cameraMaxDy = 0.0
+    private var coalesceMotionBatches = false
+    private var coalescedMotionEntries = 0L
+
+    /** Only a prepared sample-preserving camera may opt in, at an empty session boundary. */
+    fun configureMotionBatchCoalescing(enabled: Boolean) {
+        check(size == 0) { "Configure motion batching before enqueueing the session" }
+        coalesceMotionBatches = enabled
+    }
 
     fun configureCameraMerge(maxDx: Double, maxDy: Double, preserveSamples: Boolean = false) {
         check(size == 0) { "Configure camera merging before enqueueing the session" }
@@ -149,23 +158,66 @@ class InputQueueBuffer {
         entry.firstSampleTimeNanos = firstSamples[head]; entry.lastSampleTimeNanos = lastSamples[head]
         entry.sampleCount = sampleCounts[head]
         entry.motionBatch = motionBatches[head]
-        motionBatches[head] = null
-        head = (head + 1) % CAPACITY; size--
+        var consumed = 1
+        if (coalesceMotionBatches && isCoalescibleMotion(head)) {
+            var samples = entry.sampleCount
+            // Look ahead without crossing an input edge, pointer epoch or generation.
+            // Flatten once on the consumer, rather than copying on every producer offer.
+            while (consumed < size) {
+                val index = (head + consumed) % CAPACITY
+                if (!isCoalescibleMotion(index) || codes[index] != entry.code || generations[index] != entry.generation ||
+                    sampleCounts[index] + samples > MOTION_BATCH_MAX_SAMPLES) break
+                samples += sampleCounts[index]
+                consumed++
+            }
+            if (consumed > 1) {
+                val sourceTimes = LongArray(samples)
+                val sourceXs = FloatArray(samples)
+                val sourceYs = FloatArray(samples)
+                var offset = 0
+                for (position in 0 until consumed) {
+                    val index = (head + position) % CAPACITY
+                    val original = motionBatches[index]
+                    if (original != null) {
+                        original.timesNanos.copyInto(sourceTimes, offset)
+                        original.xs.copyInto(sourceXs, offset)
+                        original.ys.copyInto(sourceYs, offset)
+                        offset += original.size
+                    } else {
+                        sourceTimes[offset] = lastSamples[index]
+                        sourceXs[offset] = xs[index].toFloat()
+                        sourceYs[offset] = ys[index].toFloat()
+                        offset++
+                    }
+                }
+                entry.type = 8
+                entry.motionBatch = RawMouseMotionBatch(sourceTimes, sourceXs, sourceYs)
+                entry.sampleCount = samples
+                entry.lastSampleTimeNanos = sourceTimes.last()
+                coalescedMotionEntries += consumed - 1L
+            }
+        }
+        repeat(consumed) { motionBatches[(head + it) % CAPACITY] = null }
+        head = (head + consumed) % CAPACITY; size -= consumed
         return true
     }
+
+    private fun isCoalescibleMotion(index: Int): Boolean =
+        types[index] == 8 || (types[index] == 3 && sampleCounts[index] == 1 && lastSamples[index] >= 0L)
 
     fun clear() { motionBatches.fill(null); size = 0; head = 0 }
 
     /** Does not discard pending events; maxDepth starts at the current depth. */
     fun resetMetrics() {
-        maxDepth = size; mergedMoves = 0L; relativeMergedMoves = 0L; cursorMergedMoves = 0L
+        maxDepth = size; mergedMoves = 0L; relativeMergedMoves = 0L; cursorMergedMoves = 0L; coalescedMotionEntries = 0L
     }
 
-    fun diagnostics() = InputQueueMetrics(size, maxDepth, mergedMoves, relativeMergedMoves, cursorMergedMoves)
+    fun diagnostics() = InputQueueMetrics(size, maxDepth, mergedMoves, relativeMergedMoves, cursorMergedMoves, coalescedMotionEntries)
 
     companion object {
         const val CAPACITY = 256
         const val CAMERA_MERGE_WINDOW_NANOS = 8_000_000L
         const val CAMERA_MERGE_MAX_SAMPLES = 8
+        const val MOTION_BATCH_MAX_SAMPLES = 256
     }
 }

@@ -47,6 +47,9 @@ class PrecisionAimFilter {
         clearMotion()
     }
 
+    /** Missing physical motion invalidates speed history without releasing the held trigger. */
+    fun discardMotionHistory() = clearMotion()
+
     fun filterX(dx:Float,sampleTimeNanos:Long):Float {
         // Preserve the original Float, including signed zero/NaN payload, on the legacy path.
         if(!enabled || !firing) return dx

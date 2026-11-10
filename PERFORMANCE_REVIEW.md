@@ -1,4 +1,4 @@
-# Revisión de rendimiento — 9 de noviembre de 2026
+# Revisión de rendimiento — 9 y 10 de noviembre de 2026
 
 Revisión del recorrido evdev → JNI/Binder → cola del motor → composición táctil →
 guardián → pipe → inyector, junto con cámara, transiciones, overlays, editor,
@@ -98,6 +98,45 @@ Fue entrada sintética a través del compositor e inyector reales, no una partid
 de varias horas ni una medición de latencia hasta la imagen.
 
 ## Validación física pendiente
+
+### Cámara reversible y entrada bajo carga: 0.3.6+44
+
+La revisión del 10 de noviembre encontró un residuo de aproximadamente 3,97
+píxeles táctiles en una pareja `+100, -100` de Free Fire, debido a la aproximación
+por muestra de una ganancia dependiente de la posición. La integración reversible
+de la curva y su suma compensada eliminan ese residuo sobre entradas admitidas.
+También se consume la primera muestra después de confirmar el DOWN, incluida
+la vuelta de Suspender. No se modifica la sensibilidad guardada; el recorrido de
+reportes grandes cambia respecto de la aproximación anterior.
+
+Las muestras aisladas ya usan la misma admisión directa que los lotes, sin arrays
+por muestra. Bajo carga, el consumidor une hasta 256 muestras contiguas sin
+cruzar controles, modo o generación. La cámara descarta movimiento con más de
+100 ms desde su timestamp `CLOCK_MONOTONIC`, conserva las muestras recientes
+y limpia el historial de precisión sin soltar M1. Los registros de edad tienen
+capacidad fija y distinguen muestras vencidas de timestamps inválidos.
+
+`scripts/Build.ps1 -Release` completó análisis, **103 pruebas Flutter y 932 JVM**,
+lint de todos los módulos, APK, ABI JSON de 143 clases y alineación de 16 KB.
+Un harness del controlador actual procesó **36 millones de muestras**, con dos
+horas virtuales por caso a 250/1000 Hz, lotes de 1/4 y precisión activada y
+desactivada. Los lotes producen las mismas coordenadas finales. Las parejas
+opuestas de 1, 10, 100 y 400 unidades tuvieron residuo táctil cero; se verificaron
+además saturación, inversión y renovación. Es una simulación de algoritmo en el
+ordenador, sin planificación Android, temperatura ni latencia hasta imagen.
+
+En el Samsung Android 14 con DeX conectado, el diagnóstico `labCamera` utilizó
+un perfil RAM y el receptor InputLab independiente en las pantallas **0 y 2**.
+Cada prueba recibió **23 eventos**, hasta tres contactos, cero errores y cero
+contactos pendientes. Los marcadores de transiciones confirmaron el retorno
+exacto tras la pareja opuesta y el lote, descarte de una muestra de 300 ms y
+renovación de cámara con el joystick inmóvil. No se inyectó esta secuencia en un
+juego ni se modificaron perfiles guardados. Evidencia privada en
+`evidence/camera-0.3.6/`; validación local en
+`build/camera-optimized-final-validation.log` y
+`build/camera-optimized-results.jsonl`.
+
+### Partidas prolongadas
 
 La revisión y las pruebas automáticas no certifican estabilidad durante horas.
 Falta ejecutar una partida prolongada con el APK optimizado y el mismo perfil,

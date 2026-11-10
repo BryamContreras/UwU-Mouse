@@ -70,6 +70,7 @@ class InputQueue(private val worker: Handler, private val consume: (Int, Int, Fl
     @Synchronized fun configureCameraMerge(maxDx: Double, maxDy: Double, preserveSamples:Boolean=false) =
         buffer.configureCameraMerge(maxDx, maxDy, preserveSamples)
     @Synchronized fun disableCameraMerge() = buffer.disableCameraMerge()
+    @Synchronized fun configureMotionBatchCoalescing(enabled:Boolean) = buffer.configureMotionBatchCoalescing(enabled)
     @Synchronized fun clear() = buffer.clear()
     @Synchronized fun isEmpty():Boolean = buffer.size==0
     @Synchronized fun resetMetrics() = buffer.resetMetrics()

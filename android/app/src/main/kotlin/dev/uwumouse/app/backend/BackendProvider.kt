@@ -100,7 +100,7 @@ class BackendProvider : ContentProvider() {
                 Bundle().apply { putBoolean("accepted",true);putString("json",org.json.JSONObject(imported).toString()) }
             } finally { Binder.restoreCallingIdentity(identity) }
         }
-        if(method in setOf("labPrepare","labProbe","labStop","labFault","labRecreateUi","labStale","labCursor","labMapped","labMacro","labActions","cameraTrial","profileCameraMode")) {
+        if(method in setOf("labPrepare","labProbe","labStop","labFault","labRecreateUi","labStale","labCursor","labMapped","labMacro","labActions","labCamera","cameraTrial","profileCameraMode")) {
             val identity=Binder.clearCallingIdentity()
             return try {
                 when(method) {
@@ -119,6 +119,7 @@ class BackendProvider : ContentProvider() {
                     "labCursor" -> SessionController.testCursorLab(requireNotNull(context))
                     "labMacro" -> SessionController.testMacroLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false)
                     "labActions" -> SessionController.testActionLab(requireNotNull(context),extras?.getInt("displayId",0) ?: 0)
+                    "labCamera" -> SessionController.testCameraLab(requireNotNull(context),extras?.getInt("displayId",0) ?: 0)
                     "labMapped" -> SessionController.testMappedLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false,extras?.getBoolean("hold",false) ?:false,extras?.getBoolean("precision",false) ?:false)
                     "cameraTrial" -> SessionController.configureCameraTrial(requireNotNull(extras?.getString("strategy")))
                     "profileCameraMode" -> {

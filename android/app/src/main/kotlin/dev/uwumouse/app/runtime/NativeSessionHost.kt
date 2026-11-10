@@ -78,18 +78,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             // oneway calls on this one Binder node arrive serially. A prior key,
             // button or UI callback blocks this lane until main has queued its work.
             // No lifecycle lock or UI/Binder call is made while reading the gate.
-            val dispatch=if(wheel==0f && horizontalWheel==0f && !startingNativeCapture && captureId==nativeCaptureId)
-                motionDispatch.dispatch(captureId,buttonState) { SessionController.tryNativeCameraBatch(batch,it) }
+            val dispatch=if(wheel==0f && horizontalWheel==0f)
+                dispatchNativeCameraMotion(captureId,buttonState,deviceIds.last(),size,eventTimesNanos.last()) {
+                    SessionController.tryNativeCameraBatch(batch,it)
+                }
                 else NativeMotionDispatchGate.Dispatch.DEFERRED
-            if(dispatch!=NativeMotionDispatchGate.Dispatch.DEFERRED) {
-                receivedMotionBatches++;receivedBatchedSamples+=size
-                if(dispatch==NativeMotionDispatchGate.Dispatch.DIRECT) {
-                    directCameraBatches++
-                    recordNativeCameraMotion(batch,deviceIds.last())
-                    if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_direct_dispatch",eventTimesNanos.last())
-                } else staleCameraBatches++
-                return
-            }
+            if(dispatch!=NativeMotionDispatchGate.Dispatch.DEFERRED) return
             if(pendingNativeSamples.addAndGet(size)>8192) {
                 pendingNativeSamples.addAndGet(-size);onCaptureLost(captureId,"native_sample_queue_overflow");return
             }
@@ -114,6 +108,16 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             keyDown:Boolean,keyRepeat:Boolean) {
             if(captureId!=nativeCaptureId && !startingNativeCapture) return
             if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_capture_binder_receipt",eventTimeNanos)
+            // Sparse/1000 Hz input reaches JNI through the scalar callback. It uses the
+            // same ordered camera lane as a batch, without adding JNI/Binder arrays or
+            // waiting for UI. Keys, wheels and button edges retain the main barrier.
+            if(NativeMotionDispatchGate.isMotionOnlyFrame(kind,eventTimeNanos,relX,relY,wheel,horizontalWheel,
+                    buttonState,keyScanCode,keyDown,keyRepeat)) {
+                val dispatch=dispatchNativeCameraMotion(captureId,buttonState,deviceId,1,eventTimeNanos) {
+                    SessionController.tryNativeCameraMotion(eventTimeNanos,relX,relY,it)
+                }
+                if(dispatch!=NativeMotionDispatchGate.Dispatch.DEFERRED) return
+            }
             if(!motionDispatch.defer()) {
                 onCaptureLost(captureId,"native_callback_queue_overflow");return
             }
@@ -442,6 +446,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if (!keysReleased() || (effectiveMouseCapture()!=appliedMouseCapture && physicalButtonsKnown && physicalButtons!=0)) {
             if (!sourceTailPending) {
                 sourceTailPending = true; deferredSourceChanges++
+                motionDispatch.publish(null)
                 main.postDelayed(sourceTailTimeout, 2_000)
             }
             return
@@ -534,18 +539,38 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
-        if(captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown ||
+        if(captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
             menuAwaitingRelease || wantsMenuPointer()) return null
         val route=SessionController.nativeCameraRoute(captureId,physicalButtons) ?: return null
         return route.takeIf { captureEpoch==it.generation }
     }
 
-    private fun recordNativeCameraMotion(batch:RawMouseMotionBatch,deviceId:Int) {
-        rawMotionCallbacks+=batch.size
+    private fun recordNativeCameraMotion(size:Int,deviceId:Int) {
+        rawMotionCallbacks+=size
         lastRawMotionSource=InputDevice.SOURCE_MOUSE;lastRawMotionAction=MotionEvent.ACTION_HOVER_MOVE
         lastRawMotionDeviceId=deviceId;lastRawMotionDeviceSources=InputDevice.SOURCE_MOUSE
         lastRawMotionDeviceKnown=true;lastRawMotionExternal=true;lastRawMotionVirtual=false;lastRawMotionFilter="native_exclusive_batch"
         lastInputDisplayId=SessionController.targetDisplayId
+    }
+
+    /** Scalars and batches share admission; the scalar lane needs no per-sample arrays. */
+    private inline fun dispatchNativeCameraMotion(captureId:Long,buttons:Int,deviceId:Int,size:Int,
+        sourceTimeNanos:Long,submit:(NativeMotionDispatchGate.Route)->Boolean):NativeMotionDispatchGate.Dispatch {
+        if(startingNativeCapture || captureId!=nativeCaptureId) return NativeMotionDispatchGate.Dispatch.DEFERRED
+        val dispatch=motionDispatch.dispatch(captureId,buttons) { route ->
+            if(submit(route)) {
+                recordNativeCameraMotion(size,deviceId)
+                true
+            } else false
+        }
+        if(dispatch!=NativeMotionDispatchGate.Dispatch.DEFERRED) {
+            receivedMotionBatches++;receivedBatchedSamples+=size
+            if(dispatch==NativeMotionDispatchGate.Dispatch.DIRECT) {
+                directCameraBatches++
+                if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_direct_dispatch",sourceTimeNanos)
+            } else staleCameraBatches++
+        }
+        return dispatch
     }
 
     private fun receiveMotionBatch(batch:RawMouseMotionBatch,deviceIds:IntArray,devicePaths:Array<String>,wheel:Float,buttons:Int) {
@@ -557,7 +582,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             captureFailure="native_batch_button_mismatch";SessionController.pause(nativeCaptureError);forceMouseOff("batch_buttons");return
         }
         if(SessionController.active && !SessionController.cursorMode && !wantsMenuPointer() && !menuAwaitingRelease) {
-            recordNativeCameraMotion(batch,deviceIds.last())
+            recordNativeCameraMotion(batch.size,deviceIds.last())
             mainCameraBatches++
             if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_main_dispatch",batch.timesNanos.last())
             physicalButtons=buttons;physicalButtonsKnown=true

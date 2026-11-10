@@ -1,5 +1,17 @@
 # Cambios de UwU Mouse
 
+## 0.3.6+44 — 2026-11-10
+
+- Cámara Free Fire: integración reversible de la curva de compensación. Las entradas opuestas equivalentes vuelven al mismo punto táctil y dividir un movimiento en muestras no altera su resultado.
+- Free Fire consume la primera muestra tras confirmar el contacto, también al volver de Suspender; evita perder el inicio de un giro.
+- Renovación del contacto de cámara al agotar el recorrido finito, conservando los demás dedos y la liberación verificada.
+- Las muestras aisladas de ratón usan la misma admisión directa que los lotes, sin esperar al hilo de interfaz ni crear arrays por muestra.
+- Agrupación acotada de lotes consecutivos bajo carga, conservando cada muestra, su tiempo y las barreras de teclas, botones y cambios de modo.
+- Presupuesto de antigüedad de 100 ms para la cámara física: descarta movimiento obsoleto, conserva muestras recientes y expone métricas del recorrido desde el reloj nativo hasta el motor.
+- Diagnóstico sintético en InputLab para inversiones, lotes, muestras antiguas y renovación con joystick, disponible en teléfono y pantalla externa sin modificar perfiles guardados.
+
+Los giros grandes pueden sentirse distintos: se conserva la curva local de compensación, pero se elimina la aproximación anterior que dependía del tamaño de cada muestra. La igualdad táctil no garantiza por sí sola igualdad de orientación en cada juego.
+
 ## 0.3.5+43 — 2026-11-10
 
 - Corrige el cierre de sesión en Samsung DeX cuando Android conserva únicamente un cursor de ratón con fuente combinada `TOUCHSCREEN | MOUSE`. Se exige que no haya contactos pulsados ni punteros interceptados y que la captura y todos los inyectores estén detenidos, igual que en el teléfono.

@@ -21,7 +21,7 @@ class SmoothMotionStabilityTest {
         val frames=mutableListOf<TouchFrame>()
         val composer=TouchComposer({now},{ frames+=it;true },continuousCamera=true)
         val engine=MappingEngine(composer,prepared.geometry,prepared.bindings,{now}).apply {
-            setCameraEnabled(true);check(relativeMouse(1f,0f))
+            setCameraEnabled(true);check(relativeMouse(1f,0f));check(relativeMouse(-1f,0f))
         }
         val precision=PrecisionAimFilter().apply { configure(prepared.profile.camera.precisionAim) }
         fun fire(held:Boolean) {
@@ -130,7 +130,8 @@ class SmoothMotionStabilityTest {
         assertEquals(false,h.precision.snapshot()["firing"])
         val leave=requireNotNull(gate.hold(false));assertEquals(false,gate.requestedCursor(leave))
         assertTrue(h.engine.leaveCursorMode());gate.acknowledge(leave,false)
-        assertTrue(h.engine.relativeMouse(1f,0f))
+        assertTrue(h.engine.relativeMouse(100f,0f))
+        assertTrue(h.engine.relativeMouse(-100f,0f))
         assertEquals(start,h.camera());assertEquals(saved,h.profile)
         assertEquals(1f,h.precision.filterX(1f,16_000_000),0f)
     }

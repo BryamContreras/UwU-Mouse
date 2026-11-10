@@ -150,4 +150,141 @@ class NativeMotionDispatchGateTest {
         pointer.invalidate()
         assertFalse(pointer.admitsMotion(current))
     }
+
+    @Test fun scalarMotionEligibilityKeepsWheelsKeysAndButtonOnlyFramesOnTheirOrderedPath() {
+        fun eligible(kind:Int=0,time:Long=100L,x:Float=.25f,y:Float=-.5f,wheel:Float=0f,
+            horizontal:Float=0f,buttons:Int=0,scan:Int=-1,down:Boolean=false,repeat:Boolean=false)=
+            NativeMotionDispatchGate.isMotionOnlyFrame(kind,time,x,y,wheel,horizontal,buttons,scan,down,repeat)
+        assertTrue(eligible())
+        assertTrue(eligible(x=0f,buttons=31)) // Physical held buttons are checked against the published route.
+        assertFalse(eligible(x=0f,y=0f)) // Button-only frame must reach main even with unchanged aggregate buttons.
+        assertFalse(eligible(kind=1,scan=30,down=true))
+        assertFalse(eligible(scan=30))
+        assertFalse(eligible(down=true))
+        assertFalse(eligible(repeat=true))
+        assertFalse(eligible(wheel=1f))
+        assertFalse(eligible(horizontal=-1f))
+        assertFalse(eligible(time=-1))
+        assertFalse(eligible(x=Float.NaN))
+        assertFalse(eligible(y=Float.POSITIVE_INFINITY))
+        assertFalse(eligible(buttons=32))
+        assertFalse(eligible(kind=2))
+    }
+
+    @Test fun scalarAndFullBatchesKeepEveryDeltaAndCannotPassAnEarlierButtonOrKey() {
+        val gate=NativeMotionDispatchGate()
+        val queue=InputQueueBuffer()
+        val main=ArrayDeque<()->Unit>()
+        val expected=mutableListOf<String>()
+        val received=mutableListOf<String>()
+        val entry=InputQueueEntry()
+        var sourceTime=1L
+        var buttons=0
+        var scalarDirect=0
+        var batchDirect=0
+        var deferred=0
+        gate.publish(route())
+        fun drain() {
+            while(queue.pollInto(entry)) {
+                assertEquals(7L,entry.generation)
+                when(entry.type) {
+                    3 -> {
+                        assertEquals(42,entry.code)
+                        received+="motion:${entry.lastSampleTimeNanos}:${entry.x.toFloat()}:${entry.y.toFloat()}"
+                    }
+                    8 -> {
+                        assertEquals(42,entry.code)
+                        val batch=requireNotNull(entry.motionBatch)
+                        for(index in batch.timesNanos.indices)
+                            received+="motion:${batch.timesNanos[index]}:${batch.xs[index]}:${batch.ys[index]}"
+                    }
+                    else -> received+="edge:${entry.type}:${entry.code}"
+                }
+            }
+        }
+        fun completeMain() { while(main.isNotEmpty()) main.removeFirst().invoke() }
+        fun motion(size:Int,sourceButtons:Int) {
+            val times=LongArray(size) { sourceTime++ }
+            val xs=FloatArray(size) { if(it%2==0) .25f else -.5f }
+            val ys=FloatArray(size) { -xs[it] }
+            for(index in times.indices) expected+="motion:${times[index]}:${xs[index]}:${ys[index]}"
+            val batch=if(size==1) null else RawMouseMotionBatch(times,xs,ys)
+            val outcome=gate.dispatch(11,sourceButtons) { target ->
+                assertEquals(42,target.pointerEpoch)
+                if(batch==null) {
+                    scalarDirect++
+                    queue.offer(3,target.pointerEpoch,xs[0],ys[0],times[0],target.generation,times[0])
+                } else {
+                    batchDirect++
+                    queue.offerMotionBatch(batch,times[0],target.generation,target.pointerEpoch)
+                }
+            }
+            if(outcome==NativeMotionDispatchGate.Dispatch.DEFERRED) {
+                deferred++
+                assertTrue(gate.defer())
+                main.addLast {
+                    if(batch==null) assertTrue(queue.offer(3,42,xs[0],ys[0],times[0],7L,times[0]))
+                    else assertTrue(queue.offerMotionBatch(batch,times[0],7L,42))
+                    gate.complete(route(buttons))
+                }
+            } else assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,outcome)
+        }
+        repeat(100) { cycle ->
+            motion(1,buttons)
+            motion(256,buttons)
+            assertTrue(gate.defer())
+            val nextButtons=buttons xor 1
+            expected+="edge:2:$cycle"
+            main.addLast {
+                buttons=nextButtons
+                assertTrue(queue.offer(2,cycle,buttons.toFloat(),0f,sourceTime,7L))
+                gate.complete(route(buttons))
+            }
+            // Even the unchanged old mask cannot bypass an edge that has already reached Binder.
+            motion(1,buttons)
+            motion(256,nextButtons)
+            assertTrue(gate.defer())
+            expected+="edge:1:$cycle"
+            main.addLast {
+                assertTrue(queue.offer(1,cycle,1f,0f,sourceTime,7L))
+                gate.complete(route(buttons))
+            }
+            motion(1,nextButtons)
+            completeMain()
+            drain()
+        }
+        assertEquals(expected,received)
+        assertEquals(100,scalarDirect)
+        assertEquals(100,batchDirect)
+        assertEquals(300,deferred)
+        assertEquals(0,gate.pendingCallbacks)
+        assertEquals(0,queue.size)
+    }
+
+    @Test fun aScalarClaimCannotInjectAfterItsCaptureOrModeWasInvalidated() {
+        val gate=NativeMotionDispatchGate()
+        val pointer=PointerTransitionGate().apply { begin(false) }
+        val oldEpoch=requireNotNull(pointer.motionEpoch())
+        gate.publish(NativeMotionDispatchGate.Route(11,7L,0,oldEpoch))
+        var admitted=0
+        assertEquals(NativeMotionDispatchGate.Dispatch.STALE,gate.dispatch(11,0) { claimed ->
+            assertEquals(oldEpoch,claimed.pointerEpoch)
+            pointer.invalidate()
+            gate.publish(null)
+            val valid=pointer.admitsMotion(claimed.pointerEpoch)
+            if(valid) admitted++
+            valid
+        })
+        assertEquals(0,admitted)
+        assertEquals(NativeMotionDispatchGate.Dispatch.DEFERRED,gate.dispatch(11,0) {
+            fail("No scalar may inject while there is no active route")
+            true
+        })
+        gate.publish(route(captureId=12,generation=8))
+        assertEquals(NativeMotionDispatchGate.Dispatch.DEFERRED,gate.dispatch(11,0) {
+            fail("A previous capture must not inject into its replacement")
+            true
+        })
+        assertEquals(0,admitted)
+    }
 }

@@ -130,6 +130,11 @@ object SessionController {
     private val queueWait = RollingLatencySamples(2048)
     private val ipcTime = RollingLatencySamples(2048)
     private val cameraDeliveryWait = RollingLatencySamples(2048)
+    private val cameraSourceAge = RollingLatencySamples(2048)
+    @Volatile private var expiredCameraSamples = 0L
+    @Volatile private var invalidCameraTimeSamples = 0L
+    @Volatile private var maxCameraSourceAgeNanos = 0L
+    private var cameraSampleDiscontinuity = false // Engine worker only.
     @Volatile private var testRunning = false
     @Volatile private var generation = 0L
     @Volatile private var lastAttemptedFrame:TouchFrame?=null
@@ -186,7 +191,10 @@ object SessionController {
                     }
                     cadence?.input("mouse",code,x!=0f,cadenceCanStart)
                 }
-                3 -> if (camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled()) {
+                3 -> if (camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled() &&
+                    (runtimeProfile?.bindings?.ggCameraPolicy==null || code==InputQueueEntry.NO_POINTER_EPOCH ||
+                        pointerTransition.admitsMotion(code))) {
+                    if(!admitPhysicalCameraSample(queue.consumingSampleTimeNanos)) return@InputQueue
                     if(nativeRatePacing && (runtimeProfile?.bindings?.ggCameraPolicy!=null ||
                         runtimeProfile?.bindings?.continuousCamera==false || cameraResetBatchSupported)) {
                         if(!beginBoundedMoveDrain() || engine?.relativeMouse(precisionMouseX(x),y)!=true) {
@@ -211,7 +219,8 @@ object SessionController {
                         if(!beginBoundedMoveDrain()) { if(active) pause("No se pudo preparar el movimiento de cámara");return@InputQueue }
                         val completed=batch.deliverMotion { dx,dy,time ->
                             active && targetConfirmed && run==generation &&
-                                currentEngine.relativeMouse(precisionAimFilter.filterX(dx,time),dy)
+                                (!admitPhysicalCameraSample(time) ||
+                                    currentEngine.relativeMouse(precisionAimFilter.filterX(dx,time),dy))
                         }
                         if(!completed) {
                             inputDrainMoveComposer=null;sink.discardMoveBatch()
@@ -270,6 +279,29 @@ object SessionController {
         requestCameraIdleRetirement()
         requestGgCameraWakeup()
     })
+
+    /** Worker admission only: old physical displacements never build a delayed camera tail. */
+    private fun admitPhysicalCameraSample(sampleTimeNanos:Long):Boolean {
+        if(runtimeProfile?.bindings?.ggCameraPolicy==null || sampleTimeNanos==InputQueueEntry.NO_SAMPLE_TIME) return true
+        val age=CameraSampleAgePolicy.ageNanos(sampleTimeNanos,System.nanoTime())
+        synchronized(metricsLock) {
+            if(age==CameraSampleAgePolicy.INVALID_AGE) invalidCameraTimeSamples++
+            else {
+                cameraSourceAge.record(age)
+                maxCameraSourceAgeNanos=maxOf(maxCameraSourceAgeNanos,age)
+                if(!CameraSampleAgePolicy.admitsAge(age)) expiredCameraSamples++
+            }
+        }
+        if(!CameraSampleAgePolicy.admitsAge(age)) {
+            cameraSampleDiscontinuity=true
+            return false
+        }
+        if(cameraSampleDiscontinuity) {
+            precisionAimFilter.discardMotionHistory()
+            cameraSampleDiscontinuity=false
+        }
+        return true
+    }
 
     /** One bounded wakeup per moving burst; defer while application input is queued. */
     private fun usesIdleCameraRetirement():Boolean=runtimeProfile?.bindings?.let {
@@ -656,7 +688,11 @@ object SessionController {
             check(backendState.getInt("displayId",-1)==displayId) { "El motor no confirmó la pantalla de destino" }
             originalTargetUid=backendState.getInt("targetUid",-1)
             lastAttemptedFrame=null;lastMotorError=null;firstRejectedInput=null
-            synchronized(metricsLock) { queueWait.clear();ipcTime.clear();cameraDeliveryWait.clear();cameraResetIpcTime.clear();metricsSessionId=sid }
+            synchronized(metricsLock) {
+                queueWait.clear();ipcTime.clear();cameraDeliveryWait.clear();cameraResetIpcTime.clear();cameraSourceAge.clear()
+                expiredCameraSamples=0L;invalidCameraTimeSamples=0L;maxCameraSourceAgeNanos=0L;metricsSessionId=sid
+            }
+            cameraSampleDiscontinuity=false
             cameraResetBatches=0L;cameraResetFailures=0L;cameraResetUnknownProgress=0L
             // Continuous look retains its finger while moving; renew only during real short pauses.
             cameraResetBatchSupported=packageName!=TARGET && !continuousCamera &&
@@ -677,6 +713,7 @@ object SessionController {
                 preserveSamples=runtimeProfile?.profile?.camera?.precisionAim==true || cameraResetBatchSupported ||
                     runtimeProfile?.bindings?.ggCameraPolicy!=null)
             else queue.disableCameraMerge()
+            queue.configureMotionBatchCoalescing(runtimeProfile?.bindings?.ggCameraPolicy!=null)
             if (run != generation) { releaseOnWorker(); return false }
             composer = TouchComposer(SystemClock::uptimeMillis, { frame ->
                 if (run != generation || stopping || !(active || (testRunning && probeStarted))) false else {
@@ -928,7 +965,8 @@ object SessionController {
                 cameraIdlePolicy.sourceMotion(sampleTimeNanos)
                 cameraIdlePolicy.motionReceived(SystemClock.elapsedRealtimeNanos())
             }
-            relativeSampleCount.incrementAndGet();queue.offer(3,x=dx,y=dy,generation=generation,sampleTimeNanos=sampleTimeNanos)
+            relativeSampleCount.incrementAndGet();queue.offer(3,code=InputQueueEntry.NO_POINTER_EPOCH,
+                x=dx,y=dy,generation=generation,sampleTimeNanos=sampleTimeNanos)
         }
     }
     fun mouseBatch(batch:RawMouseMotionBatch) {
@@ -955,6 +993,19 @@ object SessionController {
         enqueueMouseBatch(batch,run,trackIdle=false,pointerEpoch=route.pointerEpoch)
         // Even an overflow is handled here: its ordinary pause/release path owns the failure.
         // Returning false after an offer would let the caller submit this same batch twice.
+        return true
+    }
+    /** The one-sample native lane needs no temporary timestamp/X/Y arrays. */
+    fun tryNativeCameraMotion(sampleTimeNanos:Long,dx:Float,dy:Float,route:NativeMotionDispatchGate.Route):Boolean {
+        if(sampleTimeNanos<0L || !dx.isFinite() || !dy.isFinite()) return false
+        val run=route.generation
+        if(run!=generation || !active || !targetConfirmed || !camera || pointerTransitionPending ||
+            runtimeProfile?.bindings?.ggCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
+        inputMouseCount.incrementAndGet()
+        if(dx!=0f || dy!=0f) {
+            relativeSampleCount.incrementAndGet()
+            queue.offer(3,code=route.pointerEpoch,x=dx,y=dy,generation=run,sampleTimeNanos=sampleTimeNanos)
+        }
         return true
     }
     private fun enqueueMouseBatch(batch:RawMouseMotionBatch,run:Long,trackIdle:Boolean,pointerEpoch:Int) {
@@ -1241,6 +1292,88 @@ object SessionController {
         } }
         worker.post(await)
     }
+    /** Shell-only camera regression, targeted exclusively at the independent InputLab receiver. */
+    fun testCameraLab(context:Context,displayId:Int=0) {
+        if(Looper.myLooper()!=Looper.getMainLooper()) {
+            main.post { runCatching { testCameraLab(context,displayId) }.onFailure { pause(it.message ?: "Falló la prueba de cámara") } }
+            return
+        }
+        check(environment.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
+        useLaboratory(displayId)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,displayId)
+        val bounds=requireNotNull(environment.boundsForPackage(TARGET)) { "Receptor sin ventana verificada" }
+        val profile=GameProfile.create(TARGET,"Cámara InputLab",display.width,display.height,display.rotation).let {
+            it.copy(calibration=it.calibration.copy(confirmed=true,
+                area=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat())),
+                camera=it.camera.copy(enabled=true,mode=CameraSpec.SMOOTH,suspendKey=0,
+                    sensitivityX=.7f,sensitivityY=.7f,updateRateHz=0,precisionAim=false),
+                action=ActionSpec(.87f,.80f,code=62),shortcuts=SessionShortcuts(138,139,0))
+        }
+        val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation)
+        // Exercise Free Fire's mathematical policy without ever targeting the game or saving a profile.
+        armProfile(prepared.copy(bindings=prepared.bindings.copy(
+            ggCameraPolicy=requireNotNull(prepared.bindings.ggCameraPolicy).copy(freeFire=true))))
+        activeProfileId=null
+        val run=generation
+        val deadline=SystemClock.uptimeMillis()+5000
+        syntheticProbe="Preparando inversiones, entrada antigua y renovación de cámara; entrada sintética"
+        val await=object:Runnable { override fun run() {
+            if(run!=generation) return
+            if(!active || !environment.inputDispatchIdle()) {
+                if(SystemClock.uptimeMillis()<deadline) worker.postDelayed(this,20)
+                else pause("No inició la prueba de cámara")
+                return
+            }
+            fun step(delay:Long,action:()->Unit) {
+                worker.postDelayed({ if(run==generation && active && targetConfirmed) action() },delay)
+            }
+            fun mark() { key(62,true);key(62,false) }
+            fun verifyAnchor(stage:String):Boolean {
+                val contact=composer?.snapshot()?.singleOrNull { it.owner==MappingEngine.CAMERA_OWNER }
+                val ok=contact!=null && kotlin.math.abs(contact.x-prepared.geometry.cameraX)<=.0001f &&
+                    kotlin.math.abs(contact.y-prepared.geometry.cameraY)<=.0001f
+                if(!ok) { syntheticProbe="Falló cámara: $stage";pause("Falló el diagnóstico de cámara: $stage") }
+                return ok
+            }
+            step(0) { mouse(1f,0f,System.nanoTime());mouse(-1f,0f,System.nanoTime()) }
+            step(50) { key(51,true);mark() }
+            step(100) { mouse(100f,0f,System.nanoTime()) }
+            step(150) { mark() }
+            step(200) { mouse(-100f,0f,System.nanoTime()) }
+            step(250) { if(verifyAnchor("inversión de 100")) mark() }
+            step(300) {
+                val now=System.nanoTime()
+                mouseBatch(RawMouseMotionBatch(LongArray(64) { now-(63-it)*100_000L },
+                    FloatArray(64) { if(it<32) 4f else -4f },
+                    FloatArray(64) { if(it<32) 2f else -2f }))
+            }
+            step(400) { if(verifyAnchor("lote de inversiones")) mark() }
+            step(450) {
+                val now=System.nanoTime()
+                mouseBatch(RawMouseMotionBatch(longArrayOf(now-300_000_000L,now-2_000_000L,now-1_000_000L),
+                    floatArrayOf(400f,5f,-5f),floatArrayOf(0f,0f,0f)))
+            }
+            step(550) { if(verifyAnchor("muestra antigua")) mark() }
+            step(600) { mouse(0f,100_000_000f,System.nanoTime()) }
+            step(700) { mouse(0f,10f,System.nanoTime()) }
+            step(800) {
+                val contacts=composer?.snapshot().orEmpty()
+                val camera=contacts.singleOrNull { it.owner==MappingEngine.CAMERA_OWNER }
+                val expectedY=prepared.geometry.cameraY+7f
+                if(camera==null || kotlin.math.abs(camera.y-expectedY)>.001f ||
+                    contacts.none { it.owner=="joystick" }) {
+                    syntheticProbe="Falló cámara: renovación con joystick mantenido"
+                    pause("Falló el diagnóstico de renovación de cámara")
+                } else mark()
+            }
+            step(900) { key(51,false) }
+            step(1000) {
+                syntheticProbe="Cámara sintética verificada: inversión sin residuo, lote, descarte antiguo y renovación con joystick"
+                pause("Fin de diagnóstico de cámara")
+            }
+        } }
+        worker.post(await)
+    }
     /** Shell-only RAM profile: real shared composer, independent receiver, no saved game edits. */
     fun testMacroLab(context:Context,automated:Boolean) {
         if(Looper.myLooper()!=Looper.getMainLooper()) {
@@ -1327,7 +1460,7 @@ object SessionController {
                 step(40) { button(1,true) }
                 if(precision) repeat(4) { index ->
                     step(50L+index*8L) {
-                        mouse(if(index%2==0) 1f else -1f,.25f,SystemClock.elapsedRealtimeNanos())
+                        mouse(if(index%2==0) 1f else -1f,.25f,System.nanoTime())
                         // Non-MOVE marker frames retain exact admitted coordinates even if Android
                         // resamples/coalesces MOVE callbacks. This is laboratory-only input.
                         key(requireNotNull(precisionMarkerKey),true);key(precisionMarkerKey,false)
@@ -1571,7 +1704,13 @@ object SessionController {
             "metricsSessionId" to metricsSessionId,"queueDiagnostics" to mapOf(
                 "currentDepth" to queueDiagnostic.currentDepth,"maxDepth" to queueDiagnostic.maxDepth,
                 "mergedMoves" to queueDiagnostic.mergedMoves,"relativeMergedMoves" to queueDiagnostic.relativeMergedMoves,
-                "cursorMergedMoves" to queueDiagnostic.cursorMergedMoves),
+                "cursorMergedMoves" to queueDiagnostic.cursorMergedMoves,
+                "coalescedMotionEntries" to queueDiagnostic.coalescedMotionEntries),
+            "cameraMotionFreshness" to mapOf("budgetMs" to CameraSampleAgePolicy.MAX_AGE_NANOS/1e6,
+                "clock" to "CLOCK_MONOTONIC","sampleAgeMs" to percentiles(cameraSourceAge),
+                "maxSampleAgeMs" to maxCameraSourceAgeNanos/1e6,"expiredSamples" to expiredCameraSamples,
+                "invalidTimeSamples" to invalidCameraTimeSamples,
+                "scope" to "Last 2048 physical GG camera sample ages at worker admission, including expired samples; excludes injection and presentation"),
             "backendTimingSessionId" to backend?.getLong("timingSessionId"),
             "backendFocusMs" to backend?.getDoubleArray("focusMs")?.toList(),
             "backendPipeMs" to backend?.getDoubleArray("pipeMs")?.toList(),

@@ -312,6 +312,8 @@ está en Frecuencia y rendimiento (informe local no distribuido).
 `smooth` es la única política de cámara para perfiles de juego; no hay selector.
 Deriva del control principal visible en el Java de GG Mouse Pro 3.3.2, con ajustes
 para conservar fracciones y reducir la dependencia de la agrupación de entradas.
+Desde 0.3.6 integra la curva horizontal de forma reversible, en lugar de aplicar
+una aproximación de Euler independiente a cada muestra.
 Los perfiles nuevos usan sensibilidad X/Y de **0,70** y captura a **250 Hz**.
 Los tags antiguos `bounded` y `continuous` siguen siendo legibles en documentos,
 pero el compilador siempre prepara `smooth`; editar y guardar lo persiste, y
@@ -330,10 +332,20 @@ La política depende del paquete del juego:
   comprobaciones cada 350 ms. Se conservan estas pérdidas de muestras de GG.
 - En paquetes que contienen `com.dts.freefire` o `com.garena.game.ffi`, se utiliza
   su política específica de Free Fire: contacto continuo, ancla fija y límites
-  finitos de coordenadas **±666 666**. No reinicia al
-  cruzar el área ni durante quietud. El desplazamiento horizontal se multiplica
-  por `2 * (.98 / (5.6 * r * r + 1) + .02)` antes de aplicar la sensibilidad X,
-  donde `r = abs(cameraXConfigurada - contactoXActual) / max(anchoÁreaJuego, altoÁreaJuego)`.
+  finitos de coordenadas **±666 666**. No reinicia al cruzar el área ni durante
+  quietud. La primera muestra se consume después de confirmar el DOWN, también
+  al volver de Suspender. Si una muestra agota el recorrido, retira únicamente el contacto de
+  cámara desde su última posición, lo inicia en el ancla y consume la muestra
+  actual; los demás dedos se conservan. Cada transición requiere su ACK y un
+  fallo detiene la secuencia. Una muestra individual que exceda todo el recorrido
+  se recorta sin almacenar el exceso.
+  La ganancia local horizontal es
+  `2 * (.98 / (5.6 * r * r + 1) + .02)`,
+  donde `r = abs(anclaX - contactoXActual) / max(anchoÁreaJuego, altoÁreaJuego)`.
+  Se acumula la entrada con suma compensada en el dominio de la integral inversa
+  de esa ganancia y se resuelve la posición con iteraciones acotadas. Esto evita
+  el residuo de una pareja de entradas opuestas y la dependencia de su partición,
+  conservando la curva local; los flicks grandes cambian respecto de Euler.
   El eje Y conserva su ganancia lineal. La región personalizada no interviene en
   esta política. Se utiliza la curva visible sin estado premium; no se selecciona
   la variante premium sin disponer de ese estado.
@@ -349,6 +361,21 @@ de lote, movimientos pequeños a coordenadas grandes y ventanas iguales sobre
 displays diferentes. No acreditan los mismos cm/360 entre resoluciones o DPI.
 Los controles y las liberaciones conservan destino, propiedad y recuperación del
 inyector de UwU; el lector nativo y el backend siguen siendo propios.
+
+Los escalares de movimiento puro y los lotes comparten la admisión directa
+Binder→worker. Una tecla, botón, rueda, cambio de fuente o callback pendiente en
+main conserva la barrera de orden; la generación y el modo se revalidan al
+consumir. La ruta escalar no construye arrays. El consumidor puede unir hasta
+256 muestras contiguas del mismo modo/generación, copiándolas una sola vez y
+aplicando filtro y compensación individualmente antes de agrupar MOVE.
+
+La cámara GG física compara el tiempo original con `System.nanoTime()`
+(`CLOCK_MONOTONIC`, igual que la captura nativa), con un presupuesto de 100 ms.
+Las muestras antiguas o futuras inválidas se descartan antes del filtro; las
+recientes se conservan. Se limpia el historial de precisión conservando M1.
+No se descartan teclas, botones ni liberaciones. `cameraMotionFreshness` publica
+un ring acotado de edades, máximo observado y contadores de descartes. Esta edad
+termina en el motor, antes de inyección y presentación; no es latencia hasta imagen.
 
 Estas mejoras están en el núcleo compartido, sin condiciones de fabricante o
 DeX. Las regresiones comparan teléfono y display externo a 1080×2400, 1920×1080

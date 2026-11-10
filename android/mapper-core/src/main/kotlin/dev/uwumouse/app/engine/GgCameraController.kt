@@ -10,7 +10,7 @@ data class GgCameraPolicy(val freeFire:Boolean,val bounds:AimBounds,val referenc
 /**
  * GG-derived camera motion. Original samples are integrated before delivery coalesces;
  * Double coordinates retain fractional motion and every gesture uses the same anchor.
- * Free Fire uses GG's standard curve normalized to the calibrated game area.
+ * Free Fire integrates GG's standard curve reversibly over the calibrated game area.
  */
 class GgCameraController(
     private val composer:TouchComposer,
@@ -21,9 +21,13 @@ class GgCameraController(
     init { require(composer.continuousCamera) }
 
     private var active=false
+    private val anchorX=geometry.cameraX.coerceIn(0f,geometry.width-1f)
+    private val anchorY=geometry.cameraY.coerceIn(0f,geometry.height-1f)
     // Keep fractional motion even when Android's final Float coordinate cannot represent it yet.
-    private var cameraX=geometry.cameraX.toDouble()
-    private var cameraY=geometry.cameraY.toDouble()
+    private var cameraX=anchorX.toDouble()
+    private var cameraY=anchorY.toDouble()
+    private val horizontalCompensation=if(policy.freeFire) FreeFireCompensation(
+        anchorX.toDouble(),policy.referenceWidth.toDouble(),FREE_FIRE_COORDINATE_LIMIT) else null
     private var lastActivityAt:Long?=null
     private var nextAllowedStartAt=0L
     private var pendingStartAt:Long?=null
@@ -43,18 +47,14 @@ class GgCameraController(
     /** The engine owns releases when changing modes; cancel only this controller's timers. */
     fun reset() {
         active=false
-        cameraX=geometry.cameraX.toDouble();cameraY=geometry.cameraY.toDouble()
+        cameraX=anchorX.toDouble();cameraY=anchorY.toDouble()
+        horizontalCompensation?.reset()
         lastActivityAt=null;nextAllowedStartAt=0L;pendingStartAt=null;nextIdleCheckAt=null
     }
 
     fun motion(rawDx:Float,rawDy:Float):Boolean {
         if(!rawDx.isFinite() || !rawDy.isFinite()) return false
-        val horizontal=if(policy.freeFire) {
-            val distance=abs(geometry.cameraX.toDouble()-cameraX)/policy.referenceWidth
-            // Preserve source operation order: 5.6*r*r, rather than (5.6*r)^2.
-            rawDx.toDouble()*((.98/((5.6*distance)*distance+1.0))+.02)*2.0
-        } else rawDx.toDouble()
-        val dx=horizontal*geometry.sensitivityX*if(geometry.invertX) -1 else 1
+        val dx=rawDx.toDouble()*geometry.sensitivityX*if(geometry.invertX) -1 else 1
         val dy=rawDy.toDouble()*geometry.sensitivityY*if(geometry.invertY) -1 else 1
         return displayMotion(dx,dy)
     }
@@ -73,14 +73,28 @@ class GgCameraController(
             return true
         }
         if(!composer.hasOwner(MappingEngine.CAMERA_OWNER)) {
-            if(now>=nextAllowedStartAt) {
-                if(!beginCamera(now)) return false
-                pendingStartAt=null;lastActivityAt=now
-            } else if(pendingStartAt==null) pendingStartAt=nextAllowedStartAt
-            // GG starts/restarts the contact with this sample; it does not replay its delta.
-            return true
+            if(now<nextAllowedStartAt) {
+                if(pendingStartAt==null) pendingStartAt=nextAllowedStartAt
+                return true
+            }
+            if(!beginCamera(now)) return false
+            pendingStartAt=null;lastActivityAt=now
+            // Free Fire consumes the report after its DOWN is acknowledged. Dropping
+            // that first displacement would make a cold +dx/-dx pair asymmetric.
+            // Generic games retain their existing startup/edge-restart policy.
+            if(!policy.freeFire) return true
         }
-        val nextX=cameraX+dx
+        if(policy.freeFire &&
+            (horizontalCompensation!!.wouldClip(dx) || abs(cameraY+dy)>FREE_FIRE_COORDINATE_LIMIT) &&
+            (cameraX!=anchorX.toDouble() || cameraY!=anchorY.toDouble())) {
+            // Retire only camera at its last position, then begin at the safe anchor.
+            // A MOVE back to the anchor would rotate the game; an acknowledged UP/DOWN
+            // gives a new gesture without moving any held joystick/fire contact.
+            if(!composer.end(MappingEngine.CAMERA_OWNER)) return false
+            if(!beginCamera(now)) return false
+            restarts++
+        }
+        val nextX=horizontalCompensation?.advance(dx) ?: cameraX+dx
         val nextY=cameraY+dy
         if(policy.freeFire) {
             cameraX=nextX.coerceIn(-FREE_FIRE_COORDINATE_LIMIT,FREE_FIRE_COORDINATE_LIMIT)
@@ -113,6 +127,7 @@ class GgCameraController(
         x=x.coerceIn(0f,geometry.width-1f);y=y.coerceIn(0f,geometry.height-1f)
         if(!composer.begin(MappingEngine.CAMERA_OWNER,x,y,preferredId=TouchCoordinatePolicy.CAMERA_ID)) return false
         cameraX=x.toDouble();cameraY=y.toDouble()
+        horizontalCompensation?.reset()
         // Preserve the activation's idle-check phase without waking while no finger exists.
         advanceIdleCheckPast(now)
         return true

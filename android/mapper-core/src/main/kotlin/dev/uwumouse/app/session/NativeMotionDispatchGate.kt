@@ -46,4 +46,13 @@ class NativeMotionDispatchGate(private val capacity:Int=512) {
         val current=directRoute(captureId,buttons) ?: return Dispatch.DEFERRED
         return if(submit(current)) Dispatch.DIRECT else Dispatch.STALE
     }
+
+    companion object {
+        /** Only scalar movement is eligible; button identity is checked against the route. */
+        fun isMotionOnlyFrame(kind:Int,timeNanos:Long,x:Float,y:Float,wheel:Float,horizontalWheel:Float,
+            buttons:Int,keyScanCode:Int,keyDown:Boolean,keyRepeat:Boolean):Boolean =
+            kind==0 && keyScanCode<0 && !keyDown && !keyRepeat && timeNanos>=0L &&
+                x.isFinite() && y.isFinite() && (x!=0f || y!=0f) && wheel==0f && horizontalWheel==0f &&
+                buttons and 31.inv()==0
+    }
 }
