@@ -205,6 +205,109 @@ class AndroidCompatibilityTest {
         }
     }
 
+    @Test fun customResolutionChangesOnlyTheOwnedVirtualDisplayAndRestoresItsBounds() {
+        fun shell(command:String)=instrumentation.uiAutomation.executeShellCommand(command).use {
+            android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().use { reader -> reader.readText().trim() }
+        }
+        assertEquals("Resolution changes in this fixture are restricted to an emulator", "1",
+            shell("getprop ro.kernel.qemu"))
+        assertNull("This fixture must not attach a real input backend",BackendRegistry.injector)
+        assertFalse(SessionController.active)
+        assertEquals(0,SessionController.contacts)
+        val manager=context.getSystemService(DisplayManager::class.java)
+        val primaryBefore=onMain { TargetDisplayGeometry.read(context,Display.DEFAULT_DISPLAY) }
+        val images=ImageReader.newInstance(640,480,PixelFormat.RGBA_8888,2)
+        val peerImages=ImageReader.newInstance(320,240,PixelFormat.RGBA_8888,2)
+        var target:android.hardware.display.VirtualDisplay?=null
+        var peer:android.hardware.display.VirtualDisplay?=null
+        var ownedDisplayId:Int?=null
+        var failure:Throwable?=null
+        try {
+            val handler=Handler(Looper.getMainLooper())
+            images.setOnImageAvailableListener({ reader -> reader.acquireLatestImage()?.close() },handler)
+            peerImages.setOnImageAvailableListener({ reader -> reader.acquireLatestImage()?.close() },handler)
+            val flags=DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
+            val screen=requireNotNull(manager.createVirtualDisplay("UwU resolution fixture",640,480,
+                context.resources.configuration.densityDpi,images.surface,flags))
+            target=screen
+            val targetId=screen.display.displayId
+            assertTrue("A new owned virtual display must never be the primary",targetId>Display.DEFAULT_DISPLAY)
+            ownedDisplayId=targetId
+            assertEquals("WMS shell must address an owned public virtual display",0,screen.display.flags and Display.FLAG_PRIVATE)
+            val other=requireNotNull(manager.createVirtualDisplay("UwU resolution isolation fixture",320,240,
+                context.resources.configuration.densityDpi,peerImages.surface,flags))
+            peer=other
+            val peerId=other.display.displayId
+            assertTrue(peerId>Display.DEFAULT_DISPLAY)
+            assertNotEquals(targetId,peerId)
+            val targetBefore=onMain { TargetDisplayGeometry.read(context,targetId) }
+            val peerBefore=onMain { TargetDisplayGeometry.read(context,peerId) }
+            assertEquals(640,targetBefore.width);assertEquals(480,targetBefore.height)
+            assertEquals(320,peerBefore.width);assertEquals(240,peerBefore.height)
+            val original=shell("wm size -d $targetId")
+            assertTrue("Unexpected initial virtual display size: $original",original.contains("Physical size: 640x480"))
+            assertFalse("A newly created fixture must not inherit an override: $original",original.contains("Override size:"))
+
+            // Exercise the framework's real privileged per-display operation. An empty
+            // command response is not proof: both WMS and window metrics must change.
+            val applied=shell("wm size 800x600 -d $targetId")
+            await("The owned display did not become 800x600; wm output: $applied") {
+                onMain { TargetDisplayGeometry.read(context,targetId).let { it.width==800 && it.height==600 } }
+            }
+            val changed=shell("wm size -d $targetId")
+            assertTrue("WMS did not retain the target override: $changed",changed.contains("Override size: 800x600"))
+            assertEquals("An explicit target override changed the primary display",primaryBefore,
+                onMain { TargetDisplayGeometry.read(context,Display.DEFAULT_DISPLAY) })
+            assertEquals("An explicit target override changed another virtual display",peerBefore,
+                onMain { TargetDisplayGeometry.read(context,peerId) })
+
+            val restored=shell("wm size reset -d $targetId")
+            await("The owned display did not restore its original window metrics; wm output: $restored") {
+                onMain { TargetDisplayGeometry.read(context,targetId)==targetBefore }
+            }
+            val reset=shell("wm size -d $targetId")
+            assertTrue("The original base size changed: $reset",reset.contains("Physical size: 640x480"))
+            assertFalse("Reset left a logical override behind: $reset",reset.contains("Override size:"))
+            assertEquals(primaryBefore,onMain { TargetDisplayGeometry.read(context,Display.DEFAULT_DISPLAY) })
+            assertEquals(peerBefore,onMain { TargetDisplayGeometry.read(context,peerId) })
+            assertFalse(SessionController.active)
+            assertEquals(0,SessionController.contacts)
+        } catch(problem:Throwable) {
+            failure=problem
+            throw problem
+        } finally {
+            var cleanupFailure:Throwable?=null
+            fun clean(action:()->Unit) {
+                try { action() } catch(problem:Throwable) {
+                    val previous=cleanupFailure
+                    if(previous==null) cleanupFailure=problem else previous.addSuppressed(problem)
+                }
+            }
+            // Clear only our recorded non-primary ID, before releasing its display.
+            // An earlier assertion must not leave any override or ImageReader alive.
+            clean {
+                ownedDisplayId?.let { id ->
+                    check(id>Display.DEFAULT_DISPLAY)
+                    if(manager.getDisplay(id)!=null) {
+                        val output=shell("wm size reset -d $id")
+                        await("Fixture cleanup did not clear its own override: $output") {
+                            onMain { TargetDisplayGeometry.read(context,id).let { it.width==640 && it.height==480 } }
+                        }
+                    }
+                }
+            }
+            clean { target?.release() }
+            clean { peer?.release() }
+            clean { onMain { images.setOnImageAvailableListener(null,null);images.close() } }
+            clean { onMain { peerImages.setOnImageAvailableListener(null,null);peerImages.close() } }
+            clean { TargetDisplayGeometry.clear() }
+            cleanupFailure?.let { problem ->
+                val original=failure
+                if(original==null) throw problem else original.addSuppressed(problem)
+            }
+        }
+    }
+
     @Test fun primaryControlClosesOwnedExternalOverlayBeforeAndAfterDisplayRemoval() {
         val manager=context.getSystemService(DisplayManager::class.java)
         val primary=requireNotNull(manager.getDisplay(Display.DEFAULT_DISPLAY))

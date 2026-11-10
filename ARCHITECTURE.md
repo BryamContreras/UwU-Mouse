@@ -419,6 +419,46 @@ La valoración física de este ajuste sigue pendiente.
 Los resultados de cámara anteriores que figuran en Validación y referencias son
 históricos; sus números de pruebas y aceptaciones no validan esta nueva política.
 
+## Resolución personalizada de Sistema
+
+La burbuja abre una Activity nativa focusable para editar ancho y alto. Conserva
+la pantalla explícita y la rotación que tenía el juego antes de abrir los ajustes,
+porque la orientación de la propia Activity puede cambiar. Las dimensiones se
+convierten a coordenadas naturales; no se fuerza rotación, densidad ni modo físico.
+En duplicación HDMI cambia el tamaño lógico de la fuente que ejecuta el juego,
+lo que puede afectar también al teléfono. Un monitor externo no se identifica
+automáticamente como una fuente duplicada.
+
+El APK local analizado de GG Mouse Pro 1.18.0 ejecuta `wm size ancho×alto` y,
+por separado, `wm density`; su configuración es global para la pantalla
+predeterminada. La versión que contiene el APK se verificó directamente: el
+nombre del archivo no acredita una versión más reciente. UwU implementa la
+operación equivalente mediante WMS sobre una pantalla explícita, con un contrato
+Binder limitado y capacidad opcional, sin aceptar comandos arbitrarios.
+
+El controlador de la app cancela preparaciones pendientes, bloquea rearmados,
+termina el stream y retira las dos fuentes de captura. El supervisor vuelve a
+comprobar el diario, teclas y captura; reserva el cambio bajo su monitor y realiza
+WMS/persistencia fuera de él. Los valores permitidos son 500–8192 por lado,
+sujetos a los límites reales de Android. Un retorno `void` de WMS no acredita
+aplicación: se lee el tamaño efectivo y se revierte si no coincide.
+
+El diario privado del shell registra antes de modificar: identidad de pantalla,
+tamaño base previo, presencia de override y tamaño propio esperado. Restaurar
+conserva un override anterior y no borra un cambio ajeno posterior. Un ID
+reutilizado nunca sustituye a la identidad original. La recuperación pendiente
+se intenta antes de publicar el motor; las operaciones posteriores exigen cierre
+de entradas. La propiedad pertenece al Binder del proceso de la app, no a la
+Activity del formulario. El cierre del propietario o del motor solicita restaurar
+cuando sea seguro; no se cambia geometría sobre contactos sin liberar.
+
+La operación es fría, con IO serializado, trabajo pendiente acotado y workers que
+expiran tras reposo. No hay sondeo de resolución por frame. Se invalida la caché
+de geometría y la admisión previa; los perfiles guardados se conservan y no se
+reanudan acciones automáticamente. La nueva prueba de framework utiliza dos
+pantallas virtuales propias y comprueba cambio/restauración de una sin modificar
+la principal ni la otra virtual.
+
 ## Contexto de ventanas y presentación
 
 El provider de contexto tiene un worker de 250 ms y una antigüedad máxima de 750 ms.

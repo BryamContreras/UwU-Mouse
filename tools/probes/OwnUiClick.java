@@ -1,6 +1,7 @@
 import android.app.UiAutomation;
 import android.accessibilityservice.AccessibilityServiceInfo;
 import android.os.Looper;
+import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.accessibility.AccessibilityNodeInfo;
 import android.view.accessibility.AccessibilityWindowInfo;
@@ -49,6 +50,15 @@ public final class OwnUiClick {
             args = Arrays.copyOfRange(args, 2, args.length);
         }
         boolean longPress = args.length > 0 && "game_options".equals(args[0]);
+        boolean resolutionInput = args.length > 0 &&
+                ("resolution_width".equals(args[0]) || "resolution_height".equals(args[0]));
+        String numericValue = null;
+        if (resolutionInput) {
+            if (args.length != 2 || !args[1].matches("[0-9]{3,4}") ||
+                    Integer.parseInt(args[1]) < 500 || Integer.parseInt(args[1]) > 8192)
+                throw new IllegalArgumentException("Resolution input must be 500..8192");
+            numericValue = args[1];
+        }
         if (args.length > 0) args[0] = switch (args[0]) {
             case "game_options" -> "Jugar Free Fire";
             case "map_freefire" -> "Mapear Free Fire";
@@ -65,6 +75,13 @@ public final class OwnUiClick {
             case "home" -> "Inicio";
             case "connection" -> "Conexión";
             case "backend_stop" -> "Cerrar backend ADB";
+            case "system" -> "Sistema";
+            case "resolution" -> "Resolución personalizada";
+            case "resolution_width" -> "Ancho del juego en píxeles";
+            case "resolution_height" -> "Alto del juego en píxeles";
+            case "resolution_apply" -> "Aplicar resolución";
+            case "resolution_restore" -> "Restaurar resolución anterior";
+            case "resolution_refresh" -> "Actualizar estado";
             case "bubble" -> "UwU Mouse · abrir opciones";
             case "profiles" -> "Perfiles";
             case "new_profile" -> "Crear perfil";
@@ -112,7 +129,8 @@ public final class OwnUiClick {
         if (args.length < 1 || !Arrays.asList("Editar sobre el juego", "Colocar controles",
                 "Guardar", "Cancelar", "Iniciar en laboratorio", "Laboratorio y diagnóstico", "Probar inyección sintética",
                 "Iniciar sesión", "Detener", "Actualizar", "UwUMouse · abrir opciones", "Mapear", "Cerrar",
-                "Inicio", "Ajustes", "Conexión", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
+                "Inicio", "Ajustes", "Conexión", "Sistema", "Resolución personalizada", "Ancho del juego en píxeles", "Alto del juego en píxeles",
+                "Aplicar resolución", "Restaurar resolución anterior", "Actualizar estado", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
                 "Teclas", "WASD", "Cámara", "Acción", "Área", "Opciones del juego", "Cerrar menú", "Cerrar panel", "Cerrar sesión", "Free Fire",
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
                 "Macro", "Agregar punto", "Ubicar", "Asignar", "Quitar tecla de suspensión",
@@ -161,6 +179,13 @@ public final class OwnUiClick {
                     if (!ownNode(node, ownWindows)) continue;
                     if (node.isVisibleToUser() && (labelMatches(node.getText(), args[0]) ||
                             labelMatches(node.getContentDescription(), args[0]))) {
+                        if (resolutionInput) {
+                            if (!node.isEnabled() || !node.isEditable()) throw new IllegalStateException("Own resolution field disabled");
+                            Bundle value = new Bundle();
+                            value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, numericValue);
+                            System.out.println("own_ui_text accepted=" + node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, value) + " display=" + selectedDisplay);
+                            return;
+                        }
                         for (int parent = 0; ownNode(node, ownWindows) && parent < 5; parent++, node = node.getParent()) {
                             if (node.isEnabled() && (longPress ? node.isLongClickable() : node.isClickable())) {
                                 System.out.println("own_ui_click accepted=" + node.performAction(longPress ? AccessibilityNodeInfo.ACTION_LONG_CLICK : AccessibilityNodeInfo.ACTION_CLICK) + " display=" + selectedDisplay);

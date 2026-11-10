@@ -26,6 +26,10 @@ import java.net.ServerSocket
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.nio.ByteBuffer
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Stable authorized broker; the actual injector is a replaceable child process. */
 class SupervisedInjector(private val context: Context,private val identity:BackendIdentity=BackendIdentity()) : IInjector.Stub() {
@@ -131,6 +135,76 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         !closed && target==targetPackage && nativeContextAllows(target,display)
     }
     private val frameRateSampler=FrameRateSampler()
+    // Only the reservation touches the injection monitor. WMS and persistence are cold IO.
+    private var displayResolutionChanging=false
+    private val displayResolutionRestoreQueued=AtomicBoolean(false)
+    private val displayResolutionRestoreExecutor by lazy {
+        ThreadPoolExecutor(0,1,10,TimeUnit.SECONDS,ArrayBlockingQueue<Runnable>(1),
+            { task -> Thread(task,"UwuDisplayResolution").apply { isDaemon=true } },ThreadPoolExecutor.AbortPolicy())
+    }
+    private val displayResolution=DisplayResolutionManager(context,identity,::requestDisplayResolutionRestoration)
+    init {
+        // No Binder has been published and no input can exist yet. Recover a previous
+        // process's durable before-image before accepting the first begin/capture.
+        if(displayResolution.hasPendingRestoration)
+            privileged { displayResolution.restorePending();true }
+    }
+
+    private fun displayResolutionIdleLocked():Boolean {
+        val snapshot=journal.snapshot()
+        return DisplayResolutionAdmission.mayChange(
+            snapshot.state in setOf(RecoveryInjectionState.IDLE,RecoveryInjectionState.STOPPED,RecoveryInjectionState.RECOVERY_ADMITTED),
+            snapshot.possibleContacts,snapshot.activeContacts,snapshot.state==RecoveryInjectionState.RECOVERY_NEEDED,
+            forwardedKeys.size,keyReleaseUnverified,nativeCapture?.active==true,recoveryScheduled || state=="RECOVERING")
+    }
+    private fun reserveDisplayResolutionChange():Boolean=synchronized(this) {
+        if(closed || displayResolutionChanging || !displayResolutionIdleLocked()) false
+        else { displayResolutionChanging=true;true }
+    }
+    private fun finishDisplayResolutionChange(schedulePending:Boolean=false) {
+        synchronized(this) { displayResolutionChanging=false }
+        if(schedulePending && displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
+    }
+    private fun requestDisplayResolutionRestoration() {
+        if(!displayResolutionRestoreQueued.compareAndSet(false,true)) return
+        try {
+            displayResolutionRestoreExecutor.execute {
+                // A later owner-death event may enqueue one replacement while this runs.
+                displayResolutionRestoreQueued.set(false)
+                if(!reserveDisplayResolutionChange()) return@execute
+                try { privileged { displayResolution.restorePending();true } }
+                finally { finishDisplayResolutionChange() }
+            }
+        } catch(_:java.util.concurrent.RejectedExecutionException) { displayResolutionRestoreQueued.set(false) }
+    }
+    private fun blockedDisplayResolution(displayId:Int):Bundle=privilegedBundle {
+        displayResolution.status(displayId).apply {
+            putBoolean("operationSucceeded",false);putBoolean("changed",false)
+            putString("message","Pausa la sesión y espera a que se liberen los contactos y la captura antes de cambiar la resolución")
+        }
+    }
+    override fun getDisplayResolution(displayId:Int):Bundle {
+        authorize()
+        if(displayResolution.hasPendingRestoration && reserveDisplayResolutionChange()) {
+            try { privileged { displayResolution.restorePending();true } }
+            finally { finishDisplayResolutionChange() }
+        }
+        return privilegedBundle { displayResolution.status(displayId) }
+    }
+    override fun applyDisplayResolution(displayId:Int,displayUniqueId:String,width:Int,height:Int,owner:IBinder):Bundle {
+        authorize()
+        if(!reserveDisplayResolutionChange()) return blockedDisplayResolution(displayId)
+        return try { privilegedBundle {
+            displayResolution.restorePending()
+            displayResolution.apply(displayId,displayUniqueId,width,height,owner)
+        } } finally { finishDisplayResolutionChange(schedulePending=true) }
+    }
+    override fun restoreDisplayResolution(displayId:Int,displayUniqueId:String):Bundle {
+        authorize()
+        if(!reserveDisplayResolutionChange()) return blockedDisplayResolution(displayId)
+        return try { privilegedBundle { displayResolution.restore(displayId,displayUniqueId) } }
+        finally { finishDisplayResolutionChange() }
+    }
 
     override fun showVisualCursor(displayId:Int,x:Float,y:Float,sizeDp:Float):Long {
         authorize();return visualCursor.show(displayId,x,y,sizeDp)
@@ -268,6 +342,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private fun startConfiguredCapture(client:IPhysicalInputCallback,displayId:Int,targetPackage:String,
                                        mouse:Boolean,keyboard:Boolean,mouseRateHz:Int,batchTransport:Boolean):Bundle {
         authorize();check(!closed)
+        check(!displayResolutionChanging) { "Espera a que termine el cambio de resolución" }
         require(mouseRateHz in 0..1000)
         check(nativeContextAllows(targetPackage,displayId)) { "Ventana de destino sin foco o sin contexto actualizado" }
         selectTarget(targetPackage,policy=coordinatePolicy,displayId=displayId)
@@ -306,6 +381,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         privileged { nativeCapture?.stop(captureId);true }
         ownedCaptureId=nativeCapture?.activeId ?: 0L
         syncCapturePointer(forceRestore=true)
+        if(displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
     }
     override fun captureStatus():Bundle {
         authorize()
@@ -527,6 +603,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     }
     private fun selectTarget(packageName:String, expectedUid:Int?=null,
                              policy:TouchCoordinatePolicy=TouchCoordinatePolicy.STRICT,displayId:Int=0) {
+        check(!displayResolutionChanging) { "Espera a que termine el cambio de resolución" }
         require(packageName.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+")) && packageName!=identity.applicationId)
         require(displayId >= 0) { "Pantalla de destino no válida" }
         val identity=Binder.clearCallingIdentity()
@@ -824,7 +901,10 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         pointer.setSessionActive(false)
         clearExpiry()
         val snap=journal.snapshot()
-        if(snap.state==RecoveryInjectionState.RECOVERY_ADMITTED || snap.state==RecoveryInjectionState.STOPPED) return true
+        if(snap.state==RecoveryInjectionState.RECOVERY_ADMITTED || snap.state==RecoveryInjectionState.STOPPED) {
+            if(displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
+            return true
+        }
         if(terminalRetirementPending()) return false
         if(snap.explicitRejectedPointerUp) {
             if(scheduleOnFailure) scheduleRecovery("POINTER_UP_REJECTED")
@@ -832,14 +912,21 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         }
         journal.fail(snap.sessionId)
         val frame=journal.cancellationFrame(SystemClock.uptimeMillis())
-        if(frame==null) { journal.cancelled(snap.sessionId,true); state="PAUSED"; return true }
+        if(frame==null) {
+            journal.cancelled(snap.sessionId,true); state="PAUSED"
+            if(displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
+            return true
+        }
         if(!recoveryContextMatches(snap,targetPackage)) {
             if(scheduleOnFailure) scheduleRecovery("RELEASE_CONTEXT_UNAVAILABLE")
             return false
         }
         val ok=try { send(frame,snap.sessionId,2) } catch(_:Exception) { false }
         journal.cancelled(snap.sessionId,ok)
-        if(ok) state="PAUSED" else if(scheduleOnFailure) scheduleRecovery("RELEASE_PIPE_LOST")
+        if(ok) {
+            state="PAUSED"
+            if(displayResolution.hasPendingRestoration) requestDisplayResolutionRestoration()
+        } else if(scheduleOnFailure) scheduleRecovery("RELEASE_PIPE_LOST")
         return ok
     }
     /** Close this guardian's original stream. No caller-supplied destination or replacement journal. */
@@ -1063,6 +1150,8 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("trustedMonitorVisualVisible",statusVisuals.monitorVisible)
             putString("trustedStatusVisualError",statusVisuals.error)
             putBoolean("gameFpsMonitorSupported",true)
+            putBoolean("displayResolutionSupported",displayResolution.supported)
+            putBoolean("displayResolutionChanging",displayResolutionChanging)
             putBoolean("trustedCursorCleanupWithoutTokenSupported",true)
             putString("trustedCursorError",visualCursor.error)
             putString("captureProvider","native-evdev")
@@ -1112,12 +1201,26 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             lastRecoveryFrame?.let { putIntArray("recoveryIds",it.ids); putLong("recoveryDownTime",it.downTime); putLong("recoveryEventTime",it.eventTime) }
         }
     }
-    @Synchronized override fun shutdown() {
-        authorize(); nativeCapture?.close();ownedCaptureId=0L;visualCursor.hide();statusVisuals.hideAll();pointer.releaseOwners();releaseInternal(); closed=true
-        windowContexts.close()
-        runCatching { reattachServer.close() }
-        connection?.close(); connection=null
-        handler.post { Process.killProcess(Process.myPid()) }
+    override fun shutdown() {
+        authorize()
+        val restore=synchronized(this) {
+            check(!displayResolutionChanging) { "Espera a que termine el cambio de resolución antes de cerrar el motor" }
+            nativeCapture?.close();ownedCaptureId=0L;visualCursor.hide();statusVisuals.hideAll();pointer.releaseOwners();releaseInternal();closed=true
+            displayResolutionIdleLocked().also { displayResolutionChanging=it }
+        }
+        // Restore only after input closure, and never hold the injection/recovery monitor.
+        try { if(restore) privileged { displayResolution.restoreAll();true } }
+        finally {
+            displayResolution.close()
+            synchronized(this) {
+                displayResolutionChanging=false
+                windowContexts.close()
+                runCatching { reattachServer.close() }
+                connection?.close();connection=null
+            }
+            if(displayResolutionRestoreQueued.get()) displayResolutionRestoreQueued.set(false)
+            handler.post { Process.killProcess(Process.myPid()) }
+        }
     }
     /** Sent only through the shell-authenticated provider; never included in diagnostics. */
     fun addReattachConfiguration(extras:Bundle) {

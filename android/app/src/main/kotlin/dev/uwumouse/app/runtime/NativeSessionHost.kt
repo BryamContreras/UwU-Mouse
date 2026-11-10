@@ -521,12 +521,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             Log.i("UwUMouseKeys", "control_source_update mouse=$appliedMouseCapture pending=${consumedKeys.size} deferred=$deferredSourceChanges timeouts=$tailTimeouts")
         }
     }
-    private fun wantsKeyboardCapture() = SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
+    private fun wantsKeyboardCapture() = !DisplayResolutionController.changing && SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
         (SessionController.active || GameCoordinator.sessionOpen)
     private fun wantsMenuPointer() = GameCoordinator.menuPointerAvailable && SessionController.targetConfirmed &&
         !SessionController.active && !SessionController.isTransitioning() && !SessionController.needsRecoveryContext &&
         !SessionController.releaseUnverified && SessionController.contacts==0
-    private fun effectiveMouseCapture()=requestedMouseCapture || wantsMenuPointer()
+    private fun effectiveMouseCapture()=!DisplayResolutionController.changing && (requestedMouseCapture || wantsMenuPointer())
     private fun physicalSourcesMatch()=effectiveMouseCapture()==appliedMouseCapture && (nativeCaptureId!=0L)==wantsKeyboardCapture()
     private fun desiredMouseRateHz()=if(nativeRateSupported && effectiveMouseCapture() && SessionController.active && !wantsMenuPointer())
         SessionController.mouseCaptureRateHz else 0
@@ -539,7 +539,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
-        if(captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
+        if(DisplayResolutionController.changing || captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
             menuAwaitingRelease || wantsMenuPointer()) return null
         val route=SessionController.nativeCameraRoute(captureId,physicalButtons) ?: return null
         return route.takeIf { captureEpoch==it.generation }
@@ -1304,6 +1304,13 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         forgetDevicePresses(deviceId)
         if(SessionController.active || SessionController.armed) SessionController.pause("Periférico desconectado")
         forceMouseOff("device_removed")
+    }
+    /** Called only after the old stream was confirmed closed; do not retain shortcut capture. */
+    fun quiesceForDisplayResolution() {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        check(DisplayResolutionController.changing && !SessionController.active && SessionController.contacts==0 &&
+            !SessionController.releaseUnverified && !SessionController.isTransitioning())
+        forceMouseOff("display_resolution")
     }
     fun close() {
         endEditorPresentation("service_destroyed")

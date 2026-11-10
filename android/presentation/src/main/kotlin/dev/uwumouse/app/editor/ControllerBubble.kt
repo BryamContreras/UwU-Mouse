@@ -65,6 +65,7 @@ class ControllerBubble(
     private var onStop: () -> Unit = {}
     private var onCursorReturn: () -> Unit = {}
     private var onVisualSettingsChanged: () -> Unit = {}
+    private var onResolutionSettings: (() -> Unit)? = null
     private var profileItems:List<ProfileMenuItem> = emptyList()
     private var onCreateProfile:(String)->Unit = {}
     private var onActivateProfile:(String)->Unit = {}
@@ -101,7 +102,8 @@ class ControllerBubble(
              pointerIntercepted:Boolean=false,onCursorReturn:()->Unit={},onVisualSettingsChanged:()->Unit={},
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
              onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
-             onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={}) {
+             onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={},
+             onResolutionSettings:(()->Unit)?=null) {
         check(Looper.myLooper() == Looper.getMainLooper())
         this.label = label; this.profileName = profileName; this.onMenu = onMenu
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
@@ -120,6 +122,7 @@ class ControllerBubble(
         this.onExportProfile=onExportProfile;this.onImportProfile=onImportProfile
         this.onActivateProfile=onActivateProfile;this.onProfileKey=onProfileKey
         this.onDeleteProfile=onDeleteProfile
+        this.onResolutionSettings=onResolutionSettings
         menuStatus?.let { if(it.text.toString()!=label) it.text=label }
         if (bubble == null) createBubble()
         applyBubble()
@@ -437,6 +440,14 @@ class ControllerBubble(
             detail.addView(toggle,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
             detail.addView(explanation)
             detail.addView(access,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(4) })
+            this@ControllerBubble.onResolutionSettings?.let { open ->
+                detail.addView(text("Resolución personalizada",13f).apply {
+                    gravity=Gravity.CENTER;isClickable=true;contentDescription="Resolución personalizada"
+                    typeface=android.graphics.Typeface.DEFAULT_BOLD
+                    background=gradient(Color.rgb(34,65,117),Color.rgb(18,39,78),8)
+                    setOnClickListener { closeMenu();open() }
+                },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)).apply { topMargin=dp(12) })
+            }
             fun refreshSystem() {
                 toggle.setOnCheckedChangeListener(null)
                 toggle.isChecked=controller.isEnabled

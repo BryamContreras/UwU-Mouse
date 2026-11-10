@@ -1,5 +1,16 @@
 # Cambios de UwU Mouse
 
+## 0.3.7+45 — 2026-11-10
+
+- Sistema → Resolución personalizada: campos de ancho y alto para adaptar el tamaño lógico de la pantalla del juego, incluida la duplicación HDMI; Aplicar, Restaurar y consulta del tamaño confirmado.
+- Conversión de las dimensiones del monitor usando la orientación del juego capturada antes de abrir los ajustes. Se mantiene la resolución física y no se fuerzan densidad ni rotación.
+- El cambio detiene el mapeo, invalida preparaciones pendientes y retira la captura de ratón y teclado antes de modificar la pantalla. El perfil guardado no se reescribe; debe revisarse la calibración al volver al juego.
+- Motor ADB: operaciones limitadas por pantalla e identidad, verificación del resultado y recuperación de la configuración anterior. Conserva los overrides previos y evita sobrescribir cambios externos posteriores.
+- Registro privado para recuperación tras reiniciar el motor y restauración al cerrar el propietario, una vez liberadas las entradas. Sin consultas de resolución por frame ni procesos adicionales.
+- Once pruebas de framework: nueva comprobación de cambio y restauración de una pantalla virtual propia sin alterar la principal ni otra pantalla virtual.
+
+El ajuste afecta al tamaño lógico de la pantalla donde se ejecuta el juego. En duplicación puede cambiar también la imagen del teléfono; su efecto está sujeto a las capacidades del dispositivo y del adaptador de vídeo.
+
 ## 0.3.6+44 — 2026-11-10
 
 - Cámara Free Fire: integración reversible de la curva de compensación. Las entradas opuestas equivalentes vuelven al mismo punto táctil y dividir un movimiento en muestras no altera su resultado.

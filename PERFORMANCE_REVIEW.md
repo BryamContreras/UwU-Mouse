@@ -136,6 +136,23 @@ juego ni se modificaron perfiles guardados. Evidencia privada en
 `build/camera-optimized-final-validation.log` y
 `build/camera-optimized-results.jsonl`.
 
+### Resolución personalizada: 0.3.7+45
+
+El ajuste de Sistema utiliza operaciones frías de WMS, fuera del monitor del
+inyector. No añade consultas de resolución a la cámara, al dibujo ni al bucle de
+entrada. La app y el backend conservan como máximo una operación en vuelo y
+trabajo pendiente acotado; sus workers expiran tras diez segundos sin trabajo.
+El formulario no retiene Activities destruidas mientras espera un resultado.
+
+La compilación release completó **103 pruebas Flutter y 948 pruebas JVM**,
+incluidas 16 nuevas de resolución con acceso WMS y diario simulados. Cubren
+verificación, rollback, identidad reutilizada, override previo, cambio externo y
+admisión con contactos/teclas/captura pendientes. También aprobaron lint,
+arquitectura, ABI JSON de 143 clases y la alineación de las bibliotecas nativas.
+La suite de framework incorpora una undécima prueba que modifica únicamente
+una pantalla virtual propia, restaura su tamaño y comprueba que no cambien la
+principal ni otra pantalla virtual.
+
 ### Partidas prolongadas
 
 La revisión y las pruebas automáticas no certifican estabilidad durante horas.

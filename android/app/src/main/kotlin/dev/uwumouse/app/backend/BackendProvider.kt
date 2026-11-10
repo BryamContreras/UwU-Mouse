@@ -47,6 +47,34 @@ class BackendProvider : ContentProvider() {
             return try { Bundle().apply { putString("json", org.json.JSONObject(SessionController.status(requireNotNull(context))).toString()) } }
             finally { Binder.restoreCallingIdentity(identity) }
         }
+        if(method=="displayResolutionStatus") {
+            val displayId=requireNotNull(extras).getInt("displayId",-1)
+            require(displayId>=0)
+            val identity=Binder.clearCallingIdentity()
+            return try {
+                val backend=requireNotNull(BackendRegistry.injector) { "Activa el motor ADB" }
+                check(backend.status().containsKey("displayResolutionSupported")) { "Motor sin soporte de resolución" }
+                val status=backend.getDisplayResolution(displayId)
+                Bundle().apply { putString("json",org.json.JSONObject().apply {
+                    for(key in status.keySet()) put(key,status.get(key))
+                }.toString()) }
+            } finally { Binder.restoreCallingIdentity(identity) }
+        }
+        if(method=="displayResolutionSettings") {
+            val displayId=requireNotNull(extras).getInt("displayId",-1)
+            val rotation=extras.getInt("gameRotation",-1)
+            require(displayId>=0 && rotation in 0..3)
+            val identity=Binder.clearCallingIdentity()
+            return try {
+                val task=FutureTask<Unit> {
+                    dev.uwumouse.app.game.GameCoordinator.initialize(requireNotNull(context))
+                    dev.uwumouse.app.DisplayResolutionActivity.launch(requireNotNull(context),displayId,rotation)
+                }
+                check(android.os.Handler(android.os.Looper.getMainLooper()).post(task))
+                task.get(5,TimeUnit.SECONDS)
+                Bundle().apply { putBoolean("accepted",true) }
+            } finally { Binder.restoreCallingIdentity(identity) }
+        }
         if(method=="activationStatus") {
             val identity=Binder.clearCallingIdentity()
             return try {

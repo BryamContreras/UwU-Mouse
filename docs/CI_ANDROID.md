@@ -46,6 +46,8 @@ Se desactiva explícitamente el desplazamiento de versionCode por ABI que Flutte
 
 CI ejecuta también el checker de arquitectura y las pruebas de los módulos de dominio, captura, ventanas, transporte de activación e inyección. Los builds CI no prueban adquisición exclusiva de periféricos, recuperación en un teléfono ni compatibilidad de un juego. Esas observaciones se registran por separado. Las capturas, inventarios, perfiles y logs del dispositivo permanecen locales en `evidence/` y no forman parte del repositorio público. [Arquitectura de módulos](../ARCHITECTURE.md).
 
+El workflow de compatibilidad instala el mismo par de APK x86_64 en Android API 34, 35, 36 y 37 y exige **once pruebas de framework completas** por versión. Incluye cambiar y restaurar la resolución de una pantalla virtual pública propia mediante WMS, verificar sus métricas reales y conservar intactas la principal y otra virtual. Esa comprobación está restringida a emuladores; no modifica pantallas físicas ni demuestra el escalado de un monitor HDMI. [Alcance de la instrumentación](ANDROID_COMPATIBILITY.md#validación-de-una-versión).
+
 `tools/test_capture_policy.py` compila y ejecuta las pruebas C++17 de la política de captura en el runner, sin teléfono. Localmente se añade `-NativePolicyTests` a `scripts/Build.ps1` si hay un compilador C++ disponible. Los módulos opcionales `latencyprobe` y el host de validación no son dependencias de la aplicación distribuida.
 
 Después de compilar, `tools/check_android_json_abi.py` inspecciona las referencias de

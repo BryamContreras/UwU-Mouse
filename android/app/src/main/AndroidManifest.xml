@@ -16,6 +16,13 @@
         android:icon="@mipmap/ic_uwumouse">
         <activity android:name=".ProfileFileActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
+            android:name=".DisplayResolutionActivity"
+            android:exported="false"
+            android:enableOnBackInvokedCallback="true"
+            android:theme="@android:style/Theme.Material.NoActionBar"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize" />
+        <activity
             android:name=".MainActivity"
             android:enableOnBackInvokedCallback="true"
             android:exported="true"

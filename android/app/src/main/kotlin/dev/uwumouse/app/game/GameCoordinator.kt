@@ -1,6 +1,8 @@
 package dev.uwumouse.app.game
 
 import dev.uwumouse.app.runtime.NativeSessionHost
+import dev.uwumouse.app.runtime.DisplayResolutionController
+import dev.uwumouse.app.DisplayResolutionActivity
 
 import android.app.ActivityManager
 import android.app.ActivityOptions
@@ -341,6 +343,7 @@ object GameCoordinator {
         return bounded
     }
     fun openEditor(id:String,displayId:Int=SessionController.targetDisplayId) {
+        check(!DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Espera al cierre confirmado de la secuencia anterior antes de editar" }
         stopServiceWhenClosed=false
         OverlayWindows.requirePermission(app,displayId)
@@ -386,6 +389,7 @@ object GameCoordinator {
     }
     fun editCurrent() { (SessionController.activeProfileId ?: currentId ?: store().selected()?.id)?.let { openEditor(it) } }
     fun startProfile(id:String,cursor:Boolean=true,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
+        check(!DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Recupera la secuencia anterior antes de iniciar" }
         stopServiceWhenClosed=false
         OverlayWindows.requirePermission(app,displayId)
@@ -614,7 +618,29 @@ object GameCoordinator {
             },onVisualSettingsChanged={refreshControls()},profileItems=bubbleProfiles(),
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
             onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)},
-            onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()})
+            onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()},
+            onResolutionSettings={
+                runCatching { openResolutionSettings() }.onFailure { message(it.message ?: "No se pudo abrir la resolución personalizada") }
+            })
+    }
+    private fun openResolutionSettings() {
+        check(!waiting && !DisplayResolutionController.changing) { "Espera a que termine la operación anterior" }
+        val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
+        // Remember the game's orientation before a focusable settings Activity can rotate.
+        val rotation=geometry(displayId).third
+        DisplayResolutionActivity.launch(app,displayId,rotation)
+    }
+    /** Cancel pending target admissions without removing the user's System/Restore entry. */
+    fun beginDisplayResolutionChange() {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        operation++;waiting=false;startPending=false;settledTarget=null
+        presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null
+        controls?.hide()
+        if(editorVisible) {
+            recordEditorClose("display_resolution")
+            editor?.close()
+            SessionController.editorClosed()
+        }
     }
     private fun showMonitor(packageName:String,displayId:Int) {
         val current=monitor ?: return

@@ -51,4 +51,8 @@ interface IInjector {
     boolean updateTrustedStatusVisual(int kind, long token, int x, int y, float alpha, in Bitmap bitmap);
     boolean hideTrustedStatusVisual(int kind, long token);
     boolean isTrustedStatusVisualVisible(int kind, long token);
+    // Cold, display-scoped configuration. Sizes use the display's natural orientation.
+    Bundle getDisplayResolution(int displayId);
+    Bundle applyDisplayResolution(int displayId, String displayUniqueId, int width, int height, IBinder owner);
+    Bundle restoreDisplayResolution(int displayId, String displayUniqueId);
 }

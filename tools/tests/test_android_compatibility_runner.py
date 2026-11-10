@@ -9,6 +9,10 @@ from run_android_compatibility import FULL_SUITE_TESTS, instrumentation_succeede
 
 
 class AndroidCompatibilityRunnerTest(unittest.TestCase):
+    def test_suite_count_matches_all_framework_fixtures(self):
+        source = Path(__file__).resolve().parents[2] / "android/app/src/androidTest/kotlin/dev/uwumouse/app/runtime/AndroidCompatibilityTest.kt"
+        self.assertEqual(FULL_SUITE_TESTS, source.read_text(encoding="utf-8").count("@Test fun "))
+
     def successful_output(self, count=FULL_SUITE_TESTS):
         return ("INSTRUMENTATION_STATUS_CODE: 1\nINSTRUMENTATION_STATUS_CODE: 0\n" * count
                 + f"INSTRUMENTATION_RESULT: stream=OK ({count} tests)\nINSTRUMENTATION_CODE: -1\n")

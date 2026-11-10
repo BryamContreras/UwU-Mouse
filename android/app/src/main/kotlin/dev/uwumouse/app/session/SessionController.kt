@@ -516,6 +516,7 @@ object SessionController {
         explicitlyStopped=false; mode=SessionMode.EDITING; state="Edición"; error="Mapeo pausado; guardar no reanuda acciones mantenidas"
     }
     @Synchronized fun armProfile(prepared:PreparedProfile,cursor:Boolean=false,displayId:Int=targetDisplayId) {
+        check(!dev.uwumouse.app.runtime.DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionPolicy.mayInstallConfiguration(mode,contacts,releaseUnverified) && !active && !stopping) { "Termina o recupera la sesión anterior" }
         require(displayId>=0) { "Pantalla de destino no válida" }
         // Closed diagnostic choice is RAM-only and applies only at this empty transition.
@@ -532,6 +533,7 @@ object SessionController {
         targetChanged(capturedTargetConfirmed())
     }
     private fun armInternal(width:Int,height:Int) {
+        check(!dev.uwumouse.app.runtime.DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         pointerTransition.invalidate()
         explicitlyStopped=false
         check(environment.injector?.asBinder()?.isBinderAlive == true) { "Activa el backend ADB" }
