@@ -17,6 +17,8 @@ import android.view.MotionEvent
 import android.view.PointerIcon
 import android.view.View
 import android.view.WindowManager
+import android.view.WindowInsets
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import dev.uwumouse.presentation.R
 import dev.uwumouse.app.game.ProfileMenuItem
@@ -65,7 +67,11 @@ class ControllerBubble(
     private var onStop: () -> Unit = {}
     private var onCursorReturn: () -> Unit = {}
     private var onVisualSettingsChanged: () -> Unit = {}
-    private var onResolutionSettings: (() -> Unit)? = null
+    private var displayResolution: DisplayResolutionSettingsPort? = null
+    private var onMenuInputFocusChanged: (Boolean) -> Unit = {}
+    private var resolutionPanel: DisplayResolutionSettingsPanel? = null
+    private var menuInputFocused = false
+    private var menuDetailPage: String? = null
     private var profileItems:List<ProfileMenuItem> = emptyList()
     private var onCreateProfile:(String)->Unit = {}
     private var onActivateProfile:(String)->Unit = {}
@@ -86,6 +92,9 @@ class ControllerBubble(
     }
     val visible: Boolean get() = bubble != null
     val menuVisible: Boolean get() = menu != null
+    val currentMenuPage: String? get() = menuDetailPage.takeIf { menu != null }
+    val systemPanelVisible: Boolean get() = menu != null && !menuClosing && menuDetailPage == "Sistema"
+    val menuTextInputActive: Boolean get() = menu != null && menuInputFocused
     fun copyMenuBounds(out:Rect):Boolean {
         val p=menuParams ?: return false
         out.set(p.x,p.y,p.x+p.width,p.y+p.height);return true
@@ -103,7 +112,7 @@ class ControllerBubble(
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
              onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
              onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={},
-             onResolutionSettings:(()->Unit)?=null) {
+             displayResolution:DisplayResolutionSettingsPort?=null,onMenuInputFocusChanged:(Boolean)->Unit={}) {
         check(Looper.myLooper() == Looper.getMainLooper())
         this.label = label; this.profileName = profileName; this.onMenu = onMenu
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
@@ -122,7 +131,7 @@ class ControllerBubble(
         this.onExportProfile=onExportProfile;this.onImportProfile=onImportProfile
         this.onActivateProfile=onActivateProfile;this.onProfileKey=onProfileKey
         this.onDeleteProfile=onDeleteProfile
-        this.onResolutionSettings=onResolutionSettings
+        this.displayResolution=displayResolution;this.onMenuInputFocusChanged=onMenuInputFocusChanged
         menuStatus?.let { if(it.text.toString()!=label) it.text=label }
         if (bubble == null) createBubble()
         applyBubble()
@@ -235,7 +244,7 @@ class ControllerBubble(
     }
 
     /** The coordinator completes its mapping release barrier before opening this menu. */
-    fun openMenu() {
+    fun openMenu(initialPage:String?=null) {
         check(Looper.myLooper() == Looper.getMainLooper())
         if (bubble == null) return
         closeMenu()
@@ -251,6 +260,7 @@ class ControllerBubble(
         val row=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
         val detail=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(10),dp(4),dp(4)) }
         fun appearancePanel() {
+            closeResolutionPanel()
             pendingProfileKeyId=null;pendingProfileDeleteId=null;renderProfiles=null;profileError=null
             detail.removeAllViews()
             slider(detail,"Tama\u00f1o de burbuja",32,72,style.sizeDp,{ "$it dp" }) { style=style.copy(sizeDp=it); applyBubble() }
@@ -266,6 +276,7 @@ class ControllerBubble(
             val show=Switch(overlayContext).apply {
                 text="Mostrar controles";textSize=12f;setTextColor(Color.WHITE)
                 ToggleStyle.apply(this)
+                leadingIcon(this,R.drawable.mm_controller)
                 isChecked=style.showControls;contentDescription="Mostrar controles en pantalla"
             }
             detail.addView(SettingHelp.heading(overlayContext,show,"Mostrar controles",
@@ -287,6 +298,7 @@ class ControllerBubble(
             centerMenu()
         }
         fun profilePanel() {
+            closeResolutionPanel()
             fun render() {
                 detail.removeAllViews()
                 detail.addView(text("Perfiles",12f).apply { typeface=android.graphics.Typeface.DEFAULT_BOLD })
@@ -376,11 +388,8 @@ class ControllerBubble(
                 profileError?.let { message -> detail.addView(text(message,11f).apply { setTextColor(Color.rgb(255,179,190)) }) }
                 if(pendingProfileKeyId!=null) detail.addView(text("Pulsa una tecla · Esc cancela",10f))
                 val profileActions=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
-                profileActions.addView(text("＋ Nuevo perfil",12f).apply {
-                    gravity=Gravity.CENTER;isClickable=true;typeface=android.graphics.Typeface.DEFAULT_BOLD
-                    background=gradient(Color.rgb(52,127,222),Color.rgb(27,76,157),8)
-                    contentDescription="Crear perfil"
-                    setOnClickListener {
+                profileActions.addView(centeredIconAction("Nuevo perfil","Crear perfil",R.drawable.mm_setting_add,
+                    Color.rgb(52,127,222),Color.rgb(27,76,157),bold=true) {
                         pendingProfileKeyId=null
                         try {
                             var number=profileItems.size+1
@@ -388,19 +397,18 @@ class ControllerBubble(
                             onCreateProfile("Perfil $number");profileError=null
                         } catch(e:Exception) { profileError=e.message ?: "No se pudo crear" }
                         render()
-                    }
-                },LinearLayout.LayoutParams(0,dp(38),1f).apply { marginEnd=dp(3) })
-                profileActions.addView(text("Importar perfil",12f).apply {
-                    gravity=Gravity.CENTER;isClickable=true;contentDescription="Importar perfil desde archivo"
-                    background=gradient(Color.rgb(34,65,117),Color.rgb(18,39,78),8)
-                    setOnClickListener { closeMenu();onImportProfile() }
-                },LinearLayout.LayoutParams(0,dp(38),1f).apply { marginStart=dp(3) })
-                detail.addView(profileActions,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(5) })
+                },LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f).apply { marginEnd=dp(3) })
+                profileActions.addView(centeredIconAction("Importar perfil","Importar perfil desde archivo",R.drawable.mm_setting_import,
+                    Color.rgb(34,65,117),Color.rgb(18,39,78)) {
+                    closeMenu();onImportProfile()
+                },LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,1f).apply { marginStart=dp(3) })
+                detail.addView(profileActions,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin=dp(5) })
                 centerMenu()
             }
             pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles={ render() };render()
         }
         fun systemPanel() {
+            closeResolutionPanel()
             pendingProfileKeyId=null;pendingProfileDeleteId=null;renderProfiles=null;profileError=null
             systemObserver?.close();systemObserver=null
             detail.removeAllViews()
@@ -408,9 +416,10 @@ class ControllerBubble(
             val monitor=Switch(overlayContext).apply {
                 text="Monitor de estado";textSize=12f;setTextColor(Color.WHITE)
                 contentDescription="Mostrar monitor de estado";ToggleStyle.apply(this)
+                leadingIcon(this,R.drawable.mm_setting_monitor)
                 isChecked=style.monitorEnabled
             }
-            detail.addView(monitor,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
+            detail.addView(monitor,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))
             val monitorOpacity=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL }
             slider(monitorOpacity,"Opacidad del monitor",10,100,(style.monitorOpacity*100).roundToInt(),{ "$it%" }) {
                 style=style.copy(monitorOpacity=it/100f);onVisualSettingsChanged()
@@ -428,25 +437,22 @@ class ControllerBubble(
             val toggle=Switch(overlayContext).apply {
                 text="No molestar";textSize=12f;setTextColor(Color.WHITE)
                 contentDescription="No molestar";ToggleStyle.apply(this)
+                leadingIcon(this,R.drawable.mm_setting_dnd)
             }
             val explanation=text("",11f)
-            val access=text("Dar acceso a No molestar",12f).apply {
-                gravity=Gravity.CENTER;isClickable=true;typeface=android.graphics.Typeface.DEFAULT_BOLD
-                background=gradient(Color.rgb(34,65,117),Color.rgb(18,39,78),8)
-                setOnClickListener {
-                    if(!controller.requestAccess()) explanation.text="No se pudo abrir el acceso a No molestar."
-                }
+            val access=centeredIconAction("Dar acceso a No molestar","Dar acceso a No molestar",R.drawable.mm_setting_dnd,
+                Color.rgb(34,65,117),Color.rgb(18,39,78),bold=true) {
+                if(!controller.requestAccess()) explanation.text="No se pudo abrir el acceso a No molestar."
             }
-            detail.addView(toggle,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
+            detail.addView(toggle,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))
             detail.addView(explanation)
-            detail.addView(access,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(38)).apply { topMargin=dp(4) })
-            this@ControllerBubble.onResolutionSettings?.let { open ->
-                detail.addView(text("Resolución personalizada",13f).apply {
-                    gravity=Gravity.CENTER;isClickable=true;contentDescription="Resolución personalizada"
-                    typeface=android.graphics.Typeface.DEFAULT_BOLD
-                    background=gradient(Color.rgb(34,65,117),Color.rgb(18,39,78),8)
-                    setOnClickListener { closeMenu();open() }
-                },LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)).apply { topMargin=dp(12) })
+            detail.addView(access,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin=dp(4) })
+            displayResolution?.let { port ->
+                val resolution=DisplayResolutionSettingsPanel(overlayContext,port,
+                    { setMenuTextInputActive(it) },{ centerMenu() })
+                resolutionPanel=resolution
+                detail.addView(resolution,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT))
             }
             fun refreshSystem() {
                 toggle.setOnCheckedChangeListener(null)
@@ -471,7 +477,7 @@ class ControllerBubble(
             refreshSystem()
             systemObserver=controller.observe { if(toggle.isAttachedToWindow) refreshSystem() }
         }
-        var detailPage: String? = null
+        menuDetailPage=initialPage?.takeIf { it in setOf("Perfiles","Ajustes","Sistema") }
         fun returnToKeyboard() {
             if(playEnabled) { closeMenu();onPlay() } else dismissMenu()
         }
@@ -484,31 +490,45 @@ class ControllerBubble(
             val enabled=when(name) { "Mapear"->editEnabled;mode->playing || playEnabled;else->true }
             row.addView(tile(if(name==mode) "$name\nActivado" else name,icon) {
                 when(name) {
-                    "Mapear" -> { closeMenu(); onEdit() }
+                    "Mapear" -> if(editEnabled) { closeMenu(); onEdit() }
                     mode -> if(playing) onKeyboard() else returnToKeyboard()
                     "Perfiles" -> {
                         systemObserver?.close();systemObserver=null
-                        val changed=detailPage!=name;detailPage=name;profilePanel()
+                        val changed=menuDetailPage!=name;menuDetailPage=name;profilePanel()
                         if(changed) animateDetail(detail)
+                        onVisualSettingsChanged()
                     }
                     "Ajustes" -> {
                         systemObserver?.close();systemObserver=null
-                        val changed=detailPage!=name;detailPage=name;appearancePanel()
+                        val changed=menuDetailPage!=name;menuDetailPage=name;appearancePanel()
                         if(changed) animateDetail(detail)
+                        onVisualSettingsChanged()
                     }
                     "Sistema" -> {
-                        val changed=detailPage!=name;detailPage=name;systemPanel()
-                        if(changed) animateDetail(detail)
+                        val changed=menuDetailPage!=name;menuDetailPage=name
+                        if(changed) { systemPanel();animateDetail(detail) }
+                        onVisualSettingsChanged()
                     }
                     else -> returnToKeyboard()
                 }
             }.apply { isEnabled=enabled; alpha=if(enabled) 1f else .4f; contentDescription=if(name==mode) "Cambiar modo: $mode activado" else name },
                 LinearLayout.LayoutParams(0,dp(76),1f).apply { setMargins(dp(3),dp(4),dp(3),0) })
         }
+        when(menuDetailPage) { "Perfiles"->profilePanel();"Ajustes"->appearancePanel();"Sistema"->systemPanel() }
         panel.addView(row); panel.addView(detail)
         val scroll = object:ScrollView(overlayContext) {
-            override fun dispatchTouchEvent(event:MotionEvent):Boolean =
-                if(menuClosing) true else super.dispatchTouchEvent(event)
+            override fun dispatchTouchEvent(event:MotionEvent):Boolean {
+                if(menuClosing) return true
+                val handled=super.dispatchTouchEvent(event)
+                // Let the clicked control receive its UP before native capture can return.
+                if(event.actionMasked==MotionEvent.ACTION_UP) resolutionPanel?.releaseEditingOutside(this,event.x,event.y)
+                else if(event.actionMasked==MotionEvent.ACTION_OUTSIDE) resolutionPanel?.finishEditing()
+                return handled
+            }
+            override fun onWindowFocusChanged(hasWindowFocus:Boolean) {
+                super.onWindowFocusChanged(hasWindowFocus)
+                if(!hasWindowFocus && menuInputFocused) resolutionPanel?.finishEditing()
+            }
             override fun onResolvePointerIcon(event:MotionEvent,pointerIndex:Int):PointerIcon? =
                 if(pointerIntercepted) PointerIcon.getSystemIcon(context,PointerIcon.TYPE_NULL)
                 else super.onResolvePointerIcon(event,pointerIndex)
@@ -516,6 +536,11 @@ class ControllerBubble(
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
             contentDescription="UwU Mouse · opciones"
             addView(panel); isVerticalScrollBarEnabled=false
+            setOnApplyWindowInsetsListener { view,insets ->
+                val bottom=if(menuInputFocused) insets.getInsets(WindowInsets.Type.ime()).bottom else 0
+                if(view.paddingBottom!=bottom) view.setPadding(0,0,0,bottom)
+                insets
+            }
         }
         val p = params("UwUMouse · Opciones")
         centerMenuGeometry(panel,p)
@@ -583,6 +608,11 @@ class ControllerBubble(
     private fun slider(panel: LinearLayout, name: String, min: Int, max: Int, initial: Int,
                        format: (Int) -> String, change: (Int) -> Unit) {
         val caption = text("$name: ${format(initial)}", 11f)
+        leadingIcon(caption,when(name) {
+            "Opacidad", "Opacidad de controles", "Opacidad del monitor" -> R.drawable.mm_setting_opacity
+            "Sensibilidad del cursor", "Tamaño del cursor" -> R.drawable.mm_setting_cursor
+            else -> R.drawable.mm_brand
+        })
         val explanation=when(name) {
             "Opacidad" -> "Transparencia de la burbuja. Un valor mayor facilita verla sobre el juego."
             "Opacidad de controles" -> "Transparencia de los marcadores del perfil cuando Mostrar controles está activado."
@@ -705,7 +735,7 @@ class ControllerBubble(
     }
     /** Explicit key picking/confirmation only; the service pairs the physical UP. */
     fun captureProfileKey(code:Int):Boolean {
-        if(!menuVisible || !interactionEnabled) return false
+        if(!menuVisible || !interactionEnabled || menuTextInputActive) return false
         if(menuClosing) return true
         if(pendingProfileDeleteId!=null && code==KeyEvent.KEYCODE_ESCAPE) {
             pendingProfileDeleteId=null;profileError=null;renderProfiles?.invoke();return true
@@ -731,9 +761,60 @@ class ControllerBubble(
         systemObserver?.close();systemObserver=null
         pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles=null;menuStatus=null
         clearMenuCursorHover()
-        val view = menu ?: return; menuClosing=false;view.animate().cancel();menu = null;menuParams=null;menuPanel=null
-        try { windows.removeViewImmediate(view) } catch (_: IllegalArgumentException) { /* Display removal may detach it first. */ }
+        val view=menu
+        val resolution=resolutionPanel
+        val editing=menuInputFocused
+        // Clear ownership before focus callbacks can refresh or close the coordinator.
+        menu=null;menuParams=null;menuPanel=null;menuDetailPage=null;resolutionPanel=null
+        menuInputFocused=false;menuClosing=false
+        if(view==null && resolution==null && !editing) return
+        if(editing && view!=null) hideMenuIme(view)
+        resolution?.close()
+        if(view!=null) {
+            view.animate().cancel()
+            try { windows.removeViewImmediate(view) } catch (_: IllegalArgumentException) { /* Display removal may detach it first. */ }
+        }
+        if(editing) onMenuInputFocusChanged(false)
         onVisualSettingsChanged()
+    }
+
+    private fun closeResolutionPanel() {
+        val previous=resolutionPanel
+        resolutionPanel=null
+        previous?.close()
+        setMenuTextInputActive(false)
+    }
+
+    private fun setMenuTextInputActive(focused:Boolean) {
+        if(menuInputFocused==focused) return
+        menuInputFocused=focused
+        val current=menu
+        if(!focused && current!=null) hideMenuIme(current)
+        // The app releases native capture before the overlay requests keyboard focus.
+        onMenuInputFocusChanged(focused)
+        if(menuInputFocused!=focused) return
+        val view=menu ?: return
+        val p=menuParams ?: return
+        val flags=if(focused) (p.flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()) or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
+            else (p.flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) and
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH.inv()
+        val input=if(focused) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE else
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        if(p.flags!=flags || p.softInputMode!=input) {
+            p.flags=flags;p.softInputMode=input
+            if(view.isAttachedToWindow) {
+                try { windows.updateViewLayout(view,p) }
+                catch(_:WindowManager.BadTokenException) { closeMenu();return }
+                catch(_:WindowManager.InvalidDisplayException) { closeMenu();return }
+                catch(_:IllegalArgumentException) { closeMenu();return }
+            }
+        }
+        view.requestApplyInsets()
+    }
+
+    private fun hideMenuIme(view:View) {
+        overlayContext.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(view.windowToken,0)
     }
     fun hide() {
         check(Looper.myLooper() == Looper.getMainLooper())
@@ -746,6 +827,29 @@ class ControllerBubble(
         GradientDrawable.Orientation.TL_BR,intArrayOf(top,bottom),
     ).apply { cornerRadius=dp(radius).toFloat(); if(stroke!=null) setStroke(dp(1),stroke) }
     private fun text(value: String, size: Float) = TextView(overlayContext).apply { text = value; textSize = size; setTextColor(Color.rgb(224,239,255)); setPadding(0, dp(2), 0, dp(2)) }
+    /** Icons on switches and captions stay at the start; they share the text's touch target. */
+    private fun leadingIcon(target:TextView,resource:Int,size:Int=20,gap:Int=8) {
+        val icon=overlayContext.getDrawable(resource)?.mutate() ?: return
+        icon.setBounds(0,0,dp(size),dp(size))
+        target.setCompoundDrawablesRelative(icon,null,null,null)
+        target.compoundDrawablePadding=dp(gap)
+    }
+    /** Center the icon and label together while exposing a single clickable accessibility node. */
+    private fun centeredIconAction(label:String,description:String,icon:Int,top:Int,bottom:Int,
+                                   bold:Boolean=false,action:(View)->Unit):LinearLayout = LinearLayout(overlayContext).apply {
+        orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER;isClickable=true
+        minimumHeight=dp(38);contentDescription=description
+        background=gradient(top,bottom,8)
+        addView(ImageView(overlayContext).apply {
+            setImageResource(icon);imageTintList=null;scaleType=ImageView.ScaleType.FIT_CENTER
+            importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        },LinearLayout.LayoutParams(dp(18),dp(18)).apply { marginEnd=dp(6) })
+        addView(text(label,12f).apply {
+            gravity=Gravity.CENTER;importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            if(bold) typeface=android.graphics.Typeface.DEFAULT_BOLD
+        },LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT))
+        setOnClickListener(action)
+    }
     private fun tile(name:String,icon:Int,action:()->Unit):View = LinearLayout(overlayContext).apply {
         orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; isClickable=true; contentDescription=name
         val active=name.contains('\n')

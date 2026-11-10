@@ -111,7 +111,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
     ),
     child: Row(
       children: [
-        connectionIcon(status?.wirelessDebuggingEnabled, size: 22),
+        const Icon(Icons.wifi_rounded, color: Color(0xff1966ab), size: 24),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -135,6 +135,8 @@ class ConnectionSettingsPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
+        connectionIcon(status?.wirelessDebuggingEnabled, size: 22),
+        const SizedBox(width: 6),
         SizedBox(
           width: 112,
           child: TextButton(
@@ -165,7 +167,7 @@ class ConnectionSettingsPanel extends StatelessWidget {
     ),
     child: Row(
       children: [
-        connectionIcon(status.overlayPermission, size: 22),
+        const Icon(Icons.layers_outlined, color: Color(0xff1966ab), size: 24),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
@@ -185,6 +187,8 @@ class ConnectionSettingsPanel extends StatelessWidget {
             ],
           ),
         ),
+        const SizedBox(width: 8),
+        connectionIcon(status.overlayPermission, size: 22),
         if (!status.overlayPermission) ...[
           const SizedBox(width: 8),
           SizedBox(

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../../shared/widgets/uwu_icon.dart';
+
 class ProfileNameDialog extends StatefulWidget {
   const ProfileNameDialog({
     super.key,
@@ -48,13 +50,15 @@ class ProfileNameDialogState extends State<ProfileNameDialog> {
       onSubmitted: (_) => _save(),
     ),
     actions: [
-      TextButton(
+      TextButton.icon(
         onPressed: () => Navigator.pop(context),
-        child: const Text('Cancelar'),
+        icon: const UwuIcon(Icons.close_rounded, size: 20),
+        label: const Text('Cancelar'),
       ),
-      FilledButton(
+      FilledButton.icon(
         onPressed: _controller.text.trim().isEmpty ? null : _save,
-        child: const Text('Guardar'),
+        icon: const UwuIcon(Icons.check_rounded, size: 20),
+        label: const Text('Guardar'),
       ),
     ],
   );

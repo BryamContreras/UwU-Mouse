@@ -52,6 +52,8 @@ public final class OwnUiClick {
         boolean longPress = args.length > 0 && "game_options".equals(args[0]);
         boolean resolutionInput = args.length > 0 &&
                 ("resolution_width".equals(args[0]) || "resolution_height".equals(args[0]));
+        boolean resolutionState = args.length == 1 && "resolution_state".equals(args[0]);
+        boolean resolutionFocus = args.length == 1 && "resolution_focus_width".equals(args[0]);
         String numericValue = null;
         if (resolutionInput) {
             if (args.length != 2 || !args[1].matches("[0-9]{3,4}") ||
@@ -78,10 +80,10 @@ public final class OwnUiClick {
             case "system" -> "Sistema";
             case "resolution" -> "Resolución personalizada";
             case "resolution_width" -> "Ancho del juego en píxeles";
+            case "resolution_focus_width" -> "Ancho del juego en píxeles";
             case "resolution_height" -> "Alto del juego en píxeles";
-            case "resolution_apply" -> "Aplicar resolución";
-            case "resolution_restore" -> "Restaurar resolución anterior";
-            case "resolution_refresh" -> "Actualizar estado";
+            case "resolution_apply" -> "Aplicar cambios";
+            case "resolution_restore" -> "Restablecer";
             case "bubble" -> "UwU Mouse · abrir opciones";
             case "profiles" -> "Perfiles";
             case "new_profile" -> "Crear perfil";
@@ -130,7 +132,7 @@ public final class OwnUiClick {
                 "Guardar", "Cancelar", "Iniciar en laboratorio", "Laboratorio y diagnóstico", "Probar inyección sintética",
                 "Iniciar sesión", "Detener", "Actualizar", "UwUMouse · abrir opciones", "Mapear", "Cerrar",
                 "Inicio", "Ajustes", "Conexión", "Sistema", "Resolución personalizada", "Ancho del juego en píxeles", "Alto del juego en píxeles",
-                "Aplicar resolución", "Restaurar resolución anterior", "Actualizar estado", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
+                "Aplicar cambios", "Restablecer", "resolution_state", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
                 "Teclas", "WASD", "Cámara", "Acción", "Área", "Opciones del juego", "Cerrar menú", "Cerrar panel", "Cerrar sesión", "Free Fire",
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
                 "Macro", "Agregar punto", "Ubicar", "Asignar", "Quitar tecla de suspensión",
@@ -159,26 +161,43 @@ public final class OwnUiClick {
                 Set<Integer> ownWindows = new HashSet<>();
                 List<AccessibilityWindowInfo> windows = automation.getWindowsOnAllDisplays().get(selectedDisplay);
                 if (windows != null) for (AccessibilityWindowInfo window : windows) {
-                    boolean ownExternalOverlay = selectedDisplay != 0 &&
-                            window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM;
+                    boolean ownSystemOverlay = window.getType() == AccessibilityWindowInfo.TYPE_SYSTEM;
                     if (window.getDisplayId() != selectedDisplay ||
                             (window.getType() != AccessibilityWindowInfo.TYPE_APPLICATION &&
                              window.getType() != AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY &&
-                             !ownExternalOverlay)) continue;
+                             !ownSystemOverlay)) continue;
                     AccessibilityNodeInfo root = window.getRoot();
                     if (root != null && root.getPackageName() != null && OWN.contentEquals(root.getPackageName()) &&
-                            root.getWindowId() == window.getId() && (!ownExternalOverlay || knownOwnOverlayRole(window, root))) {
+                            root.getWindowId() == window.getId() && (!ownSystemOverlay || knownOwnOverlayRole(window, root))) {
                         ownWindows.add(window.getId());
                         pending.add(root);
                     }
                 }
                 if (pending.isEmpty()) throw new IllegalStateException("Own UwUMouse window on selected display required; no action sent");
                 AccessibilityNodeInfo scroll = null;
+                org.json.JSONObject resolutionControls = new org.json.JSONObject();
                 while (!pending.isEmpty()) {
                     AccessibilityNodeInfo node = pending.removeFirst();
                     if (!ownNode(node, ownWindows)) continue;
+                    if (resolutionState) {
+                        for (String label : new String[] { "Resolución personalizada", "Ancho del juego en píxeles",
+                                "Alto del juego en píxeles", "Aplicar cambios", "Restablecer" }) {
+                            if (labelMatches(node.getText(), label) || labelMatches(node.getContentDescription(), label)) {
+                                resolutionControls.put(label, new org.json.JSONObject()
+                                        .put("enabled", node.isEnabled()).put("checked", node.isChecked())
+                                        .put("editable", node.isEditable()).put("focused", node.isFocused())
+                                        .put("visible", node.isVisibleToUser())
+                                        .put("text", node.getText() == null ? "" : node.getText().toString()));
+                            }
+                        }
+                    }
                     if (node.isVisibleToUser() && (labelMatches(node.getText(), args[0]) ||
                             labelMatches(node.getContentDescription(), args[0]))) {
+                        if (resolutionFocus) {
+                            if (!node.isEnabled() || !node.isEditable()) throw new IllegalStateException("Own resolution field disabled");
+                            System.out.println("own_ui_focus accepted=" + node.performAction(AccessibilityNodeInfo.ACTION_FOCUS) + " display=" + selectedDisplay);
+                            return;
+                        }
                         if (resolutionInput) {
                             if (!node.isEnabled() || !node.isEditable()) throw new IllegalStateException("Own resolution field disabled");
                             Bundle value = new Bundle();
@@ -199,6 +218,10 @@ public final class OwnUiClick {
                         AccessibilityNodeInfo child = node.getChild(i);
                         if (child != null) pending.addLast(child);
                     }
+                }
+                if (resolutionState && resolutionControls.length() == 5) {
+                    System.out.println(resolutionControls.toString());
+                    return;
                 }
                 if (scroll == null || args.length < 2) break;
                 int action = "backward".equals(args[1]) ? AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD : AccessibilityNodeInfo.ACTION_SCROLL_FORWARD;

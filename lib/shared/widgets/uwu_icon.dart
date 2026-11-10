@@ -78,6 +78,11 @@ enum _Glyph {
   more,
   importFile,
   exportFile,
+  refresh,
+  edit,
+  delete,
+  check,
+  profile,
 }
 
 _Glyph _resolve(IconData? icon) => icon == UwuIcons.brand
@@ -97,6 +102,10 @@ final _identifiers = <IconData, _Glyph>{
   Icons.keyboard_arrow_down_rounded: _Glyph.arrowDown,
   Icons.arrow_drop_down: _Glyph.arrowDown,
   Icons.close: _Glyph.close,
+  Icons.close_rounded: _Glyph.close,
+  Icons.check_rounded: _Glyph.check,
+  Icons.delete_outline: _Glyph.delete,
+  Icons.edit_outlined: _Glyph.edit,
   Icons.error_outline_rounded: _Glyph.warning,
   Icons.gamepad_rounded: _Glyph.controller,
   Icons.link_rounded: _Glyph.link,
@@ -106,12 +115,15 @@ final _identifiers = <IconData, _Glyph>{
   Icons.open_with: _Glyph.move,
   Icons.play_arrow: _Glyph.play,
   Icons.play_arrow_rounded: _Glyph.play,
+  Icons.person_outline: _Glyph.profile,
   Icons.power_settings_new: _Glyph.power,
+  Icons.refresh_rounded: _Glyph.refresh,
   Icons.science_outlined: _Glyph.lab,
   Icons.search_rounded: _Glyph.search,
   Icons.shield_outlined: _Glyph.shield,
   Icons.sports_esports_outlined: _Glyph.controller,
   Icons.sports_esports_rounded: _Glyph.controller,
+  Icons.settings_outlined: _Glyph.settings,
   Icons.stop_circle_outlined: _Glyph.stop,
   Icons.touch_app_outlined: _Glyph.action,
   Icons.tune: _Glyph.settings,
@@ -132,6 +144,74 @@ class _Shape {
 }
 
 final Map<_Glyph, List<_Shape>> _art = {
+  _Glyph.refresh: [
+    _Shape(
+      Path()
+        ..moveTo(19, 8.5)
+        ..cubicTo(17.8, 5.9, 15.1, 4.5, 12.3, 4.5)
+        ..cubicTo(8.2, 4.5, 5, 7.8, 5, 12)
+        ..cubicTo(5, 16.2, 8.2, 19.5, 12.3, 19.5)
+        ..cubicTo(16.1, 19.5, 19.2, 16.8, 19.5, 13.1)
+        ..moveTo(19, 4.5)
+        ..lineTo(19, 9)
+        ..lineTo(14.5, 9),
+      width: 1.9,
+    ),
+  ],
+  _Glyph.edit: [
+    _Shape(
+      Path()
+        ..moveTo(4, 17)
+        ..lineTo(4, 20)
+        ..lineTo(7, 20)
+        ..lineTo(19.7, 7.3)
+        ..quadraticBezierTo(20.8, 6.2, 19.7, 5.1)
+        ..lineTo(18.9, 4.3)
+        ..quadraticBezierTo(17.8, 3.2, 16.7, 4.3)
+        ..close()
+        ..moveTo(14.8, 6.2)
+        ..lineTo(17.8, 9.2),
+    ),
+  ],
+  _Glyph.delete: [
+    _Shape(
+      Path()
+        ..moveTo(5, 7)
+        ..lineTo(19, 7)
+        ..moveTo(9, 7)
+        ..lineTo(9.5, 4.5)
+        ..lineTo(14.5, 4.5)
+        ..lineTo(15, 7)
+        ..moveTo(7, 7)
+        ..lineTo(7.8, 19)
+        ..quadraticBezierTo(7.9, 20, 9, 20)
+        ..lineTo(15, 20)
+        ..quadraticBezierTo(16.1, 20, 16.2, 19)
+        ..lineTo(17, 7)
+        ..moveTo(10, 10)
+        ..lineTo(10.3, 17)
+        ..moveTo(14, 10)
+        ..lineTo(13.7, 17),
+    ),
+  ],
+  _Glyph.check: [
+    _Shape(
+      Path()
+        ..moveTo(5.5, 12.5)
+        ..lineTo(10, 17)
+        ..lineTo(19, 7),
+      width: 2.1,
+    ),
+  ],
+  _Glyph.profile: [
+    _Shape(
+      Path()
+        ..addOval(const Rect.fromLTWH(8.5, 3.5, 7, 7))
+        ..moveTo(5, 20)
+        ..cubicTo(5, 15.7, 8, 13, 12, 13)
+        ..cubicTo(16, 13, 19, 15.7, 19, 20),
+    ),
+  ],
   _Glyph.importFile: [
     _Shape(
       Path()

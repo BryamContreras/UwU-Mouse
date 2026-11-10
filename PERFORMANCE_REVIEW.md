@@ -142,7 +142,8 @@ El ajuste de Sistema utiliza operaciones frías de WMS, fuera del monitor del
 inyector. No añade consultas de resolución a la cámara, al dibujo ni al bucle de
 entrada. La app y el backend conservan como máximo una operación en vuelo y
 trabajo pendiente acotado; sus workers expiran tras diez segundos sin trabajo.
-El formulario no retiene Activities destruidas mientras espera un resultado.
+El formulario no retiene vistas cerradas mientras espera un resultado. Desde
+0.3.8+46 reside en Sistema: libera la captura al editar y no abre otra Activity.
 
 La compilación release completó **103 pruebas Flutter y 964 pruebas JVM**,
 incluidas 32 nuevas de resolución con acceso WMS, procesos y diario simulados. Cubren

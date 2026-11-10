@@ -246,27 +246,29 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
                 onChanged: (_) => _pairingPortEdited = true,
                 decoration: const InputDecoration(
                   labelText: 'Puerto de emparejamiento',
-                  helperText:
-                      'Se detecta solo; si falta, copia el de la ventana del código.',
+                  helperText: 'Se detecta solo; si falta, copia el de la ventana del código.',
                   helperMaxLines: 2,
                 ),
               ),
               const SizedBox(height: 12),
-              FilledButton(
+              FilledButton.icon(
                 key: const ValueKey('activation-pair'),
                 onPressed: busy ? null : _pair,
-                child: const Text('Emparejar y activar'),
+                icon: const UwuIcon(Icons.link_rounded, size: 23),
+                label: const Text('Emparejar y activar'),
               ),
               if (status?.paired == true) ...[
                 const SizedBox(height: 8),
-                OutlinedButton(
+                OutlinedButton.icon(
                   key: const ValueKey('activation-connect'),
                   onPressed: busy ? null : _connect,
-                  child: const Text('Reactivar sin código'),
+                  icon: const UwuIcon(Icons.refresh_rounded, size: 23),
+                  label: const Text('Reactivar sin código'),
                 ),
               ],
               const SizedBox(height: 8),
               ExpansionTile(
+                leading: const UwuIcon(Icons.search_rounded, size: 23),
                 title: const Text('Si no detecta el servicio'),
                 tilePadding: EdgeInsets.zero,
                 children: [
@@ -307,9 +309,10 @@ class LocalActivationSheetState extends State<LocalActivationSheet>
                 'Motor activo. Vuelve a tu biblioteca y toca el juego.',
               ),
               const SizedBox(height: 12),
-              FilledButton(
+              FilledButton.icon(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Listo'),
+                icon: const UwuIcon(Icons.check_rounded, size: 23),
+                label: const Text('Listo'),
               ),
             ],
           ],

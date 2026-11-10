@@ -1269,6 +1269,54 @@ void main() {
     },
   );
 
+  testWidgets('home connection cards separate in landscape and remain usable', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(900, 500);
+    tester.view.devicePixelRatio = 1;
+    tester.platformDispatcher.textScaleFactorTestValue = 1.4;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+    final calls = <String>[];
+    mockActivation(calls, () => status(drawOverlays: false));
+    await tester.pumpWidget(const UwUMouseApp());
+    await tester.pumpAndSettle();
+
+    final first = tester.getRect(
+      find.byKey(const ValueKey('wireless-debugging-card')),
+    );
+    final second = tester.getRect(find.byKey(const ValueKey('overlay-card')));
+    final bounds = tester.getRect(
+      find.byKey(const ValueKey('connection-summary')),
+    );
+    expect(first.top, second.top);
+    expect(second.left - first.right, greaterThanOrEqualTo(10));
+    expect(first.left, greaterThanOrEqualTo(bounds.left));
+    expect(second.right, lessThanOrEqualTo(bounds.right));
+    await tester.tap(find.byKey(const ValueKey('wireless-debugging-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('overlay-settings')));
+    await tester.pumpAndSettle();
+    expect(calls, contains('wirelessDebuggingSettings'));
+    expect(calls, contains('openOverlaySettings'));
+    expect(tester.takeException(), isNull);
+
+    tester.view.physicalSize = const Size(320, 740);
+    tester.platformDispatcher.textScaleFactorTestValue = 1.8;
+    await tester.pumpAndSettle();
+    final wireless = tester.getRect(
+      find.byKey(const ValueKey('wireless-debugging-settings')),
+    );
+    final overlay = tester.getRect(
+      find.byKey(const ValueKey('overlay-settings')),
+    );
+    expect(overlay.top, greaterThanOrEqualTo(wireless.bottom));
+    expect(wireless.left, overlay.left);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
   testWidgets(
     'connection settings expose only missing services and update while open',
     (tester) async {

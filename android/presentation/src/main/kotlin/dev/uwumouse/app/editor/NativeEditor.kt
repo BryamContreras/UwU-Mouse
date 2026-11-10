@@ -15,6 +15,10 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.GradientDrawable
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.DynamicDrawableSpan
+import android.text.style.ImageSpan
 import android.hardware.display.DisplayManager
 import android.os.Looper
 import android.text.Editable
@@ -321,8 +325,8 @@ class NativeEditor(
                 if(showInvalidWait()) return@button
                 try { save(draft.save().let { it.copy(shortcuts=it.shortcuts.copy(stop=0,edit=0)) }) }
                 catch(e:Exception) { error.text=e.message ?: "No se pudo guardar"; scroller.visibility=View.VISIBLE; syncPaletteVisibility() }
-            }.apply { saveButton=this; background=gradient(Color.rgb(87,166,255),Color.rgb(43,103,223),12,Color.rgb(151,209,255)); setTextColor(Color.WHITE); typeface=android.graphics.Typeface.DEFAULT_BOLD },LinearLayout.LayoutParams(0,dp(EditorControlsStyle.ACTION_HEIGHT_DP),1f))
-            actions.addView(button("Cancelar") { cancel() }.apply { background=gradient(Color.rgb(34,54,88),Color.rgb(19,33,58),12,Color.rgb(66,94,135)); setTextColor(Color.rgb(224,236,255)) },LinearLayout.LayoutParams(0,dp(EditorControlsStyle.ACTION_HEIGHT_DP),1f).apply { leftMargin=dp(EditorControlsStyle.ACTION_GAP_DP) })
+            }.apply { saveButton=this; centeredActionIcon(this,R.drawable.mm_check); background=gradient(Color.rgb(87,166,255),Color.rgb(43,103,223),12,Color.rgb(151,209,255)); setTextColor(Color.WHITE); typeface=android.graphics.Typeface.DEFAULT_BOLD },LinearLayout.LayoutParams(0,dp(EditorControlsStyle.ACTION_HEIGHT_DP),1f))
+            actions.addView(button("Cancelar") { cancel() }.apply { centeredActionIcon(this,R.drawable.mm_close); background=gradient(Color.rgb(34,54,88),Color.rgb(19,33,58),12,Color.rgb(66,94,135)); setTextColor(Color.rgb(224,236,255)) },LinearLayout.LayoutParams(0,dp(EditorControlsStyle.ACTION_HEIGHT_DP),1f).apply { leftMargin=dp(EditorControlsStyle.ACTION_GAP_DP) })
             palette.addView(actions,LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT,LayoutParams.WRAP_CONTENT))
             addView(palette,LayoutParams(LayoutParams.WRAP_CONTENT,LayoutParams.WRAP_CONTENT,Gravity.TOP or Gravity.START).apply { topMargin=dp(8); leftMargin=dp(8) })
             hint.apply { textSize=12f; setTextColor(Color.WHITE); gravity=Gravity.CENTER; setPadding(dp(14),dp(8),dp(14),dp(8)); background=background(12) }
@@ -619,6 +623,7 @@ class NativeEditor(
             var refreshing=false
             val custom=CheckBox(context).apply {
                 text="Usar región personalizada";textSize=13f;setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_area)
                 buttonTintList=ToggleStyle.checkColors()
                 isChecked=draft.value.camera.customRegion
                 setOnCheckedChangeListener { view,checked ->
@@ -677,6 +682,11 @@ class NativeEditor(
                 row.addView(coordinate,LinearLayout.LayoutParams(0,dp(40),1f))
                 row.addView(button("Ubicar") {
                     if(current()) { pendingBinding=null;pendingMacroPoint=index;scroller.visibility=View.GONE;refresh() }
+                }.apply {
+                    // Keep the fixed-width label legible when Android enlarges text.
+                    if(resources.configuration.fontScale<=1.15f) centeredActionIcon(this,R.drawable.mm_aim,14)
+                    setSingleLine(true)
+                    setAutoSizeTextTypeUniformWithConfiguration(8,11,1,android.util.TypedValue.COMPLEX_UNIT_SP)
                 },LinearLayout.LayoutParams(dp(62),dp(36)))
                 row.addView(smallClearButton("Eliminar punto ${index+1}") {
                     if(current() && draft.macro().steps.size>1) {
@@ -687,11 +697,11 @@ class NativeEditor(
                 addMacroWait(owner,index) { current() }
             }
             val actions=LinearLayout(context).apply { orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL }
-            actions.addView(compactActionButton("Agregar punto") {
+            actions.addView(compactActionButton("Agregar punto",R.drawable.mm_editor_option_add) {
                 if(current()) { pendingBinding=null;pendingMacroPoint=-1;scroller.visibility=View.GONE;refresh() }
             }.apply { isEnabled=macro.steps.size<GameProfile.MAX_MACRO_STEPS },
                 LinearLayout.LayoutParams(0,dp(EditorControlsStyle.ACTION_HEIGHT_DP),1f))
-            actions.addView(compactActionButton("Eliminar macro") {
+            actions.addView(compactActionButton("Eliminar macro",R.drawable.mm_delete) {
                 if(current()) {
                     invalidWaits.keys.removeAll { it.macroId==owner }
                     draft.removeMacro();pendingMacroPoint=null;macroPointsVisible=false
@@ -741,6 +751,7 @@ class NativeEditor(
             val loop=Switch(context).apply {
                 ToggleStyle.apply(this)
                 text="Mantener en bucle";textSize=13f;setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_repeat)
                 isChecked=draft.action().repeatToggle
                 setOnCheckedChangeListener { view,checked ->
                     if(!refreshing && view.isAttachedToWindow && current()) {
@@ -926,6 +937,7 @@ class NativeEditor(
             var refreshing=false
             val precision=CheckBox(context).apply {
                 text="Mira precisa"; textSize=13f; setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_aim)
                 buttonTintList=ToggleStyle.checkColors()
                 isChecked=draft.value.camera.precisionAim
                 setOnCheckedChangeListener { view,checked ->
@@ -951,6 +963,7 @@ class NativeEditor(
             val enabled=Switch(context).apply {
                 ToggleStyle.apply(this)
                 text="Opciones de cadencia";textSize=13f;setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_fire)
                 isChecked=draft.action().cadenceEnabled
                 setOnCheckedChangeListener { view,checked ->
                     if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE &&
@@ -1008,6 +1021,7 @@ class NativeEditor(
             val durationEnabled=Switch(context).apply {
                 ToggleStyle.apply(this)
                 text="Establecer duración";textSize=13f;setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_editor_option_timer)
                 isChecked=draft.action().cadenceDurationEnabled
                 setOnCheckedChangeListener { view,checked ->
                     if(!refreshingDuration && view.isAttachedToWindow && scroller.visibility==View.VISIBLE &&
@@ -1277,7 +1291,26 @@ class NativeEditor(
             setPadding(dp(7),dp(7),dp(7),dp(7));background=gradient(Color.rgb(31,53,88),Color.rgb(18,34,61),8)
             contentDescription=description;setOnClickListener(clicked)
         }
-        private fun compactActionButton(text:String,clicked:(View)->Unit)=button(text,clicked).apply {
+        private fun optionIcon(view:TextView,icon:Int,size:Int=16) {
+            context.getDrawable(icon)?.mutate()?.let { drawable ->
+                drawable.setBounds(0,0,dp(size),dp(size))
+                view.setCompoundDrawablesRelative(drawable,null,null,null)
+                view.compoundDrawablePadding=dp(4)
+            }
+        }
+        /** An inline icon keeps the complete label centered, even in wide action buttons. */
+        private fun centeredActionIcon(view:Button,icon:Int,size:Int=16) {
+            val drawable=context.getDrawable(icon)?.mutate() ?: return
+            val label=view.text.toString()
+            drawable.setBounds(0,0,dp(size),dp(size))
+            val value=SpannableString("\uFFFC\u00A0\u00A0$label")
+            value.setSpan(ImageSpan(drawable,DynamicDrawableSpan.ALIGN_CENTER),0,1,Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if(view.contentDescription.isNullOrEmpty()) view.contentDescription=label
+            view.textDirection=View.TEXT_DIRECTION_LOCALE
+            view.text=value
+        }
+        private fun compactActionButton(text:String,icon:Int,clicked:(View)->Unit)=button(text,clicked).apply {
+            centeredActionIcon(this,icon,14)
             setSingleLine(true)
             setAutoSizeTextTypeUniformWithConfiguration(8,11,1,android.util.TypedValue.COMPLEX_UNIT_SP)
         }

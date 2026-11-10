@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../application/ports/mapper_gateway.dart';
+import '../../../shared/widgets/uwu_icon.dart';
 
 class CursorSettings extends StatefulWidget {
   const CursorSettings({
@@ -119,12 +120,13 @@ class _CursorSettingsState extends State<CursorSettings> {
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
                 if (_selected == null)
-                  TextButton(
+                  TextButton.icon(
                     onPressed: () async {
                       await _load();
                       if (sheetContext.mounted) updateSheet(() {});
                     },
-                    child: const Text('Reintentar'),
+                    icon: const UwuIcon(Icons.refresh_rounded, size: 22),
+                    label: const Text('Reintentar'),
                   ),
                 const SizedBox(height: 8),
               ],
@@ -151,7 +153,7 @@ class _CursorSettingsState extends State<CursorSettings> {
                         ),
                         child: ListTile(
                           key: ValueKey('cursor-style-$id'),
-                            selected: _selected == id,
+                          selected: _selected == id,
                           onTap: _saving
                               ? null
                               : () async {

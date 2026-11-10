@@ -62,13 +62,12 @@ class BackendProvider : ContentProvider() {
         }
         if(method=="displayResolutionSettings") {
             val displayId=requireNotNull(extras).getInt("displayId",-1)
-            val rotation=extras.getInt("gameRotation",-1)
-            require(displayId>=0 && rotation in 0..3)
+            require(displayId>=0)
             val identity=Binder.clearCallingIdentity()
             return try {
                 val task=FutureTask<Unit> {
                     dev.uwumouse.app.game.GameCoordinator.initialize(requireNotNull(context))
-                    dev.uwumouse.app.DisplayResolutionActivity.launch(requireNotNull(context),displayId,rotation)
+                    dev.uwumouse.app.game.GameCoordinator.openDisplayResolutionSettings(displayId)
                 }
                 check(android.os.Handler(android.os.Looper.getMainLooper()).post(task))
                 task.get(5,TimeUnit.SECONDS)

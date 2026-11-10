@@ -249,6 +249,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         }
     }
     fun discardDisplayContext(displayId:Int) {
+        if(resolutionSettingsAnchor?.frame?.displayId==displayId) {
+            resolutionSettingsAnchor=null;resolutionSettingsPresentationAllowed=false
+        }
         if(editingPresentation?.anchor?.frame?.displayId==displayId) endEditorPresentation("display_unavailable")
         if(cursorInstanceDisplay==displayId) {
             if(clearCursorInteraction()) {
@@ -337,6 +340,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var editingPresentation:EditingPresentation?=null
     @Volatile private var editorAnchorResetReason="not_started"
     @Volatile private var windowContext=CachedWindowContext()
+    private var resolutionSettingsAnchor:ResolutionSettingsPresentationAnchor?=null
+    @Volatile var resolutionSettingsPresentationAllowed=false
+        private set
     @Volatile private var windowMetadataError="not_ready"
     private var windowOwners:Map<Int,String> = emptyMap()
     private val cursorTarget:PointerBounds? get()=windowContext.targetBounds
@@ -521,12 +527,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             Log.i("UwUMouseKeys", "control_source_update mouse=$appliedMouseCapture pending=${consumedKeys.size} deferred=$deferredSourceChanges timeouts=$tailTimeouts")
         }
     }
-    private fun wantsKeyboardCapture() = !DisplayResolutionController.changing && SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
+    private fun wantsKeyboardCapture() = SessionController.mode!=SessionMode.STOPPED && !DisplayResolutionController.changing && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
         (SessionController.active || GameCoordinator.sessionOpen)
-    private fun wantsMenuPointer() = GameCoordinator.menuPointerAvailable && SessionController.targetConfirmed &&
+    private fun wantsMenuPointer() = SessionController.mode!=SessionMode.STOPPED && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && GameCoordinator.menuPointerAvailable && SessionController.targetConfirmed &&
         !SessionController.active && !SessionController.isTransitioning() && !SessionController.needsRecoveryContext &&
         !SessionController.releaseUnverified && SessionController.contacts==0
-    private fun effectiveMouseCapture()=!DisplayResolutionController.changing && (requestedMouseCapture || wantsMenuPointer())
+    private fun effectiveMouseCapture()=!DisplayResolutionController.changing && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && (requestedMouseCapture || wantsMenuPointer())
     private fun physicalSourcesMatch()=effectiveMouseCapture()==appliedMouseCapture && (nativeCaptureId!=0L)==wantsKeyboardCapture()
     private fun desiredMouseRateHz()=if(nativeRateSupported && effectiveMouseCapture() && SessionController.active && !wantsMenuPointer())
         SessionController.mouseCaptureRateHz else 0
@@ -539,7 +545,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
-        if(DisplayResolutionController.changing || captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
+        if(DisplayResolutionController.changing || GameCoordinator.resolutionPanelVisible || GameCoordinator.menuTextInputActive || captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
             menuAwaitingRelease || wantsMenuPointer()) return null
         val route=SessionController.nativeCameraRoute(captureId,physicalButtons) ?: return null
         return route.takeIf { captureEpoch==it.generation }
@@ -781,6 +787,49 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(snapshot.editorAnchor!=null || snapshot.editorPresentationAllowed)
             windowContext=snapshot.copy(editorAnchor=null,editorPresentationAllowed=false)
     }
+    /** Capture a real APP frame before a focusable System field or its IME covers it. */
+    fun admitResolutionSettingsPresentation(displayId:Int):Boolean {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        val snapshot=windowContext
+        val selected=snapshot.selected
+        val now=SystemClock.uptimeMillis()
+        if(SessionController.active || SessionController.armed || SessionController.contacts!=0 ||
+            SessionController.releaseUnverified || snapshot.displayId!=displayId ||
+            snapshot.targetPackage!=SessionController.targetPackage || selected==null ||
+            now-snapshot.capturedUptime !in 0L..ResolutionSettingsPresentationPolicy.MAX_METADATA_AGE_MS ||
+            snapshot.windows.none { it.id==selected.id && it.type==WindowType.TYPE_APPLICATION &&
+                it.rootResolved && it.packageName==snapshot.targetPackage }) return false
+        resolutionSettingsAnchor=ResolutionSettingsPresentationAnchor(snapshot.targetPackage,selected.frame)
+        // The System form can be under construction on its first admission. This
+        // prospective presentation flag is still consumed only while GC observes the
+        // actual panel visible; it never changes input authority or renews cache ages.
+        resolutionSettingsPresentationAllowed=resolutionSettingsPresentationFor(snapshot,true,now)
+        return true
+    }
+    private fun resolutionSettingsPresentationFor(snapshot:CachedWindowContext,panelVisible:Boolean,now:Long):Boolean {
+        if(!panelVisible) return false // No settings-policy allocation or service query while playing.
+        if(snapshot.targetPackage!=SessionController.targetPackage || snapshot.displayId!=SessionController.targetDisplayId) return false
+        val elapsed=now-snapshot.capturedUptime
+        val age=if(elapsed !in 0L..ResolutionSettingsPresentationPolicy.MAX_METADATA_AGE_MS ||
+            snapshot.brokerFocusAgeMs !in 0L..ResolutionSettingsPresentationPolicy.MAX_METADATA_AGE_MS) Long.MAX_VALUE
+            else snapshot.brokerFocusAgeMs+elapsed
+        val selected=snapshot.selected
+        val realGame=selected?.takeIf { candidate -> snapshot.windows.any {
+            it.id==candidate.id && it.type==WindowType.TYPE_APPLICATION && it.rootResolved &&
+                it.packageName==snapshot.targetPackage
+        } }?.frame
+        val task=snapshot.taskPresence
+        return ResolutionSettingsPresentationPolicy.allows(ResolutionSettingsPresentationState(
+            panelVisible,snapshot.targetPackage,packageName,snapshot.displayId,
+            getSystemService(DisplayManager::class.java).getDisplay(snapshot.displayId)?.state==android.view.Display.STATE_ON,
+            getSystemService(KeyguardManager::class.java).isKeyguardLocked,SessionController.mode,
+            SessionController.active,SessionController.armed,SessionController.contacts,SessionController.releaseUnverified,
+            snapshot.windows.isNotEmpty() && windowMetadataError.isEmpty(),age,
+            snapshot.windows.map { ContextWindowCandidate(it.type,it.packageName,it.frame,it.focused,it.rootResolved) },
+            realGame,resolutionSettingsAnchor,snapshot.trustedFocus,snapshot.foregroundPackage,snapshot.focusedDisplayId,age,
+            task?.taskQueryValid==true,task?.packageName,task?.taskPresent==true,
+            task?.let { now-it.taskCapturedUptimeMs } ?: Long.MAX_VALUE))
+    }
     fun boundsForPackage(packageName:String):Rect? {
         val snapshot=windowContext
         if(snapshot.targetPackage!=packageName || snapshot.displayId!=SessionController.targetDisplayId) return null
@@ -972,14 +1021,24 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             contextValid=contextValid,
             gameWindowPresent=targetWindow!=null,
             gameFocused=trustedFocus && focusedDisplay==displayId && focused?.getString("packageName")==target)
-        windowContext=CachedWindowContext(displayId,focusedDisplay,trustedFocus,target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
+        if(!GameCoordinator.resolutionPanelVisible) resolutionSettingsAnchor=null
+        else if(contextValid && targetFrame!=null && targetWindow!=null && contextWindows.any {
+            it.id==targetWindow.id && it.type==WindowType.TYPE_APPLICATION && it.rootResolved && it.packageName==target
+        } && !SessionController.active && !SessionController.armed && SessionController.contacts==0 && !SessionController.releaseUnverified)
+            resolutionSettingsAnchor=ResolutionSettingsPresentationAnchor(target,targetFrame)
+        // Publish before targetChanged: it can synchronously refresh presentation.
+        // Neither this flag nor its historical anchor participates in confirmed/bounds.
+        val nextWindowContext=CachedWindowContext(displayId,focusedDisplay,trustedFocus,target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
             contextWindows,blockedWindows,capturedUptime,brokerFocusAgeMs,editorPresentationAllowed,editingPresentation,taskPresence)
+        resolutionSettingsPresentationAllowed=resolutionSettingsPresentationFor(nextWindowContext,GameCoordinator.resolutionPanelVisible,capturedUptime)
+        windowContext=nextWindowContext
         currentApplicationPackage=if(confirmed) target else if(blocked || foreground==target) null else foreground
         if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
         SessionController.targetChanged(confirmed)
         if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
         GameCoordinator.observeTargetLifecycle(taskPresence,capturedUptime,displayReady,locked)
-        GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed)
+        GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed,
+            resolutionSettingsPresentationAllowed)
     }
     fun onKeyEvent(event: KeyEvent, fromNative:Boolean=false): Boolean {
         val latencyReceivedNanos = if (InputLatencyProbe.enabled) System.nanoTime() else 0L
@@ -1005,6 +1064,17 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             }
             traceControl(event, handled = true, owned = true)
             return true // Preserve down/up pairing even when the session paused before release.
+        }
+        // Old owners above still receive their matching UP. New field input belongs to
+        // Android's focused widget/IME and cannot trigger camera/profile shortcuts.
+        if(GameCoordinator.resolutionPanelVisible || GameCoordinator.menuTextInputActive) {
+            // A final native callback can arrive before EVIOCGRAB is retired. Returning
+            // false there would forward text to the game; drain that pair locally instead.
+            if(fromNative) {
+                if(event.action==KeyEvent.ACTION_DOWN) consumedKeys.add(identity)
+                return true
+            }
+            return false
         }
         val physical=fromNative || event.device?.let { it.isExternal && !it.isVirtual }==true
         if(physical && event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) {
@@ -1313,6 +1383,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         forceMouseOff("display_resolution")
     }
     fun close() {
+        resolutionSettingsAnchor=null;resolutionSettingsPresentationAllowed=false
         endEditorPresentation("service_destroyed")
         GameCoordinator.detach(this)
         SessionController.pause("Captura nativa desconectada")

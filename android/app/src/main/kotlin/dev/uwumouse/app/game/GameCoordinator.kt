@@ -2,7 +2,7 @@ package dev.uwumouse.app.game
 
 import dev.uwumouse.app.runtime.NativeSessionHost
 import dev.uwumouse.app.runtime.DisplayResolutionController
-import dev.uwumouse.app.DisplayResolutionActivity
+import dev.uwumouse.app.runtime.OverlayDisplayResolutionSettings
 
 import android.app.ActivityManager
 import android.app.ActivityOptions
@@ -17,6 +17,7 @@ import android.util.Log
 import android.view.WindowManager
 import android.widget.Toast
 import dev.uwumouse.app.editor.ControllerBubble
+import dev.uwumouse.app.editor.DisplayResolutionSettingsPort
 import dev.uwumouse.app.editor.BubbleSettingsStore
 import dev.uwumouse.app.editor.BubbleSettings
 import dev.uwumouse.app.editor.NativeEditor
@@ -37,6 +38,8 @@ object GameCoordinator {
     private var service:NativeSessionHost?=null
     private var editor:NativeEditor?=null
     private var bubble:ControllerBubble?=null
+    private var resolutionSettings:DisplayResolutionSettingsPort?=null
+    private var resolutionToolsDisplayId=-1
     private var controls:MappedControlsOverlay?=null
     private var monitor:PerformanceMonitorBubble?=null
     private var monitorContext:Context?=null
@@ -72,11 +75,13 @@ object GameCoordinator {
         Log.i("UwUMouseEditor",JSONObject(event).toString())
     }
     private fun requireProfileChangeAllowed() {
-        check(!waiting && !SessionController.isTransitioning() && !SessionController.active && !editorVisible) { "Espera a que termine la transición de sesión antes de cambiar el perfil" }
+        check(!waiting && !DisplayResolutionController.changing && !SessionController.isTransitioning() && !SessionController.active && !editorVisible) { "Espera a que termine la transición de sesión antes de cambiar el perfil" }
     }
     val editorVisible:Boolean get()=editor?.visible==true
     val bubbleVisible:Boolean get()=bubble?.visible==true
     val bubbleMenuVisible:Boolean get()=bubble?.menuVisible==true
+    val resolutionPanelVisible:Boolean get()=bubble?.systemPanelVisible==true
+    val menuTextInputActive:Boolean get()=bubble?.menuTextInputActive==true
     val controlsVisible:Boolean get()=controls?.visible==true
     val monitorVisible:Boolean get()=monitor?.visible==true
     val monitorFps:Int? get()=monitor?.fps
@@ -85,7 +90,7 @@ object GameCoordinator {
     val cursorSettings:BubbleSettings get()=bubble?.settingsSnapshot ?: BubbleSettings()
     val ownOverlayVisible:Boolean get()=editorVisible || bubbleVisible || controlsVisible || monitor?.visible==true || service?.cursorVisible==true
     val sessionOpen:Boolean get()=toolsRequested
-    fun cameraResumeKey():Int? = if(cameraShortcut>0 && toolsRequested && !editorVisible && SessionController.targetConfirmed &&
+    fun cameraResumeKey():Int? = if(cameraShortcut>0 && toolsRequested && !editorVisible && !menuTextInputActive && SessionController.targetConfirmed &&
         !SessionController.releaseUnverified && SessionController.mode==SessionMode.PAUSED &&
         (startPending || (!waiting && !SessionController.isTransitioning())) && SessionController.contacts==0) cameraShortcut else null
     fun resumeFromCameraKey() {
@@ -218,12 +223,22 @@ object GameCoordinator {
             bubble?.invalidateTrustedVisual();monitor?.invalidateTrustedVisual();refreshControls()
         };statusVisual=visuals
         editor=NativeEditor(capture,context,capture);bubble=ControllerBubble(capture,context,settings,visuals);controls=MappedControlsOverlay(capture,context)
+        resolutionSettings=OverlayDisplayResolutionSettings(displayId,{
+            capture.admitResolutionSettingsPresentation(displayId)
+            geometry(displayId).third
+        }) {
+            check(service===capture && toolsRequested && presentationDisplayId==displayId &&
+                SessionController.targetDisplayId==displayId &&
+                app.getSystemService(DisplayManager::class.java).getDisplay(displayId)?.isValid==true) {
+                "La pantalla del juego ya no está disponible; vuelve a abrir la sesión"
+            }
+        }
         monitor=PerformanceMonitorBubble(capture,context,visuals) { x,y -> bubble?.saveMonitorPosition(x,y) };monitorContext=context
         presentationDisplayId=displayId;activeWindow=null;settledTarget=null
         capture.applyCursorSettings(settings.value)
     }
     fun detach(capture:NativeSessionHost) {
-        if(service===capture) { operation++; waiting=false; toolsRequested=false; settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.close();controls?.hide();statusVisual?.close(); editor=null; bubble=null;controls=null;monitor=null;monitorContext=null;statusVisual=null;presentationDisplayId=-1; service=null }
+        if(service===capture) { operation++; waiting=false; toolsRequested=false;resolutionToolsDisplayId=-1; settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.close();controls?.hide();statusVisual?.close(); editor=null; bubble=null;resolutionSettings=null;controls=null;monitor=null;monitorContext=null;statusVisual=null;presentationDisplayId=-1; service=null }
     }
     fun profiles()=store().list().map { wire(ProfileCodec.toJson(it)) }
     fun selected():Any?=store().selected()?.let { wire(ProfileCodec.toJson(it)) }
@@ -495,7 +510,8 @@ object GameCoordinator {
         }
         main.post(poll)
     }
-    fun contextChanged(authorized:Boolean,currentWindow:Rect?,editorPresentationAllowed:Boolean=false) {
+    fun contextChanged(authorized:Boolean,currentWindow:Rect?,editorPresentationAllowed:Boolean=false,
+        resolutionPresentationAllowed:Boolean=false) {
         if(authorized && SessionController.active && SessionController.activeProfileId!=null) {
             if(currentWindow==null || activeWindow!=currentWindow) {
                 // Window metadata can disappear or change transiently (popup, system bar,
@@ -508,6 +524,12 @@ object GameCoordinator {
         if(!authorized) {
             settledTarget=null;activeWindow=null
             presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null
+            if(resolutionPresentationAllowed && resolutionPanelVisible) {
+                // The settings overlay/IME may take focus. This retains its form only;
+                // target confirmation and all engine/capture gates remain independent.
+                hideMonitor();controls?.hide()
+                return
+            }
             if(editorVisible && editorPresentationAllowed && SessionController.mode==SessionMode.EDITING &&
                 !SessionController.active && SessionController.contacts==0 && !SessionController.releaseUnverified) {
                 // A verified own full-screen editor can hide the application's accessibility
@@ -526,7 +548,9 @@ object GameCoordinator {
                 presentationRestore=null
                 if(ticket==operation && capture!=null && capture===service && toolsRequested && !waiting && !editorVisible &&
                     SessionController.targetConfirmed && !SessionController.releaseUnverified &&
-                    SessionController.mode in setOf(SessionMode.PAUSED,SessionMode.PLAYING)) {
+                    (SessionController.mode in setOf(SessionMode.PAUSED,SessionMode.PLAYING) ||
+                        (SessionController.mode==SessionMode.STOPPED && resolutionToolsDisplayId==presentationDisplayId &&
+                            presentationDisplayId==SessionController.targetDisplayId))) {
                     // Restore presentation only after a fresh confirmed context. No menu is reopened,
                     // no input is captured and no held action/session is resumed by this callback.
                     refreshControls()
@@ -574,7 +598,10 @@ object GameCoordinator {
         return refreshed
     }
     private fun refreshControlsOnMain() {
-        if(!toolsRequested || editorVisible || SessionController.mode==SessionMode.STOPPED || SessionController.targetPackage==SessionController.TARGET || !SessionController.targetConfirmed) { hideMonitor();bubble?.hide();controls?.hide(); return }
+        val retainResolution=resolutionPanelVisible && service?.resolutionSettingsPresentationAllowed==true
+        val retainStoppedTools=resolutionToolsDisplayId==presentationDisplayId &&
+            presentationDisplayId==SessionController.targetDisplayId && SessionController.targetConfirmed
+        if(!toolsRequested || editorVisible || (SessionController.mode==SessionMode.STOPPED && !retainResolution && !retainStoppedTools) || SessionController.targetPackage==SessionController.TARGET || (!SessionController.targetConfirmed && !retainResolution)) { hideMonitor();bubble?.hide();controls?.hide(); return }
         // Keep an existing bubble attached while preparing the same confirmed game. It remains
         // non-interactive until the release barrier and configuration transition finish.
         if(waiting && !bubbleVisible) { controls?.hide();return }
@@ -582,7 +609,7 @@ object GameCoordinator {
         val mode=SessionController.mode
         val recovering=mode==SessionMode.RECOVERING
         val blocked=mode==SessionMode.BLOCKED || SessionController.releaseUnverified
-        val canResume=!waiting && !SessionController.active && !recovering && !blocked && !SessionController.isTransitioning() && SessionController.contacts==0
+        val canResume=mode==SessionMode.PAUSED && !waiting && !DisplayResolutionController.changing && !menuTextInputActive && SessionController.targetConfirmed && !SessionController.active && !recovering && !blocked && !SessionController.isTransitioning() && SessionController.contacts==0
         val label=when {
             recovering -> "Recuperando inyector"
             blocked -> "Bloqueada"
@@ -596,9 +623,9 @@ object GameCoordinator {
         val profile=store().get(id)
         val presentation=bubble?.settingsSnapshot
         presentation?.let { service?.applyCursorSettings(it) }
-        if(presentation?.monitorEnabled==true && !waiting && !recovering && !blocked) showMonitor(SessionController.targetPackage,SessionController.targetDisplayId)
+        if(presentation?.monitorEnabled==true && SessionController.mode!=SessionMode.STOPPED && SessionController.targetConfirmed && !waiting && !recovering && !blocked) showMonitor(SessionController.targetPackage,SessionController.targetDisplayId)
         else hideMonitor()
-        if(!waiting && profile!=null && presentation?.showControls==true && !geometryInvalidated && !recovering && !blocked && profile.calibration.confirmed) {
+        if(!waiting && !DisplayResolutionController.changing && SessionController.targetConfirmed && mode!=SessionMode.STOPPED && profile!=null && presentation?.showControls==true && !geometryInvalidated && !recovering && !blocked && profile.calibration.confirmed) {
             controls?.show(profile,presentation.controlsOpacity)
             if(bubble?.copyMenuBounds(menuBounds)==true) controls?.avoid(menuBounds) else controls?.avoid(null)
         } else controls?.hide()
@@ -611,7 +638,7 @@ object GameCoordinator {
         bubble?.show(label,profile?.name ?: "Perfil local",{ openControlsMenu() },
             { runCatching { openEditor(id) }.onFailure { message(it.message ?: "Editor no disponible") } },
             { runCatching { startProfile(id) }.onFailure { message(it.message ?: "No se pudo iniciar") } },{ keyboardMode() },{ stop() },
-            playing=SessionController.active,editEnabled=!waiting && !recovering && !blocked && !SessionController.isTransitioning(),playEnabled=canResume,
+            playing=SessionController.active,editEnabled=!waiting && !DisplayResolutionController.changing && SessionController.targetConfirmed && !recovering && !blocked && !SessionController.isTransitioning(),playEnabled=canResume,
             interactionEnabled=!waiting && !SessionController.isTransitioning() && (!SessionController.active || ((SessionController.cursorMode || service?.mouseCaptured!=true) && SessionController.contacts==0)),cursorHint=cursorKey,
             pointerIntercepted=service?.mouseCaptured==true,onCursorReturn={
                 if(toolsRequested && SessionController.targetConfirmed && canResume) runCatching { startProfile(id,true) }.onFailure { message(it.message ?: "No se pudo abrir el cursor") }
@@ -619,20 +646,19 @@ object GameCoordinator {
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
             onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)},
             onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()},
-            onResolutionSettings={
-                runCatching { openResolutionSettings() }.onFailure { message(it.message ?: "No se pudo abrir la resolución personalizada") }
-            })
+            displayResolution=resolutionSettings,onMenuInputFocusChanged={ service?.refreshMenuPointerSources() })
     }
-    private fun openResolutionSettings() {
-        check(!waiting && !DisplayResolutionController.changing) { "Espera a que termine la operación anterior" }
-        val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
-        // Remember the game's orientation before a focusable settings Activity can rotate.
-        val rotation=geometry(displayId).third
-        DisplayResolutionActivity.launch(app,displayId,rotation)
+    /** Authorized own-UI diagnostics use exactly the same inline System panel. */
+    fun openDisplayResolutionSettings(displayId:Int) {
+        check(toolsRequested && presentationDisplayId==displayId && SessionController.targetDisplayId==displayId &&
+            bubbleVisible && !waiting && !DisplayResolutionController.changing) { "Abre primero la burbuja del juego en esta pantalla" }
+        openControlsMenu("Sistema")
     }
     /** Cancel pending target admissions without removing the user's System/Restore entry. */
     fun beginDisplayResolutionChange() {
         check(Looper.myLooper()==Looper.getMainLooper())
+        // Keep access to System/Restore after closing the form. This never rearms mapping.
+        resolutionToolsDisplayId=presentationDisplayId.takeIf { toolsRequested && resolutionPanelVisible } ?: -1
         operation++;waiting=false;startPending=false;settledTarget=null
         presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null
         controls?.hide()
@@ -664,10 +690,10 @@ object GameCoordinator {
         monitorContext?.let { OverlayWindows.setMonitorActive(it,false) }
         bubble?.refreshWindowOpacity();controls?.refreshWindowOpacity();service?.refreshCursorWindowOpacity()
     }
-    fun openControlsMenu() {
+    fun openControlsMenu(initialPage:String?=null) {
         if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed) return
         if(SessionController.mode==SessionMode.RECOVERING || SessionController.mode==SessionMode.BLOCKED || SessionController.releaseUnverified) {
-            refreshControls();guardPresentation("menu") { bubble?.openMenu() };return
+            refreshControls();guardPresentation("menu") { bubble?.openMenu(initialPage) };return
         }
         // A touchable own window can receive a mapped coordinate and make targeted
         // injection fail. Pause before showing it, including camera-toggle work in flight.
@@ -675,7 +701,7 @@ object GameCoordinator {
         profileMenuCursor=SessionController.cursorMode
         SessionController.pauseThen("Menú de controles; mapeo pausado") { safe ->
             refreshControls()
-            if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu() }
+            if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu(initialPage) }
         }
     }
     private fun keyboardMode() {
@@ -688,7 +714,7 @@ object GameCoordinator {
         check(Looper.myLooper()==Looper.getMainLooper())
         val wasEditing=editorVisible
         stopServiceWhenClosed=true
-        operation++; waiting=false; startPending=false;toolsRequested=false;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList()
+        operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList()
         presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null
         closingPresentation=true
         try {
@@ -720,7 +746,7 @@ object GameCoordinator {
         }
         return true
     }
-    fun clearTools() { operation++; waiting=false; startPending=false;toolsRequested=false;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
+    fun clearTools() { operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
     fun geometryChanged() {
         geometryInvalidated=true;settledTarget=null;controls?.hide()
         if(editorVisible) { recordEditorClose("geometry_changed"); editor?.close(); SessionController.editorClosed() }
@@ -729,7 +755,7 @@ object GameCoordinator {
     }
     fun displayUnavailable(displayId:Int) {
         if(displayId!=SessionController.targetDisplayId) return
-        operation++;waiting=false;startPending=false;toolsRequested=false;settledTarget=null;activeWindow=null
+        operation++;waiting=false;startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;activeWindow=null
         profileKeys=emptyMap();profileRows=emptyList()
         if(editorVisible) recordEditorClose("display_removed")
         hideMonitor();editor?.close();bubble?.hide();controls?.hide();service?.hideCursorForTransition()
@@ -740,7 +766,7 @@ object GameCoordinator {
         service?.captureMouse(false)
         service?.discardDisplayContext(displayId)
         statusVisual?.close();statusVisual=null
-        editor=null;bubble=null;controls=null;monitor=null;monitorContext=null;presentationDisplayId=-1
+        editor=null;bubble=null;resolutionSettings=null;controls=null;monitor=null;monitorContext=null;presentationDisplayId=-1
     }
     /** Only Android window-admission failures close presentation; other defects still propagate. */
     private fun guardPresentation(phase:String,action:()->Unit) {
@@ -764,11 +790,11 @@ object GameCoordinator {
         val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
         val oldEditor=editor;val oldBubble=bubble;val oldControls=controls;val oldMonitor=monitor;val oldVisual=statusVisual
         monitorSampler.stop()
-        operation++;waiting=false;startPending=false;toolsRequested=false;settledTarget=null;activeWindow=null
+        operation++;waiting=false;startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;activeWindow=null
         profileKeys=emptyMap();profileRows=emptyList()
         presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null
         // Clear owners before closing: a menu's close callback can synchronously refresh controls.
-        editor=null;bubble=null;controls=null;monitor=null;monitorContext=null;statusVisual=null;presentationDisplayId=-1
+        editor=null;bubble=null;resolutionSettings=null;controls=null;monitor=null;monitorContext=null;statusVisual=null;presentationDisplayId=-1
         lastPresentationFailure=mapOf("phase" to phase,"displayId" to displayId,
             "type" to failure.javaClass.simpleName,"uptimeMs" to SystemClock.uptimeMillis())
         Log.e("UwUMouseWindow","presentation_unavailable phase=$phase display=$displayId",failure)

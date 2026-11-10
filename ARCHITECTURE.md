@@ -421,13 +421,22 @@ históricos; sus números de pruebas y aceptaciones no validan esta nueva polít
 
 ## Resolución personalizada de Sistema
 
-La burbuja abre una Activity nativa focusable para editar ancho y alto. Conserva
-la pantalla explícita y la rotación que tenía el juego antes de abrir los ajustes,
-porque la orientación de la propia Activity puede cambiar. Las dimensiones se
+El panel Sistema de la burbuja contiene un switch, ancho, alto, Aplicar cambios
+y Restablecer. Los campos se muestran bloqueados al apagar el switch. Sistema
+libera la captura física y el menú habilita el foco solo mientras se editan,
+para que el teclado llegue al EditText. Conserva la pantalla explícita y la
+rotación que tenía el juego antes de enfocar los campos. Las dimensiones se
 convierten a coordenadas naturales; no se fuerza rotación, densidad ni modo físico.
 En duplicación HDMI cambia el tamaño lógico de la fuente que ejecuta el juego,
 lo que puede afectar también al teléfono. Un monitor externo no se identifica
 automáticamente como una fuente duplicada.
+
+La retención del panel durante el teclado y el cambio de tamaño usa metadatos
+reales y recientes de su pantalla. Un ancla anterior puede conservar sólo la
+presentación del formulario con tarea y foco verificados; no reemplaza la ventana,
+los límites ni la confirmación del destino para inyectar. Se retira cuando deja de
+comprobarse el contexto del juego, se bloquea o desconecta su pantalla, o aparece
+una ventana ajena que lo cubre.
 
 El APK local analizado de GG Mouse Pro 1.18.0 ejecuta `wm size ancho×alto` y,
 por separado, `wm density`; su configuración es global para la pantalla
@@ -453,8 +462,8 @@ nuevo vacío no sustituye esa prueba; si no puede completarse, se conserva el
 registro para reintentar. Las operaciones posteriores exigen cierre de entradas.
 Una restauración parcial conserva el antes y el tamaño observado como propios,
 o vuelve al tamaño propio anterior, para permitir reintentos sin borrar el registro.
-La propiedad pertenece al Binder del proceso de la app, no a la
-Activity del formulario. El cierre del propietario o del motor solicita restaurar
+La propiedad pertenece al Binder del proceso de la app, no al
+panel del formulario. El cierre del propietario o del motor solicita restaurar
 cuando sea seguro; no se cambia geometría sobre contactos sin liberar.
 
 La operación es fría, con IO serializado, trabajo pendiente acotado y workers que

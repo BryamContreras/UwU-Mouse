@@ -347,13 +347,15 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         title: const Text('Eliminar perfil'),
         content: Text('Se eliminará «${profile.name}» de este teléfono.'),
         actions: [
-          TextButton(
+          TextButton.icon(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancelar'),
+            icon: const UwuIcon(Icons.close_rounded, size: 20),
+            label: const Text('Cancelar'),
           ),
-          TextButton(
+          TextButton.icon(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Eliminar'),
+            icon: const UwuIcon(Icons.delete_outline, size: 20),
+            label: const Text('Eliminar'),
           ),
         ],
       ),
@@ -826,21 +828,33 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   );
 
   Widget _connectionSummary(NativeStatus? status) {
-    return Container(
-      key: const ValueKey('connection-summary'),
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xfff0f8ff), Color(0xffe8f4ff)],
-        ),
-        border: Border.all(color: const Color(0xffbeddf5)),
-        borderRadius: BorderRadius.circular(18),
+    final decoration = BoxDecoration(
+      gradient: const LinearGradient(
+        colors: [Color(0xfff0f8ff), Color(0xffe8f4ff)],
       ),
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 600;
-          Widget option(Widget child) => wide ? Expanded(child: child) : child;
-          return Flex(
+      border: Border.all(color: const Color(0xffbeddf5)),
+      borderRadius: BorderRadius.circular(18),
+    );
+    const padding = EdgeInsets.symmetric(horizontal: 8, vertical: 2);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Keep the same breakpoint as the former shared card's inner width.
+        final wide = constraints.maxWidth >= 616;
+        Widget option(Widget child, Key key) => wide
+            ? Expanded(
+                child: Container(
+                  key: key,
+                  padding: padding,
+                  decoration: decoration,
+                  child: child,
+                ),
+              )
+            : child;
+        return Container(
+          key: const ValueKey('connection-summary'),
+          padding: wide ? EdgeInsets.zero : padding,
+          decoration: wide ? null : decoration,
+          child: Flex(
             direction: wide ? Axis.horizontal : Axis.vertical,
             crossAxisAlignment: wide
                 ? CrossAxisAlignment.start
@@ -885,8 +899,12 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                       ? null
                       : () => _run(_api.wirelessDebuggingSettings),
                 ),
+                const ValueKey('wireless-debugging-card'),
               ),
-              if (!wide) const Divider(height: 1, indent: 8, endIndent: 8),
+              if (wide)
+                const SizedBox(width: 12)
+              else
+                const Divider(height: 1, indent: 8, endIndent: 8),
               option(
                 ListTile(
                   key: const ValueKey('overlay-settings'),
@@ -925,11 +943,12 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                           () => _api.execute(NativeCommand.openOverlaySettings),
                         ),
                 ),
+                const ValueKey('overlay-card'),
               ),
             ],
-          );
-        },
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -1197,7 +1216,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
               initialValue: chosen?.id,
               isExpanded: true,
               icon: const UwuIcon(Icons.expand_more_rounded, size: 26),
-              decoration: const InputDecoration(labelText: 'Perfil'),
+              decoration: const InputDecoration(
+                labelText: 'Perfil',
+                prefixIcon: UwuIcon(Icons.person_outline, size: 23),
+              ),
               items: profiles
                   .map(
                     (item) => DropdownMenuItem(
@@ -1252,18 +1274,20 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                   label: const Text('Exportar'),
                 ),
               if (chosen != null)
-                TextButton(
+                TextButton.icon(
                   onPressed: _working
                       ? null
                       : () => updateAfter(_renameProfile(chosen)),
-                  child: const Text('Renombrar'),
+                  icon: const UwuIcon(Icons.edit_outlined, size: 22),
+                  label: const Text('Renombrar'),
                 ),
               if (chosen != null)
-                TextButton(
+                TextButton.icon(
                   onPressed: _working
                       ? null
                       : () => updateAfter(_deleteProfile(chosen)),
-                  child: const Text('Eliminar'),
+                  icon: const UwuIcon(Icons.delete_outline, size: 22),
+                  label: const Text('Eliminar'),
                 ),
             ],
           ),

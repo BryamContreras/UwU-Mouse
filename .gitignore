@@ -58,6 +58,9 @@ app.*.map.json
 !/docs/ACTIVAR_PC.md
 !/docs/ACTIVAR_TELEFONO.md
 !/docs/MIGRACION_0_3_4.md
+!/docs/ACTIVATE_PC.md
+!/docs/ACTIVATE_PHONE.md
+!/docs/MIGRATION_0_3_4.md
 /attachments/
 /.codex/
 /.vscode/

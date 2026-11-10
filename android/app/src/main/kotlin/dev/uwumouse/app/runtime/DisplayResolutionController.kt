@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit
 /** Cold settings operations. No resolution work is scheduled while playing or drawing. */
 object DisplayResolutionController {
     private val main=Handler(Looper.getMainLooper())
-    private val owner=Binder() // App lifetime; leaving the settings Activity keeps the chosen size.
+    private val owner=Binder() // App lifetime; closing the System panel keeps the chosen size.
     private val io=ThreadPoolExecutor(0,1,10,TimeUnit.SECONDS,LinkedBlockingQueue<Runnable>(1),
         { task -> Thread(task,"UwUDisplaySettings").apply { isDaemon=true } })
     private data class Read(val displayId:Int,val callback:(Result<Bundle>)->Unit)
@@ -27,7 +27,7 @@ object DisplayResolutionController {
         private set
 
     fun read(displayId:Int,callback:(Result<Bundle>)->Unit) = onMain {
-        // Rotation/recreation replaces the observer instead of growing an executor queue.
+        // A reopened/replaced form supersedes the observer instead of growing a queue.
         pendingRead=Read(displayId,callback)
         drainRead()
     }
@@ -96,7 +96,7 @@ object DisplayResolutionController {
         val request=pendingRead ?: return
         pendingRead=null
         execute({ requireBackend().getDisplayResolution(request.displayId) }) { outcome ->
-            // A newer Activity/refresh owns the visible result. Its next request is retained.
+            // A newer form/refresh owns the visible result. Its next request is retained.
             if(pendingRead==null) request.callback(outcome)
             drainRead()
         }
