@@ -322,6 +322,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         val brokerFocusAgeMs:Long=Long.MAX_VALUE,
         val editorPresentationAllowed:Boolean=false,
         val editorAnchor:EditingPresentation?=null,
+        val taskPresence:GameTaskClosureGate.Observation?=null,
     )
     private data class EditingPresentation(
         val anchor:EditorPresentationAnchor,val windowId:Int,val profileId:String?,val capturedUptime:Long,
@@ -778,6 +779,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             "displayId" to snapshot.displayId,"focusedDisplayId" to snapshot.focusedDisplayId,"trustedFocus" to snapshot.trustedFocus,
             "brokerFocusAgeMs" to snapshot.brokerFocusAgeMs,
             "metadataError" to windowMetadataError,
+            "taskPresence" to snapshot.taskPresence?.let {
+                mapOf("packageName" to it.packageName,"queryValid" to it.taskQueryValid,
+                    "present" to it.taskPresent,"capturedUptimeMs" to it.taskCapturedUptimeMs)
+            },
             "editorPresentationAllowed" to snapshot.editorPresentationAllowed,
             "editorAnchorResetReason" to editorAnchorResetReason,
             "editorPresentationAnchor" to snapshot.editorAnchor?.let {
@@ -932,22 +937,23 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 focusedForeign==null && !presentationCovered && brokerMatches &&
                 (editorPresentationAllowed || (confirmed && targetWindow!=null))))
             endEditorPresentation("context_or_identity_lost")
-        windowContext=CachedWindowContext(displayId,focusedDisplay,trustedFocus,target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
-            contextWindows,blockedWindows,capturedUptime,brokerFocusAgeMs,editorPresentationAllowed,editingPresentation)
-        currentApplicationPackage=if(confirmed) target else if(blocked || foreground==target) null else foreground
-        if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
-        SessionController.targetChanged(confirmed)
-        if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
-        GameCoordinator.observeTargetLifecycle(GameTaskClosureGate.Observation(
+        val taskPresence=GameTaskClosureGate.Observation(
             packageName=focused?.getString("targetTaskPackage"),
             taskCapturedUptimeMs=focused?.getLong("targetTaskCapturedUptimeMs",-1L) ?: -1L,
-            taskQueryValid=focused?.getBoolean("valid")==true && focused.getBoolean("targetTaskQueryValid"),
+            // Task existence remains valid on the DeX desktop without a focused app.
+            taskQueryValid=focused?.getBoolean("targetTaskQueryValid")==true,
             taskPresent=focused?.getBoolean("targetTaskPresent")==true,
             contextCapturedUptimeMs=nativeContext?.getLong("capturedUptimeMs",-1L) ?: -1L,
             contextValid=contextValid,
             gameWindowPresent=targetWindow!=null,
-            gameFocused=trustedFocus && focused?.getString("packageName")==target),
-            capturedUptime,displayReady,locked)
+            gameFocused=trustedFocus && focusedDisplay==displayId && focused?.getString("packageName")==target)
+        windowContext=CachedWindowContext(displayId,focusedDisplay,trustedFocus,target,targetWindow,currentRoot,foreground,targetBounds,blockedBounds,
+            contextWindows,blockedWindows,capturedUptime,brokerFocusAgeMs,editorPresentationAllowed,editingPresentation,taskPresence)
+        currentApplicationPackage=if(confirmed) target else if(blocked || foreground==target) null else foreground
+        if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
+        SessionController.targetChanged(confirmed)
+        if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
+        GameCoordinator.observeTargetLifecycle(taskPresence,capturedUptime,displayReady,locked)
         GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed)
     }
     fun onKeyEvent(event: KeyEvent, fromNative:Boolean=false): Boolean {

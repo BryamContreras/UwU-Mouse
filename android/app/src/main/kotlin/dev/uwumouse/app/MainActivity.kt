@@ -28,6 +28,11 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
+    override fun onResume() {
+        super.onResume()
+        // A desktop display may have disconnected while the session service was stopped.
+        dev.uwumouse.app.runtime.TargetDisplayGeometry.clear()
+    }
     private var pendingStatusResult:MethodChannel.Result?=null
     private var pendingStatusToken:Any?=null
     private var statusSubscription:SharedStatusRead.Subscription?=null
@@ -126,9 +131,8 @@ class MainActivity : FlutterActivity() {
                         check(!LocalActivation.busy) { "Espera a que termine la activación" }
                         GameCoordinator.clearTools()
                         val displayId=display?.displayId ?: 0
-                        val labDisplay=requireNotNull(getSystemService(DisplayManager::class.java).getDisplay(displayId)) { "Pantalla no disponible" }
-                        val size=Point()
-                        @Suppress("DEPRECATION") labDisplay.getRealSize(size)
+                        val geometry=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(this,displayId)
+                        val size=Point(geometry.width,geometry.height)
                         if (call.method == "startLab") SessionController.arm(size.x,size.y,displayId)
                         else check(dev.uwumouse.app.backend.BackendRegistry.injector != null) { "Activa primero el backend ADB" }
                         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41)

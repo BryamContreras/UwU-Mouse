@@ -45,6 +45,8 @@ En **DeX**, el perfil de pantalla externa se separa del perfil del teléfono. Su
 
 Cuando desaparece la tarea del juego y su ventana, la sesión se cierra automáticamente tras al menos dos segundos de confirmación con observaciones nuevas. Minimizar el juego, cambiar de app o moverlo a otra pantalla conserva la pausa. Si Android no permite consultar las tareas completas, se mantiene el cierre manual en lugar de deducir una salida sólo por perder el foco.
 
+El cierre desde Inicio mantiene la identidad de la sesión original aunque la interfaz esté en otra pantalla. Teléfono y DeX comparten las comprobaciones de liberación: el cursor híbrido de un ratón externo sin botones pulsados no se confunde con un contacto pendiente, y los contactos reales de cualquier pantalla siguen impidiendo dar el cierre por confirmado. La geometría se obtiene desde la pantalla de destino, sin reutilizar el tamaño de la otra pantalla.
+
 ## Actualización 0.3.4 y cambio de identidad
 
 La versión **0.3.4+42** reúne las mejoras de rendimiento, cierre de sesiones, ajustes y repetición en bucle. El identificador Android pasa a ser **`dev.uwumouse.app`**. Android la considera una aplicación nueva: compartir el certificado no transfiere los datos ni permisos de la instalación anterior. **Exporta tus perfiles antes de cambiar de aplicación**, impórtalos después y vuelve a conceder los permisos. [Migración paso a paso](docs/MIGRACION_0_3_4.md) · [Cambios de la versión](CHANGELOG.md).

@@ -6,7 +6,6 @@ import android.app.ActivityManager
 import android.app.ActivityOptions
 import android.content.Context
 import android.content.Intent
-import android.graphics.Point
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.Handler
@@ -316,12 +315,8 @@ object GameCoordinator {
         refreshProfileLibrary()
     }
     private fun geometry(displayId:Int=SessionController.targetDisplayId):Triple<Int,Int,Int> {
-        val display=requireNotNull(app.getSystemService(DisplayManager::class.java).getDisplay(displayId)) { "Pantalla desconectada" }
-        check(display.isValid) { "Pantalla desconectada" }
-        val point=Point()
-        @Suppress("DEPRECATION")
-        display.getRealSize(point)
-        return Triple(point.x,point.y,display.rotation)
+        val geometry=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(app,displayId)
+        return Triple(geometry.width,geometry.height,geometry.rotation)
     }
     private fun matchingProfile(id:String,displayId:Int):GameProfile? {
         val requested=requireNotNull(store().get(id)) { "Perfil no encontrado" }

@@ -12,7 +12,7 @@ class StoppedProducerRecoveryTest {
     private fun admit(journal:RecoveryJournal,event:TouchFrame) {
         assertTrue(journal.prepare(7,event));assertTrue(journal.acknowledged(7,event,true))
     }
-    private fun rejectedPointerUp():RecoveryJournal=RecoveryJournal(displayId=9).also { journal ->
+    private fun rejectedPointerUp(displayId:Int=9):RecoveryJournal=RecoveryJournal(displayId=displayId).also { journal ->
         assertTrue(journal.begin(7,1080,2316,10498))
         admit(journal,frame(TouchComposer.DOWN,0))
         admit(journal,frame(TouchComposer.POINTER_DOWN or (1 shl 8),0,9,time=101))
@@ -46,6 +46,25 @@ class StoppedProducerRecoveryTest {
         assertFalse(journal.prepare(7,frame(TouchComposer.DOWN,0,time=200)))
         assertFalse(journal.prepare(7,frame(TouchComposer.CANCEL,0,9,time=200)))
         assertTrue(journal.reconciledStoppedProducers(original,true,true,true))
+    }
+
+    @Test fun dexHybridHoverClosesOnlyTheStoppedOriginalDisplayWithNoRealDownPointer() {
+        val journal=rejectedPointerUp(displayId=2)
+        val original=journal.snapshot()
+        val idle="  TouchStatesByDisplay:\n    2 :     deviceId=13, source=TOUCHSCREEN | MOUSE\n" +
+            "      Windows:\n        0 : name='Embedded{Caption of Task=89}', pointerIds=${"0".repeat(32)}, " +
+            "targetFlags=FOREGROUND | DISPATCH_AS_IS, firstDownTimeInTarget=<not set>, " +
+            "mHoveringPointerIdsByDevice=13:${"0".repeat(31)}1, pilferedPointerIds=${"0".repeat(32)}\n  Display: 2\n"
+        val pressed=idle.replace("pointerIds=${"0".repeat(32)}","pointerIds=${"0".repeat(31)}1")
+        assertFalse(journal.reconciledStoppedProducers(original,true,true,
+            DispatcherTouchStateParser.isDefinitelyUntouched(pressed)))
+        assertEquals(2,journal.snapshot().possibleContacts)
+        assertTrue(journal.reconciledStoppedProducers(original,true,true,
+            DispatcherTouchStateParser.isDefinitelyUntouched(idle)))
+        assertEquals(2,journal.snapshot().displayId)
+        assertEquals(0,journal.snapshot().possibleContacts)
+        assertTrue(journal.snapshot().stoppedProducersReconciled)
+        assertFalse(journal.prepare(7,frame(TouchComposer.DOWN,0,time=200)))
     }
 
     @Test fun aNormalCancellationAckClosesWithoutInventingRetirementOrDispatcherProof() {

@@ -1,5 +1,14 @@
 # Cambios de UwU Mouse
 
+## 0.3.5+43 — 2026-11-10
+
+- Corrige el cierre de sesión en Samsung DeX cuando Android conserva únicamente un cursor de ratón con fuente combinada `TOUCHSCREEN | MOUSE`. Se exige que no haya contactos pulsados ni punteros interceptados y que la captura y todos los inyectores estén detenidos, igual que en el teléfono.
+- El cierre automático puede usar una consulta válida de tareas aunque el escritorio no tenga una aplicación enfocada. Minimizar, cambiar de foco o mover el juego a otra pantalla conserva la pausa y no se interpreta como salir del juego.
+- La geometría se consulta con un contexto de ventana de la pantalla solicitada. Evita heredar el tamaño de DeX al preparar el perfil del teléfono; conserva un único contexto reutilizable y lo descarta al desconectar su pantalla.
+- Los diagnósticos conservan el resultado de tareas junto con la instantánea de ventanas para distinguir ausencia, inventario desconocido y pérdida de foco.
+- Amplía las regresiones de pantalla principal y externa, y la suite de framework a diez comprobaciones, con cierre de overlays propios y desconexión de una pantalla virtual en Android API 34–37.
+- Mantiene el identificador `dev.uwumouse.app` y el formato de perfiles de 0.3.4.
+
 ## 0.3.4+42 — 2026-11-09
 
 Actualización de desarrollo con mejoras de rendimiento, cierre de sesiones, ajustes y repetición. Cambia el identificador Android a **`dev.uwumouse.app`**. Android la instala como una aplicación nueva: **exporta los perfiles desde la instalación anterior antes de cambiar, impórtalos en la nueva y vuelve a conceder los permisos**. El certificado compartido no migra datos entre identificadores. [Guía de migración](docs/MIGRACION_0_3_4.md).

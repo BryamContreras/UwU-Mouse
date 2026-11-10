@@ -236,6 +236,40 @@ class DispatcherTouchStateParserTest {
         ))
     }
 
+    @Test fun dexHybridMouseCaptionHoverProvesNoDownOnEitherDisplay() {
+        for (displayId in listOf(0, 2)) {
+            val observed = hoverSection().replace(mouseDisplay,
+                "    $displayId :     deviceId=41, source=TOUCHSCREEN | MOUSE")
+                .replace("test window", "Embedded{Caption of Task=89}")
+                .replace("  Display: 0", "  Display: $displayId")
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed.replace("\n", "\r\n")))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(observed.removeSuffix("  Display: $displayId\n")))
+        }
+    }
+
+    @Test fun dexHybridHoverCannotHideAPressedOrPilferedPointerOrUnknownSource() {
+        val observed = hoverSection().replace("source=MOUSE", "source=TOUCHSCREEN | MOUSE")
+        for (invalid in listOf(
+            observed.replace("pointerIds=${"0".repeat(32)}", "pointerIds=${"0".repeat(31)}1"),
+            observed.replace("firstDownTimeInTarget=<not set>", "firstDownTimeInTarget=12345"),
+            observed.replace("pilferedPointerIds=${"0".repeat(32)}", "pilferedPointerIds=${"0".repeat(31)}1"),
+            observed.replace("mHoveringPointerIdsByDevice=41:", "mHoveringPointerIdsByDevice=13:"),
+            observed.replace("source=TOUCHSCREEN | MOUSE", "source=TOUCHSCREEN"),
+            observed.replace("source=TOUCHSCREEN | MOUSE", "source=STYLUS | MOUSE"),
+        )) assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(invalid))
+    }
+
+    @Test fun dexIdleCursorStillRequiresEveryDisplayToHaveNoDownPointers() {
+        val dex = "    2 :     deviceId=41, source=TOUCHSCREEN | MOUSE\n      Windows:\n${hoverWindow()}"
+        val phone = "$mouseDisplay\n      Windows:\n${hoverWindow()}"
+        val untouched = "$header\n$dex\n$phone\n  Display: 2\n"
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(untouched))
+        val pressed = phone.replace("pointerIds=${"0".repeat(32)}", "pointerIds=${"0".repeat(31)}1")
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(untouched.replace(phone, pressed)))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched("$header\n$pressed\n$dex\n  Display: 2\n"))
+    }
+
     @Test fun closureAfterPhysicalTouchAcceptsOnlyTheObservedCompleteHoverAndRetiredDisplayState() {
         // Anonymous shape from the blocked POINTER_UP session: the app and three
         // system gesture monitors retain hover, with no touching/pilfered pointers.
@@ -360,7 +394,7 @@ class DispatcherTouchStateParserTest {
     @Test fun unknownSourceFlagsAndHoverFormatFailClosed() {
         val unknown = listOf(
             hoverSection().replace("source=MOUSE", "source=UNKNOWN"),
-            hoverSection().replace("source=MOUSE", "source=TOUCHSCREEN | MOUSE"),
+            hoverSection().replace("source=MOUSE", "source=STYLUS | MOUSE"),
             hoverSection().replace("FOREGROUND | DISPATCH_AS_IS", "FOREGROUND | DISPATCH_AS_IS | UNKNOWN"),
             hoverSection().replace("FOREGROUND | DISPATCH_AS_IS", "DISPATCH_AS_IS | DISPATCH_AS_IS"),
             hoverSection().replace("FOREGROUND | DISPATCH_AS_IS", "FOREGROUND"),

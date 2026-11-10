@@ -13,9 +13,44 @@ class GameSessionLifecycleTest {
     }
 
     @Test fun backgroundMinimizedAndOtherDisplayTasksNeverCloseTheSession() {
+        for(displayId in listOf(0,2)) {
+            val identity=first.copy(displayId=displayId)
+            val gate=GameTaskClosureGate();arm(gate,identity)
+            for(now in 2_000L..30_000L step 1_000L)
+                assertFalse(gate.observe(identity,sample(now,present=true),now,true))
+        }
+    }
+
+    @Test fun externalGameClosureCanBeConfirmedWithThePhoneFocusedOrNoFocusedApplication() {
+        val external=first.copy(displayId=2)
+        val gate=GameTaskClosureGate();arm(gate,external)
+        // The global task inventory remains authoritative on a DeX desktop or while
+        // Inicio is focused on display 0. No target focus is required for closure.
+        assertFalse(gate.observe(external,sample(2_000,focused=false),2_000,true))
+        assertFalse(gate.observe(external,sample(3_000,focused=false),3_000,true))
+        assertTrue(gate.observe(external,sample(4_000,focused=false),4_000,true))
+    }
+
+    @Test fun externalSessionNeverUsesStaleOrInvalidWindowMetadataToConfirmClosure() {
+        val external=first.copy(displayId=2)
+        val gate=GameTaskClosureGate();arm(gate,external)
+        assertFalse(gate.observe(external,sample(2_000),2_000,true))
+        assertFalse(gate.observe(external,sample(3_000,contextValid=false),3_000,true))
+        assertFalse(gate.observe(external,sample(4_000).copy(contextCapturedUptimeMs=1_000),4_000,true))
+        assertFalse(gate.observe(external,sample(5_000),5_000,true))
+        assertFalse(gate.observe(external,sample(6_000),6_000,true))
+        assertTrue(gate.observe(external,sample(7_000),7_000,true))
+    }
+
+    @Test fun switchingTheSessionDisplayDiscardsThePreviousDisplayAbsenceHistory() {
         val gate=GameTaskClosureGate();arm(gate)
-        for(now in 2_000L..30_000L step 1_000L)
-            assertFalse(gate.observe(first,sample(now,present=true),now,true))
+        assertFalse(gate.observe(first,sample(2_000),2_000,true))
+        val external=first.copy(displayId=2)
+        for(now in 3_000L..7_000L step 1_000L)
+            assertFalse(gate.observe(external,sample(now),now,true))
+        assertFalse(gate.observe(external,sample(8_000,present=true),8_000,true))
+        assertFalse(gate.observe(external,sample(9_000),9_000,true))
+        assertTrue(gate.observe(external,sample(11_000),11_000,true))
     }
 
     @Test fun removedTaskNeedsDistinctFreshAbsenceAcrossTheGracePeriodAndClosesOnce() {

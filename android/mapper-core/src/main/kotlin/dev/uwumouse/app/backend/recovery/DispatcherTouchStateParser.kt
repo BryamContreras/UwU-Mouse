@@ -162,7 +162,10 @@ object DispatcherTouchStateParser {
                     expectingWindows = false
                     continue
                 }
-                if (deviceId == null || emptyWindows || source != "MOUSE") return false
+                // Samsung DeX also labels external mouse hover TOUCHSCREEN | MOUSE.
+                // Both forms require the same explicit zero touching/pilfered pointers,
+                // no down time and device-matched hover in every complete window row.
+                if (deviceId == null || emptyWindows || (source != "MOUSE" && source != "TOUCHSCREEN | MOUSE")) return false
                 val row = window.matchEntire(line) ?: return false
                 if (row.groupValues[1].toIntOrNull() != windowCount) return false
                 val flags = row.groupValues[2].split(" | ")

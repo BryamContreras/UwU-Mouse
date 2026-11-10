@@ -1150,10 +1150,8 @@ object SessionController {
     @Synchronized fun testCursorLab(context:Context) {
         check(environment.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
         useLaboratory()
-        val display=context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(0)
-        val size=android.graphics.Point()
-        @Suppress("DEPRECATION")
-        display.getRealSize(size)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,0)
+        val size=android.graphics.Point(display.width,display.height)
         val p=GameProfile.create(TARGET,"Cursor InputLab",size.x,size.y,display.rotation).let {
             it.copy(calibration=it.calibration.copy(confirmed=true),camera=it.camera.copy(mode=CameraSpec.BOUNDED,updateRateHz=0),shortcuts=SessionShortcuts(138,139,0))
         }
@@ -1161,19 +1159,19 @@ object SessionController {
         activeProfileId=null // Ephemeral laboratory configuration, not a selected game profile.
     }
     /** Closed synthetic repeat/Map regression; same receiver, shared compositor, RAM-only profile. */
-    fun testActionLab(context:Context) {
+    fun testActionLab(context:Context,displayId:Int=0) {
         if(Looper.myLooper()!=Looper.getMainLooper()) {
-            main.post { runCatching { testActionLab(context) }.onFailure { pause(it.message ?: "Falló la prueba de acciones") } }
+            main.post { runCatching { testActionLab(context,displayId) }.onFailure { pause(it.message ?: "Falló la prueba de acciones") } }
             return
         }
         check(environment.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
-        useLaboratory()
-        val display=context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(0)
-        val size=android.graphics.Point()
-        @Suppress("DEPRECATION")
-        display.getRealSize(size)
+        useLaboratory(displayId)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,displayId)
+        val bounds=requireNotNull(environment.boundsForPackage(TARGET)) { "Receptor sin ventana verificada" }
+        val size=android.graphics.Point(display.width,display.height)
         val profile=GameProfile.create(TARGET,"Acciones InputLab",size.x,size.y,display.rotation).let {
-            it.copy(calibration=it.calibration.copy(confirmed=true),
+            it.copy(calibration=it.calibration.copy(confirmed=true,
+                area=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat())),
                 camera=it.camera.copy(enabled=true,mode=CameraSpec.SMOOTH,suspendKey=0,updateRateHz=0,precisionAim=false),
                 action=ActionSpec(.87f,.80f,code=62),shortcuts=SessionShortcuts(138,139,0),
                 additionalActions=listOf(
@@ -1250,10 +1248,8 @@ object SessionController {
         }
         check(environment.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
         useLaboratory()
-        val display=context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(0)
-        val size=android.graphics.Point()
-        @Suppress("DEPRECATION")
-        display.getRealSize(size)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,0)
+        val size=android.graphics.Point(display.width,display.height)
         val p=GameProfile.create(TARGET,"Macro InputLab",size.x,size.y,display.rotation).let {
             it.copy(calibration=it.calibration.copy(confirmed=true),camera=it.camera.copy(suspendKey=113),
                 shortcuts=SessionShortcuts(138,139,0),macros=listOf(MacroSpec("lab-macro","Secuencia",.42f,.45f,code=30,
@@ -1293,10 +1289,8 @@ object SessionController {
         useLaboratory()
         capture.refreshContext()
         val bounds=requireNotNull(capture.boundsForPackage(TARGET)) { "Receptor sin ventana verificada" }
-        val display=context.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(0)
-        val size=android.graphics.Point()
-        @Suppress("DEPRECATION")
-        display.getRealSize(size)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,0)
+        val size=android.graphics.Point(display.width,display.height)
         val mirrored=saved.copy(packageName=TARGET,name="Perfil en InputLab",
             camera=if(precision) saved.camera.copy(precisionAim=true) else saved.camera,
             calibration=saved.calibration.copy(screenWidth=size.x,screenHeight=size.y,rotation=display.rotation,

@@ -62,6 +62,9 @@ public final class OwnUiClick {
             case "stop" -> "Detener";
             case "release" -> "Detener y liberar entradas";
             case "refresh" -> "Actualizar";
+            case "home" -> "Inicio";
+            case "connection" -> "Conexión";
+            case "backend_stop" -> "Cerrar backend ADB";
             case "bubble" -> "UwU Mouse · abrir opciones";
             case "profiles" -> "Perfiles";
             case "new_profile" -> "Crear perfil";
@@ -109,7 +112,7 @@ public final class OwnUiClick {
         if (args.length < 1 || !Arrays.asList("Editar sobre el juego", "Colocar controles",
                 "Guardar", "Cancelar", "Iniciar en laboratorio", "Laboratorio y diagnóstico", "Probar inyección sintética",
                 "Iniciar sesión", "Detener", "Actualizar", "UwUMouse · abrir opciones", "Mapear", "Cerrar",
-                "Ajustes", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
+                "Inicio", "Ajustes", "Conexión", "Comprobar servicio", "Jugar", "Entrar al juego", "Detener y cerrar", "Editar controles", "Teclas de sesión",
                 "Teclas", "WASD", "Cámara", "Acción", "Área", "Opciones del juego", "Cerrar menú", "Cerrar panel", "Cerrar sesión", "Free Fire",
                 "Cambiar modo: Control activado", "Cambiar modo: Teclado activado", "Disparo", "Ocultar", "Detener y liberar entradas",
                 "Macro", "Agregar punto", "Ubicar", "Asignar", "Quitar tecla de suspensión",

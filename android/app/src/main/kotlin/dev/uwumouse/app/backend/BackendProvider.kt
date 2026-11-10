@@ -107,7 +107,7 @@ class BackendProvider : ContentProvider() {
                     "labPrepare" -> {
                         val task=FutureTask<Unit> {
                             dev.uwumouse.app.runtime.NativeSessionHost.initialize(requireNotNull(context))
-                            SessionController.useLaboratory()
+                            SessionController.useLaboratory(extras?.getInt("displayId",0) ?: 0)
                             dev.uwumouse.app.runtime.NativeSessionHost.instance?.observeContextFor(5000)
                         }
                         if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper()) task.run()
@@ -118,7 +118,7 @@ class BackendProvider : ContentProvider() {
                     "labStop" -> SessionController.pause("Parada de prueba")
                     "labCursor" -> SessionController.testCursorLab(requireNotNull(context))
                     "labMacro" -> SessionController.testMacroLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false)
-                    "labActions" -> SessionController.testActionLab(requireNotNull(context))
+                    "labActions" -> SessionController.testActionLab(requireNotNull(context),extras?.getInt("displayId",0) ?: 0)
                     "labMapped" -> SessionController.testMappedLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false,extras?.getBoolean("hold",false) ?:false,extras?.getBoolean("precision",false) ?:false)
                     "cameraTrial" -> SessionController.configureCameraTrial(requireNotNull(extras?.getString("strategy")))
                     "profileCameraMode" -> {

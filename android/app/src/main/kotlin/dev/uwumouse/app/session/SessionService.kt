@@ -14,11 +14,9 @@ class SessionService : Service(), DisplayManager.DisplayListener {
     private fun displayGeometry(): String {
         val id=SessionController.targetDisplayId
         val display = getSystemService(DisplayManager::class.java).getDisplay(id) ?: return "$id:missing"
-        val size = android.graphics.Point()
-        @Suppress("DEPRECATION") display.getRealSize(size)
-        val metrics=android.util.DisplayMetrics()
-        @Suppress("DEPRECATION") display.getRealMetrics(metrics)
-        return "$id:${display.state}:${display.rotation}:${size.x}:${size.y}:${metrics.densityDpi}"
+        val geometry=runCatching { dev.uwumouse.app.runtime.TargetDisplayGeometry.read(this,id) }
+            .getOrNull() ?: return "$id:unavailable"
+        return "$id:${display.state}:${geometry.rotation}:${geometry.width}:${geometry.height}:${geometry.densityDpi}"
     }
     private val lockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -63,6 +61,7 @@ class SessionService : Service(), DisplayManager.DisplayListener {
         if(SessionController.active) SessionController.pause("Cambió la conexión de pantallas; reanuda manualmente")
     }
     override fun onDisplayRemoved(displayId: Int) {
+        dev.uwumouse.app.runtime.TargetDisplayGeometry.forget(displayId)
         if (displayId == SessionController.targetDisplayId)
             dev.uwumouse.app.game.GameCoordinator.displayUnavailable(displayId)
         else dev.uwumouse.app.runtime.NativeSessionHost.instance?.refreshContext()
@@ -84,6 +83,7 @@ class SessionService : Service(), DisplayManager.DisplayListener {
         SessionController.sessionServiceDestroyed()
         unregisterReceiver(lockReceiver)
         getSystemService(DisplayManager::class.java).unregisterDisplayListener(this)
+        dev.uwumouse.app.runtime.TargetDisplayGeometry.clear()
         stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }

@@ -32,6 +32,7 @@ import dev.uwumouse.app.backend.BackendRegistry
 import dev.uwumouse.app.backend.IInjector
 import dev.uwumouse.app.editor.OverlayOpacityBudget
 import dev.uwumouse.app.editor.OverlayWindows
+import dev.uwumouse.app.game.stopSessionThenCleanUp
 import dev.uwumouse.app.session.SessionController
 import dev.uwumouse.app.session.SessionMode
 import dev.uwumouse.app.session.SessionService
@@ -200,6 +201,97 @@ class AndroidCompatibilityTest {
             onMain {
                 images.setOnImageAvailableListener(null, null)
                 images.close()
+            }
+        }
+    }
+
+    @Test fun primaryControlClosesOwnedExternalOverlayBeforeAndAfterDisplayRemoval() {
+        val manager=context.getSystemService(DisplayManager::class.java)
+        val primary=requireNotNull(manager.getDisplay(Display.DEFAULT_DISPLAY))
+        val images=ImageReader.newInstance(640,480,PixelFormat.RGBA_8888,2)
+        images.setOnImageAvailableListener({ reader -> reader.acquireLatestImage()?.close() },Handler(Looper.getMainLooper()))
+        var virtual:android.hardware.display.VirtualDisplay?=null
+        var activity:android.app.Activity?=null
+        var primaryCursor:ApplicationCursorOverlay?=null
+        var externalCursor:ApplicationCursorOverlay?=null
+        var displayReleased=false
+        try {
+            val screen=requireNotNull(manager.createVirtualDisplay("UwU external closure display",640,480,
+                context.resources.configuration.densityDpi,images.surface,DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY))
+            virtual=screen
+            val externalId=screen.display.displayId
+            assertNotEquals(Display.DEFAULT_DISPLAY,externalId)
+            val controls=instrumentation.startActivitySync(Intent(context,MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            activity=controls
+            await("Primary controls did not gain focus") { onMain { controls.hasWindowFocus() } }
+            assertEquals(Display.DEFAULT_DISPLAY,controls.display?.displayId)
+            val externalGeometry=TargetDisplayGeometry.read(context,externalId)
+            assertEquals(640,externalGeometry.width)
+            assertEquals(480,externalGeometry.height)
+            val primaryBounds=onMain { controls.windowManager.maximumWindowMetrics.bounds }
+            val primaryGeometry=TargetDisplayGeometry.read(context,Display.DEFAULT_DISPLAY)
+            assertEquals(primaryBounds.width(),primaryGeometry.width)
+            assertEquals(primaryBounds.height(),primaryGeometry.height)
+            assertEquals(externalGeometry,TargetDisplayGeometry.read(context,externalId))
+            val phone=cursorFor(primary).also { primaryCursor=it }
+            val external=cursorFor(screen.display).also { externalCursor=it }
+            assertTrue("Primary cursor rejected: ${phone.error}",phone.show(primary.displayId,80f,80f,20f))
+            assertTrue("External cursor rejected: ${external.error}",external.show(externalId,80f,80f,20f))
+            val phoneView=cursorView(phone)
+            val firstExternalView=cursorView(external)
+            await("Both owned displays must have attached windows") {
+                onMain { phoneView.isAttachedToWindow && firstExternalView.isAttachedToWindow }
+            }
+            assertEquals(externalId,onMain { firstExternalView.display.displayId })
+            var requestedStops=0
+            val failures=mutableListOf<Exception>()
+            fun closeExternal()=onMain {
+                // This is the production close ordering used by GameCoordinator. It
+                // exercises real own-window disposal without arming any input backend.
+                var nativeStopRequested=false
+                stopSessionThenCleanUp({ nativeStopRequested=true;requestedStops++ },listOf({
+                    assertTrue("External disposal preceded the native stop request",nativeStopRequested)
+                    external.hide()
+                }),{ failures+=it })
+            }
+            closeExternal()
+            assertEquals(1,requestedStops)
+            assertTrue("External window cleanup failed: $failures",failures.isEmpty())
+            assertFalse(external.visible)
+            assertFalse(onMain { firstExternalView.isAttachedToWindow })
+            assertTrue("Closing another display detached the primary cursor",onMain { phoneView.isAttachedToWindow })
+            assertTrue("Closing another display changed primary focus",onMain { controls.hasWindowFocus() })
+
+            assertTrue("External cursor could not be reopened: ${external.error}",external.show(externalId,100f,100f,20f))
+            val detachedDisplayView=cursorView(external)
+            await("Reopened external window never attached") { onMain { detachedDisplayView.isAttachedToWindow } }
+            screen.release();displayReleased=true
+            await("The owned virtual display did not disappear") { manager.getDisplay(externalId)==null }
+            assertThrows(IllegalArgumentException::class.java) { TargetDisplayGeometry.read(context,externalId) }
+            closeExternal()
+            assertEquals(2,requestedStops)
+            assertTrue("A removed display prevented cleanup: $failures",failures.isEmpty())
+            assertFalse(external.visible)
+            await("The removed display retained its owned window") { onMain { !detachedDisplayView.isAttachedToWindow } }
+            assertTrue(phone.visible)
+            assertTrue(onMain { phoneView.isAttachedToWindow && phoneView.display.displayId==Display.DEFAULT_DISPLAY })
+            assertTrue("Removing the secondary display changed primary focus",onMain { controls.hasWindowFocus() })
+            assertFalse("Window lifecycle checks must never arm input",SessionController.active)
+            assertFalse(SessionController.armed)
+            assertEquals(0,SessionController.contacts)
+        } finally {
+            try { externalCursor?.hide() }
+            finally {
+                try { primaryCursor?.hide() }
+                finally {
+                    if(!displayReleased) virtual?.release()
+                    onMain {
+                        images.setOnImageAvailableListener(null,null)
+                        images.close() // Also releases the ImageReader-owned Surface.
+                        activity?.finish()
+                    }
+                }
             }
         }
     }
