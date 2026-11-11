@@ -1,7 +1,6 @@
 package dev.uwumouse.app.game
 
 import dev.uwumouse.app.activation.LocalActivation
-import dev.uwumouse.app.session.SessionController
 
 /** The UI and authorized diagnostics use the same application commands. */
 object GameCommands {
@@ -15,7 +14,7 @@ object GameCommands {
         GameCoordinator.openEditor(id, displayId)
     }
 
-    fun pause() = SessionController.pause("Pausada por usuario")
+    fun pause() = GameCoordinator.pauseByUser()
     fun openMenu() = GameCoordinator.openControlsMenu()
     fun stop() = GameCoordinator.stop()
     fun recoverPendingSession():Boolean {

@@ -59,7 +59,12 @@ object GameCoordinator {
     private var startPending=false
     private var pendingCursorStart=false
     private var activeWindow:Rect?=null
+    private var runtimeDisplayProfile:GameProfile?=null
+    private var runtimeProfileSource:GameProfile?=null
     private var settledTarget:TargetSnapshot?=null
+    private val contextReturn=ContextReturnGate()
+    private var contextReturnBackend:android.os.IBinder?=null
+    private var automaticReturnRequest=false
     private val taskClosure=GameTaskClosureGate()
     private val taskClosureOwner=GameTaskClosureOwner()
     @Volatile var lastTargetPreparation:Map<String,Any?>?=null; private set
@@ -77,6 +82,8 @@ object GameCoordinator {
     }
     private fun requireProfileChangeAllowed() {
         check(!waiting && !DisplayResolutionController.changing && !SessionController.isTransitioning() && !SessionController.active && !editorVisible) { "Espera a que termine la transición de sesión antes de cambiar el perfil" }
+        clearContextReturn("profile_changed")
+        runtimeDisplayProfile=null;runtimeProfileSource=null
     }
     val editorVisible:Boolean get()=editor?.visible==true
     val bubbleVisible:Boolean get()=bubble?.visible==true
@@ -101,6 +108,60 @@ object GameCoordinator {
     fun resumeFromCameraKey() {
         if(startPending) { pendingCursorStart=!pendingCursorStart; return }
         currentId?.let { runCatching { startProfile(it) }.onFailure { message(it.message ?: "No se pudo iniciar") } }
+    }
+    private fun clearContextReturn(reason:String) {
+        contextReturn.clear(reason);contextReturnBackend=null
+    }
+    /** Native acquisition can wait for physical release, but never beyond its finite deadline. */
+    fun cancelCaptureReturn(reason:String) { clearContextReturn(reason) }
+    private fun returnIdentity():ContextReturnGate.Identity? = currentId?.takeIf {
+        toolsRequested && it==SessionController.activeProfileId
+    }?.let { ContextReturnGate.Identity(operation,it,SessionController.targetPackage,SessionController.targetDisplayId,
+        SessionController.manualPauseEpoch) }
+    private fun rememberActiveInterruption(requireDeparture:Boolean=false) {
+        if(!SessionController.active || editorVisible || bubbleMenuVisible || resolutionPanelVisible ||
+            menuTextInputActive || DisplayResolutionController.changing) return
+        val identity=returnIdentity() ?: return
+        val backend=dev.uwumouse.app.backend.BackendRegistry.injector?.asBinder() ?: return
+        if(!backend.isBinderAlive) return
+        if(contextReturn.identity!=identity) contextReturnBackend=backend
+        contextReturn.interrupted(identity,requireDeparture,activeWindow?.let {
+            ContextReturnGate.Frame(it.left,it.top,it.right,it.bottom)
+        })
+    }
+    /** A system cursor escape must actually leave/change the game before it can recapture. */
+    fun rememberSystemHandoff() { rememberActiveInterruption(requireDeparture=true) }
+    /** Called before targetChanged can pause and discard the fact that this session was playing. */
+    fun beforeContextChange(authorized:Boolean,currentWindow:Rect?,displayReady:Boolean,locked:Boolean) {
+        if(!displayReady || locked) { clearContextReturn(if(locked) "locked" else "display_unavailable");return }
+        if(contextReturn.identity!=null && dev.uwumouse.app.backend.BackendRegistry.injector?.asBinder()!==contextReturnBackend)
+            clearContextReturn("backend_changed")
+        if(!authorized || currentWindow==null || currentWindow!=activeWindow) rememberActiveInterruption()
+    }
+    private fun tryContextReturn(authorized:Boolean,currentWindow:Rect?) {
+        if(contextReturn.identity==null) return
+        val backend=dev.uwumouse.app.backend.BackendRegistry.injector?.asBinder()
+        if(backend==null || backend!==contextReturnBackend || !backend.isBinderAlive || !toolsRequested) {
+            clearContextReturn("owner_unavailable");return
+        }
+        val frame=currentWindow?.let { ContextReturnGate.Frame(it.left,it.top,it.right,it.bottom) }
+        val admitted=authorized && !editorVisible && !bubbleMenuVisible && !resolutionPanelVisible &&
+            !menuTextInputActive && !DisplayResolutionController.changing
+        val shouldStart=contextReturn.observe(returnIdentity(),frame,admitted,
+            SessionController.contacts==0 && !SessionController.releaseUnverified,
+            waiting || startPending || SessionController.isTransitioning(),SessionController.active,
+            SessionController.mode==SessionMode.PAUSED,SystemClock.uptimeMillis(),
+            service?.nativeMouseCaptureReady==true)
+        if(!shouldStart) return
+        val id=contextReturn.identity?.profileId ?: return
+        automaticReturnRequest=true
+        try {
+            // A fresh configuration/generation starts with a neutral cursor. No prior
+            // key, button, loop, camera contact or queued movement is restored.
+            startProfile(id,cursor=true,requireCurrentContext=true)
+        } catch(failure:Exception) {
+            Log.w("UwUMouse","context_return_failed type=${failure.javaClass.simpleName}")
+        } finally { automaticReturnRequest=false }
     }
     fun cursorHitsBubble(x:Float,y:Float):Boolean {
         if(!toolsRequested || !SessionController.cursorMode || SessionController.contacts!=0 || editorVisible || bubbleMenuVisible) return false
@@ -243,6 +304,7 @@ object GameCoordinator {
         capture.applyCursorSettings(settings.value)
     }
     fun detach(capture:NativeSessionHost) {
+        if(service===capture) { clearContextReturn("detached");runtimeDisplayProfile=null;runtimeProfileSource=null }
         if(service===capture) { operation++; waiting=false; toolsRequested=false;resolutionToolsDisplayId=-1; settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.close();controls?.hide();statusVisual?.close(); editor=null; bubble=null;resolutionSettings=null;controls=null;monitor=null;monitorContext=null;statusVisual=null;presentationDisplayId=-1; service=null }
     }
     fun profiles()=store().list().map { wire(ProfileCodec.toJson(it)) }
@@ -363,6 +425,7 @@ object GameCoordinator {
         return bounded
     }
     fun openEditor(id:String,displayId:Int=SessionController.targetDisplayId) {
+        clearContextReturn("editor");runtimeDisplayProfile=null;runtimeProfileSource=null
         check(!DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Espera al cierre confirmado de la secuencia anterior antes de editar" }
         stopServiceWhenClosed=false
@@ -409,6 +472,11 @@ object GameCoordinator {
     }
     fun editCurrent() { (SessionController.activeProfileId ?: currentId ?: store().selected()?.id)?.let { openEditor(it) } }
     fun startProfile(id:String,cursor:Boolean=true,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
+        val returnEpoch=if(automaticReturnRequest) contextReturn.identity?.manualPauseEpoch else null
+        if(automaticReturnRequest && (returnEpoch==null || returnEpoch!=SessionController.manualPauseEpoch)) {
+            clearContextReturn("manual_pause");return
+        }
+        if(!automaticReturnRequest) { clearContextReturn("manual_start");runtimeDisplayProfile=null;runtimeProfileSource=null }
         check(!DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Recupera la secuencia anterior antes de iniciar" }
         stopServiceWhenClosed=false
@@ -421,11 +489,15 @@ object GameCoordinator {
         check(service!=null) { "Abre UwU Mouse para preparar la captura nativa" }
         GameCatalog.requireLaunchable(app,p.packageName)
         val ticket=++operation; currentId=p.id; waiting=true; toolsRequested=true
+        if(automaticReturnRequest) contextReturn.rebase(ContextReturnGate.Identity(ticket,p.id,p.packageName,displayId,requireNotNull(returnEpoch)))
         refreshProfileLibrary(p.packageName,displayId)
         pendingCursorStart=cursor;startPending=true
         editor?.close(); bubble?.closeMenu();controls?.hide()
         SessionController.pauseThen("Preparando perfil; sin reanudar entradas antiguas") { safe ->
             if(ticket!=operation) return@pauseThen
+            if(returnEpoch!=null && returnEpoch!=SessionController.manualPauseEpoch) {
+                waiting=false;startPending=false;clearContextReturn("manual_pause");refreshControls();return@pauseThen
+            }
             if(!safe) { waiting=false; fail("Recupera la secuencia anterior antes de iniciar"); return@pauseThen }
             try {
             if(requireCurrentContext) {
@@ -438,20 +510,21 @@ object GameCoordinator {
             SessionController.selectEditingTarget(p,displayId); SessionController.editorClosed();configurePresentation(displayId)
             store().select(p.id)
             if(requireCurrentContext) service?.refreshContext() else launch(p.packageName)
-            awaitTarget(p,ticket,requireCurrentContext) {
+            awaitTarget(p,ticket,requireCurrentContext,returnEpoch) {
                 val (width,height,rotation)=geometry()
                 val window=requireNotNull(service?.boundsForPackage(p.packageName)) { "No se pudo confirmar el área de la ventana" }
                 val frame=GameArea(window.left.toFloat(),window.top.toFloat(),window.right.toFloat(),window.bottom.toFloat())
-                if(p.calibration.screenWidth!=width || p.calibration.screenHeight!=height || p.calibration.rotation!=rotation ||
-                    (p.calibration.windowFrame!=null && p.calibration.windowFrame!=frame)) {
-                    startPending=false;message("Cambió la ventana; ajusta el mapeo y guarda");openEditor(p.id,displayId);return@awaitTarget
-                }
-                val prepared=ProfileCompiler.prepare(p,width,height,rotation,displayScope(displayId),frame)
+                val runtimeProfile=RuntimeProfileGeometry.adapt(p,width,height,rotation,displayScope(displayId),frame)
+                val prepared=ProfileCompiler.prepare(runtimeProfile,width,height,rotation,displayScope(displayId),frame)
                 geometryInvalidated=false
-                val area=p.calibration.area
+                val area=runtimeProfile.calibration.area
                 require(area.left>=window.left && area.top>=window.top && area.right<=window.right && area.bottom<=window.bottom) { "El área calibrada ya no cabe en la ventana; recalibra el perfil" }
                 activeWindow=Rect(window)
-                SessionController.armProfile(prepared,pendingCursorStart,displayId);startPending=false
+                runtimeDisplayProfile=runtimeProfile;runtimeProfileSource=p
+                if(returnEpoch==null) SessionController.armProfile(prepared,pendingCursorStart,displayId)
+                else if(!SessionController.tryArmProfileAfterInterruption(prepared,pendingCursorStart,displayId,returnEpoch))
+                    clearContextReturn("manual_pause")
+                startPending=false
                 refreshControls()
             }
             } catch(failure:Exception) { waiting=false;fail(failure,"No se pudo preparar esta pantalla","profile") }
@@ -477,7 +550,8 @@ object GameCoordinator {
         val options=ActivityOptions.makeBasic().apply { launchDisplayId=displayId }
         app.startActivity(intent,options.toBundle())
     }
-    private fun awaitTarget(profile:GameProfile,ticket:Long,stayInContext:Boolean=false,ready:()->Unit) {
+    private fun awaitTarget(profile:GameProfile,ticket:Long,stayInContext:Boolean=false,
+        expectedManualPauseEpoch:Long?=null,ready:()->Unit) {
         val requestedAt=SystemClock.uptimeMillis()
         val deadline=requestedAt+20_000
         var stableSince=0L
@@ -486,6 +560,9 @@ object GameCoordinator {
         val poll=object:Runnable {
             override fun run() {
                 if(ticket!=operation) return
+                if(expectedManualPauseEpoch!=null && expectedManualPauseEpoch!=SessionController.manualPauseEpoch) {
+                    waiting=false;startPending=false;clearContextReturn("manual_pause");refreshControls();return
+                }
                 val capture=service
                 capture?.refreshContext()
                 if(stayInContext && (capture?.currentApplicationPackage!=profile.packageName || !SessionController.targetConfirmed)) {
@@ -519,11 +596,12 @@ object GameCoordinator {
         resolutionPresentationAllowed:Boolean=false) {
         if(authorized && SessionController.active && SessionController.activeProfileId!=null) {
             if(currentWindow==null || activeWindow!=currentWindow) {
+                rememberActiveInterruption()
                 // Window metadata can disappear or change transiently (popup, system bar,
                 // accessibility root refresh). Pause safely without invalidating saved calibration.
-                // A new explicit start still checks stable bounds and ProfileCompiler checks
-                // screen dimensions/rotation. Only the editor commits a replacement calibration.
-                SessionController.pause("Cambió la ventana del juego; verifica el área antes de reanudar")
+                // A fresh return start checks stable bounds and compiles a RAM-only
+                // projection. Only the editor commits a replacement calibration.
+                SessionController.pause("Ventana del juego en transición")
             }
         }
         if(!authorized) {
@@ -563,6 +641,7 @@ object GameCoordinator {
             }
             presentationRestore=restore;main.postDelayed(restore,80)
         }
+        tryContextReturn(authorized,currentWindow)
     }
     /** Existing context observations drive closure; losing focus by itself only pauses mapping. */
     internal fun observeTargetLifecycle(observation:GameTaskClosureGate.Observation,now:Long) {
@@ -584,7 +663,9 @@ object GameCoordinator {
         "operation" to operation,"toolsRequested" to toolsRequested,"waiting" to waiting,
         "startPending" to startPending,"editorVisible" to editorVisible,
         "transitioning" to SessionController.isTransitioning(),"mode" to SessionController.mode.wire,
-        "needsTargetLifecycle" to needsTargetLifecycle,"gate" to taskClosure.diagnostics())
+        "needsTargetLifecycle" to needsTargetLifecycle,"gate" to taskClosure.diagnostics(),
+        "contextReturn" to contextReturn.diagnostics(),"runtimeGeometryAdapted" to
+            (runtimeDisplayProfile!=null && runtimeDisplayProfile!==runtimeProfileSource))
     fun refreshControls() {
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { refreshControls() }; return }
         if(SessionClosurePolicy.mayStopForegroundService(stopServiceWhenClosed,SessionController.mode,
@@ -634,12 +715,18 @@ object GameCoordinator {
             mode==SessionMode.STOPPED -> "Detenida"
             else -> "Pausada"
         }
-        val profile=store().get(id)
+        val savedProfile=store().get(id)
+        val profile=runtimeDisplayProfile?.takeIf { it.id==id && runtimeProfileSource===savedProfile } ?: savedProfile
+        val profileFrame=profile?.calibration?.let { it.windowFrame ?: GameArea(0f,0f,it.screenWidth.toFloat(),it.screenHeight.toFloat()) }
+        val currentFrame=service?.boundsForPackage(SessionController.targetPackage)
+        val controlsFitCurrentWindow=profileFrame!=null && currentFrame!=null &&
+            profileFrame.left==currentFrame.left.toFloat() && profileFrame.top==currentFrame.top.toFloat() &&
+            profileFrame.right==currentFrame.right.toFloat() && profileFrame.bottom==currentFrame.bottom.toFloat()
         val presentation=bubble?.settingsSnapshot
         presentation?.let { service?.applyCursorSettings(it) }
         if(presentation?.monitorEnabled==true && SessionController.mode!=SessionMode.STOPPED && SessionController.targetConfirmed && !waiting && !recovering && !blocked) showMonitor(SessionController.targetPackage,SessionController.targetDisplayId)
         else hideMonitor()
-        if(!waiting && !DisplayResolutionController.changing && SessionController.targetConfirmed && mode!=SessionMode.STOPPED && profile!=null && presentation?.showControls==true && !geometryInvalidated && !recovering && !blocked && profile.calibration.confirmed) {
+        if(!waiting && !DisplayResolutionController.changing && SessionController.targetConfirmed && mode!=SessionMode.STOPPED && profile!=null && presentation?.showControls==true && !geometryInvalidated && controlsFitCurrentWindow && !recovering && !blocked && profile.calibration.confirmed) {
             controls?.show(profile,presentation.controlsOpacity)
             if(bubble?.copyMenuBounds(menuBounds)==true) controls?.avoid(menuBounds) else controls?.avoid(null)
         } else controls?.hide()
@@ -671,6 +758,7 @@ object GameCoordinator {
     /** Cancel pending target admissions without removing the user's System/Restore entry. */
     fun beginDisplayResolutionChange() {
         check(Looper.myLooper()==Looper.getMainLooper())
+        clearContextReturn("display_resolution");runtimeDisplayProfile=null;runtimeProfileSource=null
         // Keep access to System/Restore after closing the form. This never rearms mapping.
         resolutionToolsDisplayId=presentationDisplayId.takeIf { toolsRequested && resolutionPanelVisible } ?: -1
         operation++;waiting=false;startPending=false;settledTarget=null
@@ -706,6 +794,7 @@ object GameCoordinator {
     }
     fun openControlsMenu(initialPage:String?=null) {
         if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed) return
+        clearContextReturn("menu_opened")
         if(SessionController.mode==SessionMode.RECOVERING || SessionController.mode==SessionMode.BLOCKED || SessionController.releaseUnverified) {
             refreshControls();guardPresentation("menu") { bubble?.openMenu(initialPage) };return
         }
@@ -719,13 +808,19 @@ object GameCoordinator {
         }
     }
     private fun keyboardMode() {
+        clearContextReturn("manual_keyboard_mode")
         SessionController.pauseThen("Modo teclado y rat\u00f3n") { safe ->
             refreshControls()
             if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu() }
         }
     }
+    fun pauseByUser() {
+        clearContextReturn("manual_pause")
+        SessionController.pauseByUser()
+    }
     fun stop() {
         check(Looper.myLooper()==Looper.getMainLooper())
+        clearContextReturn("stopped");runtimeDisplayProfile=null;runtimeProfileSource=null
         taskClosureOwner.clear()
         val wasEditing=editorVisible
         stopServiceWhenClosed=true
@@ -742,6 +837,7 @@ object GameCoordinator {
     /** Explicit closure action only: restores the immutable original context, never mapping. */
     fun focusPendingClosure():Boolean {
         check(Looper.myLooper()==Looper.getMainLooper())
+        clearContextReturn("explicit_closure")
         val target=SessionController.recoveryTargetPackage ?: return false
         val displayId=SessionController.recoveryTargetDisplayId
         check(displayId==SessionController.targetDisplayId && target==SessionController.targetPackage) {
@@ -761,15 +857,17 @@ object GameCoordinator {
         }
         return true
     }
-    fun clearTools() { taskClosureOwner.clear();operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
+    fun clearTools() { clearContextReturn("tools_closed");runtimeDisplayProfile=null;runtimeProfileSource=null;taskClosureOwner.clear();operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
     fun geometryChanged() {
+        rememberActiveInterruption();contextReturn.invalidateStability()
         geometryInvalidated=true;settledTarget=null;controls?.hide()
         if(editorVisible) { recordEditorClose("geometry_changed"); editor?.close(); SessionController.editorClosed() }
         if(SessionController.active || SessionController.activeProfileId!=null)
-            SessionController.pause("Cambió la pantalla; vuelve a iniciar para verificar el perfil")
+            SessionController.pause("Pantalla en transición; recuperando contexto")
     }
     fun displayUnavailable(displayId:Int) {
         if(displayId!=SessionController.targetDisplayId) return
+        clearContextReturn("display_unavailable");runtimeDisplayProfile=null;runtimeProfileSource=null
         operation++;waiting=false;startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;activeWindow=null
         profileKeys=emptyMap();profileRows=emptyList()
         if(editorVisible) recordEditorClose("display_removed")
@@ -802,6 +900,7 @@ object GameCoordinator {
     fun presentationUnavailable(failure:RuntimeException,phase:String="overlay") {
         require(failure is WindowManager.BadTokenException || failure is WindowManager.InvalidDisplayException || failure is SecurityException)
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { presentationUnavailable(failure,phase) };return }
+        clearContextReturn("presentation_unavailable");runtimeDisplayProfile=null;runtimeProfileSource=null
         val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
         val oldEditor=editor;val oldBubble=bubble;val oldControls=controls;val oldMonitor=monitor;val oldVisual=statusVisual
         monitorSampler.stop()

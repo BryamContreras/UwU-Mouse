@@ -475,6 +475,31 @@ la principal ni la otra virtual.
 
 ## Contexto de ventanas y presentación
 
+### Current window and focus transitions (0.3.10)
+
+The coordinator pauses and verifies contact release when an active game loses
+focus or changes its window frame. Returning to the same admitted game window
+for at least 600 ms permits a fresh start in neutral cursor mode, with at most
+three attempts driven by existing context observations. A system-cursor handoff
+requires an actual departure or frame change before recapture. No held keys,
+buttons, repeat loops or camera contacts are restored. Explicit pause/closure,
+editing, menus, locking, display loss and backend replacement cancel the return;
+an atomic manual-pause epoch check also blocks late asynchronous rearming.
+
+`RuntimeProfileGeometry` projects the saved calibrated area into the current
+verified window in RAM, preserving the saved source and phone/external scope.
+Every resize starts from that source and the normal compiler validates the
+result. Window bounds do not establish a game's internal HUD layout; a changed
+HUD may still require editing or recalibration.
+
+Optional keyboard-only capture selects independent keyboard nodes and skips
+combined mouse/keyboard nodes, since `EVIOCGRAB` owns the entire node. With no
+safe keyboard-only node, Android keeps the mouse and the bubble remains usable;
+keyboard shortcuts may be unavailable. This capability failure suppresses
+repeated optional requests until external input inventory changes, without
+preventing full capture for mapping. These paths share the same implementation
+across supported Android versions rather than selecting a Samsung model.
+
 El provider de contexto tiene un worker de 250 ms y una antigüedad máxima de 750 ms.
 Los dumps `windows` y `displays` comparten un plazo de 500 ms y 4 MiB; los errores,
 datos incompletos o ausencia de foco verificable producen `valid=false` y lista

@@ -26,6 +26,7 @@ object SessionController {
     @Volatile var profileName:String?=null; private set
     @Volatile private var runtimeProfile:PreparedProfile?=null
     @Volatile private var explicitlyStopped=false
+    @Volatile var manualPauseEpoch=0L; private set
     private var originalTargetPackage=TARGET
     private var originalTargetDisplayId=0
     @Volatile private var originalContinuousCamera=false
@@ -515,6 +516,13 @@ object SessionController {
         runtimeProfile=null; activeProfileId=profile.id; profileName=profile.name; targetPackage=profile.packageName;targetDisplayId=displayId
         explicitlyStopped=false; mode=SessionMode.EDITING; state="Edición"; error="Mapeo pausado; guardar no reanuda acciones mantenidas"
     }
+    /** The epoch check and arm share the manual-pause monitor; a late return cannot undo STOP. */
+    @Synchronized fun tryArmProfileAfterInterruption(prepared:PreparedProfile,cursor:Boolean,displayId:Int,
+        expectedManualPauseEpoch:Long):Boolean {
+        if(manualPauseEpoch!=expectedManualPauseEpoch) return false
+        armProfile(prepared,cursor,displayId)
+        return true
+    }
     @Synchronized fun armProfile(prepared:PreparedProfile,cursor:Boolean=false,displayId:Int=targetDisplayId) {
         check(!dev.uwumouse.app.runtime.DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionPolicy.mayInstallConfiguration(mode,contacts,releaseUnverified) && !active && !stopping) { "Termina o recupera la sesión anterior" }
@@ -893,7 +901,7 @@ object SessionController {
         inputKeys++
         val shortcuts=runtimeProfile?.profile?.shortcuts
         if(shortcuts!=null) {
-            if(shortcuts.stop>0 && code==shortcuts.stop) { if(down) pause("Parada por atajo configurado"); return }
+            if(shortcuts.stop>0 && code==shortcuts.stop) { if(down) pauseByUser("Parada por atajo configurado"); return }
             if(cameraShortcutEnabled() && code==shortcuts.cameraToggle) { if(down) requestPointerMode(); return }
             val suspendKey=runtimeProfile?.profile?.camera?.suspendKey ?: 0
             if(cameraShortcutEnabled() && suspendKey>0 && code==suspendKey) {
@@ -914,7 +922,7 @@ object SessionController {
             return
         }
         when (SessionKeys.actionFor(code)) {
-            SessionKeyAction.STOP -> { if (down) pause("Parada por atajo configurado"); return }
+            SessionKeyAction.STOP -> { if (down) pauseByUser("Parada por atajo configurado"); return }
             SessionKeyAction.CAMERA_TOGGLE -> { if (down) requestPointerMode(); return }
             SessionKeyAction.PASS_THROUGH -> return
             SessionKeyAction.MAPPING -> Unit
@@ -1072,6 +1080,11 @@ object SessionController {
         // not replace either, including an inactive blocked/recovering sequence.
         if(stopping || (!active && !armed && !starting && !testRunning)) return
         pause("Servicio de sesión detenido")
+    }
+    /** Typed manual intent is separate from transient context pauses and diagnostic text. */
+    @Synchronized fun pauseByUser(reason:String="Pausada por usuario") {
+        manualPauseEpoch++
+        pause(reason)
     }
     @Synchronized fun pause(reason: String = "Detenida por usuario") {
         if(active || probeStarted) {
@@ -1612,7 +1625,8 @@ object SessionController {
         val captureDiagnostics = environment.diagnostics()
         return mapOf("protocol" to 1, "state" to state, "active" to active,
             "mode" to mode.wire,"activeProfileId" to activeProfileId,"profileName" to profileName,
-            "stopRequested" to explicitlyStopped,"guardianClosurePending" to guardianClosurePending,
+            "stopRequested" to explicitlyStopped,"manualPauseEpoch" to manualPauseEpoch,
+            "guardianClosurePending" to guardianClosurePending,
             "transitioning" to isTransitioning(),
             "activePackage" to targetPackage,"targetDisplayId" to targetDisplayId,"originalTargetDisplayId" to originalTargetDisplayId,
             "contextError" to error,

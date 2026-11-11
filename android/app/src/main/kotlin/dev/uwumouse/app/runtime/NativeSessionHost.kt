@@ -41,6 +41,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private val startupCaptureLosses=java.util.concurrent.ConcurrentHashMap<Long,String>()
     @Volatile private var captureAttemptEpoch=0L
     @Volatile private var captureFailure=""
+    private val optionalKeyboardCapture=OptionalKeyboardCapturePolicy()
+    private val captureReleaseWait=CaptureReleaseWait()
+    private var captureReleaseBackend:android.os.IBinder?=null
+    val nativeMouseCaptureReady:Boolean get()=appliedMouseCapture && nativeCaptureId!=0L
     val nativeCaptureError:String get()=CaptureFailureMessages.describe(captureFailure)
     private val motionDispatch=NativeMotionDispatchGate()
     private val pendingNativeSamples=AtomicInteger()
@@ -417,12 +421,14 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         // A new session can reuse still-applied sources while a previous key UP is deferred.
         // Reset ownership even in that case; held buttons never seed the new engine.
         if (enabled) {
+            if(captureEpoch!=epoch) clearCaptureReleaseWait()
             if(captureEpoch!=epoch) clearCursorInteraction()
             if(appliedMouseCapture && captureEpoch==epoch && physicalButtonsKnown) mouseButtons.rebase(physicalButtons)
             else mouseButtons.reset()
             captureEpoch=epoch
         }
         requestedMouseCapture = enabled
+        if(!enabled) clearCaptureReleaseWait()
         updateCursorPresentation()
         if (!enabled) {
             val targetId=SessionController.targetDisplayId
@@ -438,6 +444,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
     private fun scheduleSourceChange() {
         main.removeCallbacks(applySources)
+        if(!captureAcquisitionAllowed()) return
         if (effectiveMouseCapture() == appliedMouseCapture && (nativeCaptureId!=0L)==wantsKeyboardCapture() && desiredMouseRateHz()==appliedMouseRateHz) {
             main.removeCallbacks(sourceTailTimeout); sourceTailPending = false
             return
@@ -462,6 +469,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         main.post(applySources)
     }
     private fun applyRequestedSources() {
+        if(!captureAcquisitionAllowed()) return
         val backend=BackendRegistry.injector
         if(backend!=null && backend.asBinder()!==rateCapabilityBinder) {
             nativeRateSupported=runCatching { backend.status().getBoolean("nativeCaptureRateSupported",false) }.getOrDefault(false)
@@ -505,11 +513,24 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 check(nativeCaptureId>0)
                 val startupLoss=startupCaptureLosses[nativeCaptureId]
                 check(startupLoss==null) { startupLoss ?: "Captura perdida durante el inicio" }
-                captureFailure=""
+                captureFailure="";clearCaptureReleaseWait()
             } catch(failure:Exception) {
-                captureFailure=failure.message ?: "No se pudo tomar el dispositivo de entrada"
-                requestedMouseCapture=false
-                SessionController.pause(nativeCaptureError)
+                if(mouseRequested && failure.message==CaptureReleaseWait.HELD_INPUT) {
+                    // EVIOCGKEY verified that Android still owns a held physical input.
+                    // Leave all devices with Android and retry acquisition only, without
+                    // restarting the neutral engine or replaying the eventual release.
+                    captureReleaseWait.held(SystemClock.uptimeMillis());captureReleaseBackend=backend?.asBinder();captureFailure=""
+                } else if(optionalKeyboardCapture.acceptCapabilityFailure(mouseRequested,failure.message)) {
+                    // A combined receiver cannot be grabbed for shortcuts alone while Android
+                    // owns its mouse. Keep the bubble/system cursor usable and try both roles
+                    // only when a real mapping/menu requests them. No heartbeat retry loop.
+                    captureFailure=""
+                } else {
+                    clearCaptureReleaseWait()
+                    captureFailure=failure.message ?: "No se pudo tomar el dispositivo de entrada"
+                    requestedMouseCapture=false
+                    SessionController.pause(nativeCaptureError)
+                }
             } finally { startingNativeCapture=false;startupCaptureLosses.clear() }
         }
         appliedMouseCapture = mouseRequested && nativeCaptureId!=0L
@@ -527,8 +548,32 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             Log.i("UwUMouseKeys", "control_source_update mouse=$appliedMouseCapture pending=${consumedKeys.size} deferred=$deferredSourceChanges timeouts=$tailTimeouts")
         }
     }
-    private fun wantsKeyboardCapture() = SessionController.mode!=SessionMode.STOPPED && !DisplayResolutionController.changing && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
-        (SessionController.active || GameCoordinator.sessionOpen)
+    /** Existing observations retry this cold path at most once a second for thirty seconds. */
+    private fun captureAcquisitionAllowed():Boolean {
+        if(!captureReleaseWait.pending) return true
+        if(!effectiveMouseCapture() || appliedMouseCapture) { clearCaptureReleaseWait();return true }
+        val binder=BackendRegistry.injector?.asBinder()
+        if(binder==null || binder!==captureReleaseBackend || !binder.isBinderAlive) {
+            clearCaptureReleaseWait();requestedMouseCapture=false
+            GameCoordinator.cancelCaptureReturn("backend_changed")
+            SessionController.pause("Cambió el backend durante la captura")
+            return false
+        }
+        val now=SystemClock.uptimeMillis()
+        if(captureReleaseWait.expired(now)) {
+            clearCaptureReleaseWait()
+            captureFailure=CaptureReleaseWait.HELD_INPUT
+            requestedMouseCapture=false
+            GameCoordinator.cancelCaptureReturn("physical_release_timeout")
+            SessionController.pause(nativeCaptureError)
+            return false
+        }
+        return captureReleaseWait.mayAttempt(now)
+    }
+    private fun clearCaptureReleaseWait() { captureReleaseWait.clear();captureReleaseBackend=null }
+    private fun wantsKeyboardCapture() = optionalKeyboardCapture.wantsCapture(
+        SessionController.mode!=SessionMode.STOPPED && !DisplayResolutionController.changing && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && SessionController.targetConfirmed && !SessionController.needsRecoveryContext && !GameCoordinator.editorVisible &&
+            (SessionController.active || GameCoordinator.sessionOpen),effectiveMouseCapture())
     private fun wantsMenuPointer() = SessionController.mode!=SessionMode.STOPPED && !GameCoordinator.resolutionPanelVisible && !GameCoordinator.menuTextInputActive && GameCoordinator.menuPointerAvailable && SessionController.targetConfirmed &&
         !SessionController.active && !SessionController.isTransitioning() && !SessionController.needsRecoveryContext &&
         !SessionController.releaseUnverified && SessionController.contacts==0
@@ -710,6 +755,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         EditorWindowBounds(requireNotNull(it.packageName),displayId,bounds,Rect(bounds),it.focused,frame.layer)
     }
     private fun forceMouseOff(reason: String) {
+        clearCaptureReleaseWait()
         motionDispatch.publish(null)
         captureAttemptEpoch++
         requestedMouseCapture = false
@@ -866,6 +912,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             },
             "serviceMotionSources" to if(appliedMouseCapture) InputDevice.SOURCE_MOUSE or InputDevice.SOURCE_MOUSE_RELATIVE else 0,
             "captureProvider" to "native-evdev", "captureId" to nativeCaptureId,"captureError" to nativeCaptureError,
+            "captureWaitingForPhysicalRelease" to captureReleaseWait.pending,
+            "optionalKeyboardCaptureUnavailable" to optionalKeyboardCapture.unavailable,
             "captureErrorCode" to captureFailure,
             "motionTransport" to mapOf("nativeRateSupported" to nativeRateSupported,"appliedMouseRateHz" to appliedMouseRateHz,
                 "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
@@ -1033,13 +1081,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         resolutionSettingsPresentationAllowed=resolutionSettingsPresentationFor(nextWindowContext,GameCoordinator.resolutionPanelVisible,capturedUptime)
         windowContext=nextWindowContext
         currentApplicationPackage=if(confirmed) target else if(blocked || foreground==target) null else foreground
+        val coordinatorBounds=targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) }
+        GameCoordinator.beforeContextChange(confirmed,coordinatorBounds,displayReady,locked)
         if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
         SessionController.targetChanged(confirmed)
         if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
         // Use consumption time after the context and task RPCs and target-state callbacks.
         // A query-start timestamp must never make a valid later task snapshot look future-dated.
         GameCoordinator.observeTargetLifecycle(taskPresence,SystemClock.uptimeMillis())
-        GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed,
+        GameCoordinator.contextChanged(confirmed,coordinatorBounds,editorPresentationAllowed,
             resolutionSettingsPresentationAllowed)
     }
     fun onKeyEvent(event: KeyEvent, fromNative:Boolean=false): Boolean {
@@ -1078,6 +1128,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             }
             return false
         }
+        // Until acquisition confirms an empty EVIOCGKEY baseline, Android owns every
+        // new physical edge. It must not become a mapping action through another route.
+        if(captureReleaseWait.pending) return false
         val physical=fromNative || event.device?.let { it.isExternal && !it.isVirtual }==true
         if(physical && event.action==KeyEvent.ACTION_DOWN && event.repeatCount==0) {
             if(GameCoordinator.captureBubbleKey(event.keyCode)) {
@@ -1267,7 +1320,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             if(primaryChanged && !down) {
                 val open=cursorOpenNotifications
                 cursorSystemGesture=false;cursorOpenNotifications=false
-                SessionController.pauseThen("Cursor devuelto al sistema; reanuda manualmente") { safe ->
+                GameCoordinator.rememberSystemHandoff()
+                SessionController.pauseThen("Cursor devuelto al sistema") { safe ->
                 if(safe && open) runCatching { BackendRegistry.injector?.showNotifications() }
                 }
             }
@@ -1303,6 +1357,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             }
         } else if(primaryChanged && !down && cursorBlockedClick) {
             cursorBlockedClick=false
+            GameCoordinator.rememberSystemHandoff()
             SessionController.pause("Cursor fuera del juego; entrada devuelta a Android")
         }
         if(event.actionMasked==MotionEvent.ACTION_CANCEL) SessionController.pause("Gesto del cursor cancelado")
@@ -1345,6 +1400,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
     override fun onInputDeviceAdded(deviceId: Int) {
         val current=readInputDevice(deviceId).snapshot
+        if(current?.external==true) optionalKeyboardCapture.inventoryChanged()
         if(current!=null) inputInventory[deviceId]=current else inputInventory.remove(deviceId)
         inputInventoryCount=inputInventory.size;addedDeviceCount++
         // Reconnecting a peripheral never arms a session or recreates held actions.
@@ -1363,6 +1419,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             "before" to inputDeviceDiagnostic(before),"after" to inputDeviceDiagnostic(after))
         Log.i("UwUMouseDevice","changed id=$deviceId reason=${decision.reason} fields=${decision.changedFields.joinToString()} pause=$pausing")
         if(decision.pause) {
+            optionalKeyboardCapture.inventoryChanged()
             forgetDevicePresses(deviceId)
             if(pausing) SessionController.pause("Cambió un periférico; reanuda manualmente")
             forceMouseOff("device_changed")
@@ -1370,6 +1427,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
     override fun onInputDeviceRemoved(deviceId: Int) {
         val previous=inputInventory.remove(deviceId)
+        if(previous?.external==true) optionalKeyboardCapture.inventoryChanged()
         inputInventoryCount=inputInventory.size;removedDeviceCount++
         lastDeviceRemoval=mapOf("uptimeMs" to SystemClock.uptimeMillis(),"deviceId" to deviceId,
             "reason" to "device_removed","previous" to inputDeviceDiagnostic(previous))

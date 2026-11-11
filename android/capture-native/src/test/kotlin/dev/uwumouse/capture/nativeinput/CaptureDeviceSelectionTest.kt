@@ -60,6 +60,39 @@ class CaptureDeviceSelectionTest {
         }
     }
 
+    @Test fun automaticKeyboardOnlyCaptureSkipsCombinedMouseNodesWithoutGrabbingTheirMouse() {
+        val mixed = device(5, "combined receiver", mouse = true, keyboard = true)
+        val result = CaptureDeviceSelection.select(listOf(mixed, keyboard, mouse), request(mouse = false))
+        assertEquals(listOf(keyboard), result)
+        assertTrue(result.none { it.mouse })
+        assertEquals(listOf(mixed, mouse, keyboard),
+            CaptureDeviceSelection.select(listOf(mixed, keyboard, mouse), request()))
+    }
+
+    @Test fun automaticMouseOnlyCaptureSkipsCombinedKeyboardNodes() {
+        val mixed = device(5, "combined receiver", mouse = true, keyboard = true)
+        assertEquals(listOf(mouse), CaptureDeviceSelection.select(listOf(mixed, mouse, keyboard), request(keyboard = false)))
+    }
+
+    @Test fun missingIndependentKeyboardHasAnExplicitRoleOnlyCapabilityFailure() {
+        val mixed = device(5, "combined receiver", mouse = true, keyboard = true)
+        for (rows in listOf(listOf(mixed), listOf(mouse), emptyList())) {
+            val failure = assertThrows(IllegalStateException::class.java) {
+                CaptureDeviceSelection.select(rows, request(mouse = false))
+            }
+            assertEquals("no_keyboard_only_input_node_available", failure.message)
+        }
+    }
+
+    @Test fun explicitCombinedRoleKeyboardIsNeverSilentlyReplacedByAnotherKeyboard() {
+        val mixed = device(5, "combined receiver", mouse = true, keyboard = true)
+        val partial = request(mouse = false).copy(keyboardPaths = listOf(mixed.path))
+        val failure = assertThrows(IllegalStateException::class.java) {
+            CaptureDeviceSelection.select(listOf(mixed, keyboard), partial)
+        }
+        assertEquals("mixed_role_input_node_cannot_be_partially_grabbed", failure.message)
+    }
+
     @Test fun duplicateInventoryPathsFailRatherThanAssignTwoCallbackSlotsToOneNode() {
         assertThrows(IllegalStateException::class.java) { CaptureDeviceSelection.select(listOf(mouse, mouse), request()) }
     }

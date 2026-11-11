@@ -2,6 +2,15 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.10+48 — unreleased
+
+- Adapt confirmed calibration to the game's current verified window in memory, so moving, maximizing and resizing desktop windows do not require rewriting the saved profile.
+- Recover an interrupted playing session in neutral cursor mode after the same game returns with stable, admitted geometry and verified released contacts. Explicit pause, stop/edit, lock, display loss and a different backend cancel automatic recovery; held actions are never replayed.
+- Keep Android's mouse available when a combined USB receiver cannot provide optional keyboard-only shortcut capture. Independent keyboard nodes remain usable, and full mapping can capture both roles normally. Unsupported optional requests wait for an input inventory change instead of retrying continuously.
+- Wait for held physical keys and buttons before reacquiring input, retaining native release checks. Capture acquisition retries at most once a second for 30 seconds and confirms native mouse ownership before marking automatic return complete.
+
+Validation on a physical Samsung S25 Ultra running Android 17 in DeX covered repeated small/maximized window changes, return from Sound settings and the app, the floating volume panel, explicit pause and closure. Original profiles and volume were preserved, and each return started with a neutral cursor and no contacts. Local validation passed 104 Flutter and 1018 JVM tests; sustained held-input acquisition waits are covered by regression tests. These checks do not certify every firmware or multi-hour gaming session.
+
 ## 0.3.9+47 — unreleased
 
 - Recognize Android 16/17 idle mouse hover and retained empty display entries when confirming global contact release. Pressed contacts, pilfered pointers, incomplete inventories and unknown formats still block closure.
