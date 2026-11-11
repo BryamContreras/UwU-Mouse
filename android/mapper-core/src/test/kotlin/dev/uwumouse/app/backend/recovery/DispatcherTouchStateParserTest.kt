@@ -127,6 +127,90 @@ class DispatcherTouchStateParserTest {
         assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(17, modernWindow(16))))
     }
 
+    private fun modernHoverWindow(format: Int, index: Int = 0): String =
+        modernWindow(format, index, listOf(20), "[Gesture Monitor] monitor $index")
+            .replace("hoveringPointers=[]", "hoveringPointers=[Pointer(id=0, MOUSE) at (0, 1027.91)]")
+
+    private fun retainedEmptyTouchAndMouseHover(format: Int): String {
+        val retiredTouch = if (format == 17) "    LogicalDisplayId 8:\n      TouchedWindows: <none>"
+            else "    8 :     Windows: <none>"
+        val retiredCursor = if (format == 17) "    LogicalDisplayId 8:\n      TouchedWindows: <none>\n" +
+            "    LogicalDisplayId 7:\n      TouchedWindows: <none>"
+            else "    8 :     Windows: <none>\n    7 :     Windows: <none>"
+        val current = if (format == 17) "    LogicalDisplayId 0:\n      TouchedWindows:"
+            else "    0 :     Windows:"
+        val monitors = (0..4).joinToString("\n") { modernHoverWindow(format, it) }
+        return "$header\n$retiredTouch\n  CursorStatesByDisplay:\n$retiredCursor\n$current\n$monitors\n  Display: 0\n"
+    }
+
+    @Test fun modernRetiredTouchDisplaysAndMouseHoverProveNoPressedContact() {
+        // Sanitized Android17 S25 reproduction: a disconnected game's display
+        // remains explicitly empty while system monitors retain only mouse hover.
+        for (format in listOf(16, 17)) {
+            val observed = retainedEmptyTouchAndMouseHover(format)
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed.replace("\n", "\r\n")))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed
+                .replace("LogicalDisplayId 8", "LogicalDisplayId 19")
+                .replace("    8 :", "    19 :")))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                modernHoverWindow(format))))
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(modernSection(format,
+                modernHoverWindow(format).replace("(0, 1027.91)", "(-0.25, 1.2e+3)"))))
+        }
+    }
+
+    @Test fun modernMouseHoverNeverHidesPressedPilferedUnknownOrMalformedState() {
+        for (format in listOf(16, 17)) {
+            val observed = retainedEmptyTouchAndMouseHover(format)
+            val originalRow = modernHoverWindow(format, 3)
+            val invalidRows = listOf(
+                originalRow.replace("touchingPointers=[]", "touchingPointers=[Pointer(id=0, MOUSE) at (0, 1027.91)]"),
+                originalRow.replace("downTimeInTarget=<not set>", "downTimeInTarget=12345"),
+                originalRow.replace("pilferingPointerIds=<none>", "pilferingPointerIds=${"0".repeat(31)}1"),
+                originalRow.replace("targetFlags=0x0", "targetFlags=0x1"),
+                originalRow.replace("forwardingWindowToken=0x0", "forwardingWindowToken=0x12"),
+                originalRow.replace("MOUSE", "STYLUS"),
+                originalRow.replace("MOUSE", "UNKNOWN"),
+                originalRow.replace("id=0", "id=32"),
+                originalRow.replace("id=0", "id=-1"),
+                originalRow.replace("(0, 1027.91)", "(NaN, 1027.91)"),
+                originalRow.replace("(0, 1027.91)", "(Infinity, 1027.91)"),
+                originalRow.replace("(0, 1027.91)", "(1e999, 1027.91)"),
+                originalRow.replace("Pointer(id=0, MOUSE) at (0, 1027.91)",
+                    "Pointer(id=0, MOUSE) at (0, 1027.91), Pointer(id=1, MOUSE) at (0, 0)"),
+                originalRow.replace("(0, 1027.91)", "(0, 1027.91), unexpected=0"),
+                originalRow.replace("pilferingPointerIds=<none>]", "pilferingPointerIds=<none>, unknown=0]"),
+            )
+            invalidRows.forEach { assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(observed.replace(originalRow, it))) }
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(observed.removeSuffix("  Display: 0\n")))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(observed + modernTouchEmpty))
+        }
+    }
+
+    @Test fun modernRetainedTouchEntriesRequireExplicitlyEmptyWindowsAndCompleteCursorProof() {
+        for (format in listOf(16, 17)) {
+            val observed = retainedEmptyTouchAndMouseHover(format)
+            val emptyTouch = if (format == 17) "    LogicalDisplayId 8:\n      TouchedWindows: <none>"
+                else "    8 :     Windows: <none>"
+            val nonemptyTouch = if (format == 17) "    LogicalDisplayId 8:\n      TouchedWindows:\n${modernWindow(format)}"
+                else "    8 :     Windows:\n${modernWindow(format)}"
+            val invalid = listOf(
+                observed.replaceFirst(emptyTouch, nonemptyTouch),
+                observed.replaceFirst(emptyTouch, emptyTouch.replace("<none>", "<unknown>")),
+                observed.replaceFirst(emptyTouch, "$emptyTouch\n$emptyTouch"),
+                "$header\n$emptyTouch\n  Display: 0\n",
+                "$header\n$emptyTouch\n",
+                observed.replace("  CursorStatesByDisplay:", "  UnknownCursorStates:"),
+            )
+            invalid.forEach { assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(it)) }
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched("$header\n$emptyTouch\n$modernCursorEmpty\n"))
+            val secondTouch = if (format == 17) "    LogicalDisplayId 3:\n      TouchedWindows: <none>"
+                else "    3 :     Windows: <none>"
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed.replaceFirst(emptyTouch, "$emptyTouch\n$secondTouch")))
+        }
+    }
+
     @Test fun modernDeviceProofRejectsAnyTouchHoverDownTimePilferForwardingOrUnknownField() {
         for (format in listOf(16, 17)) {
             val complete = modernSection(format)

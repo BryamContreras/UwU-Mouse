@@ -35,6 +35,7 @@ object WindowDumpParser {
     private val header = Regex("(?m)^  Window #(\\d+) Window\\{([0-9a-fA-F]{1,8})\\s+u\\d+\\s+[^\\r\\n]*\\}:[ \\t]*\\r?$")
     private val broadHeader = Regex("(?m)^  Window #")
     private val footer = Regex("(?m)^  mGlobalConfiguration=")
+    private val auxiliaryWindows = Regex("(?m)^  Hiding System Alert Windows:[ \\t]*\\r?$")
     private val topDisplay = Regex("(?m)^  mTopFocusedDisplayId=(\\d+)[ \\t]*\\r?$")
     private val displayHeader = Regex("(?m)^  Display: mDisplayId=(\\d+)[^\\r\\n]*\\r?$")
     private val focus = Regex("(?m)^  mCurrentFocus=(null|Window\\{([0-9a-fA-F]{1,8})\\s+[^\\r\\n]*\\})[ \\t]*\\r?$")
@@ -79,9 +80,16 @@ object WindowDumpParser {
             return invalid("unknown_dump_header")
         val ending = footer.findAll(windowsText).toList().singleOrNull()
             ?: return invalid("windows_missing_or_duplicate_footer")
-        val windowSection = windowsText.substring(0, ending.range.first)
+        val beforeFooter = windowsText.substring(0, ending.range.first)
+        val auxiliary = auxiliaryWindows.findAll(beforeFooter).toList()
+        if (auxiliary.size > 1) return invalid("duplicate_auxiliary_window_section")
+        // WMS can repeat full WindowState dumps in its auxiliary hiding-alert list.
+        // Those #N entries are not part of the top-first Window #N enumeration.
+        // Keep the inventory boundary explicit; metadata in a duplicate must never
+        // complete or override the final primary window's visibility fields.
+        val windowSection = beforeFooter.substring(0, auxiliary.singleOrNull()?.range?.first ?: beforeFooter.length)
         val blocks = header.findAll(windowSection).toList()
-        if (blocks.isEmpty() || blocks.size > MAX_WINDOWS || blocks.size != broadHeader.findAll(windowSection).count())
+        if (blocks.isEmpty() || blocks.size > MAX_WINDOWS || blocks.size != broadHeader.findAll(beforeFooter).count())
             return invalid("unknown_window_headers")
         val focusedDisplay = topDisplay.findAll(windowsText).toList().singleOrNull()
             ?.groupValues?.get(1)?.toIntOrNull() ?: return invalid("missing_top_focused_display")

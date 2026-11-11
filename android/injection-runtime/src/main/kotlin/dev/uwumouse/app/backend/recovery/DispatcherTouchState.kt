@@ -22,8 +22,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * The parser additionally accepts the complete, bounded Android 14 hover-only/empty-window
  * section; every touching/pilfered bit must be zero and downTime unset. Android 16–17 split
  * touch/cursor states, so both must prove no down. The cursor map can retain removed-display
- * entries: only the exact audited empty-window rows are accepted, through a known complete
- * section boundary. Nonempty modern cursor/hover layouts remain unknown and fail closed.
+ * entries: exact audited empty-window rows and single mouse hover pointers are accepted only
+ * with empty touching/pilfering state and unset down time, through a complete section boundary.
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/InputDispatcher.cpp
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android14-release/services/inputflinger/dispatcher/TouchState.cpp
  * https://android.googlesource.com/platform/frameworks/native/+/refs/heads/android16-release/services/inputflinger/dispatcher/InputDispatcher.cpp

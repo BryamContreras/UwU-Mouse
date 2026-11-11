@@ -61,6 +61,7 @@ object GameCoordinator {
     private var activeWindow:Rect?=null
     private var settledTarget:TargetSnapshot?=null
     private val taskClosure=GameTaskClosureGate()
+    private val taskClosureOwner=GameTaskClosureOwner()
     @Volatile var lastTargetPreparation:Map<String,Any?>?=null; private set
     @Volatile var lastPresentationFailure:Map<String,Any?>?=null; private set
     private var profileRows:List<ProfileMenuItem> = emptyList()
@@ -90,6 +91,10 @@ object GameCoordinator {
     val cursorSettings:BubbleSettings get()=bubble?.settingsSnapshot ?: BubbleSettings()
     val ownOverlayVisible:Boolean get()=editorVisible || bubbleVisible || controlsVisible || monitor?.visible==true || service?.cursorVisible==true
     val sessionOpen:Boolean get()=toolsRequested
+    internal val needsTargetLifecycle:Boolean get()=taskClosureOwner.identity?.let {
+        it.packageName==SessionController.targetPackage && it.displayId==SessionController.targetDisplayId &&
+            SessionController.mode!=SessionMode.STOPPED
+    }==true
     fun cameraResumeKey():Int? = if(cameraShortcut>0 && toolsRequested && !editorVisible && !menuTextInputActive && SessionController.targetConfirmed &&
         !SessionController.releaseUnverified && SessionController.mode==SessionMode.PAUSED &&
         (startPending || (!waiting && !SessionController.isTransitioning())) && SessionController.contacts==0) cameraShortcut else null
@@ -560,17 +565,26 @@ object GameCoordinator {
         }
     }
     /** Existing context observations drive closure; losing focus by itself only pauses mapping. */
-    internal fun observeTargetLifecycle(observation:GameTaskClosureGate.Observation,now:Long,
-        displayReady:Boolean,locked:Boolean) {
-        val identity=if(toolsRequested && SessionController.targetPackage!=SessionController.TARGET)
+    internal fun observeTargetLifecycle(observation:GameTaskClosureGate.Observation,now:Long) {
+        val requested=if(toolsRequested && SessionController.targetPackage!=SessionController.TARGET)
             GameTaskClosureGate.Identity(operation,SessionController.targetPackage,SessionController.targetDisplayId) else null
-        val mayClose=displayReady && !locked && !waiting && !startPending && !editorVisible &&
+        val identity=taskClosureOwner.reconcile(requested,SessionController.targetPackage,SessionController.targetDisplayId,
+            SessionController.mode==SessionMode.STOPPED)
+        // Closing an absent game remains possible after its display is removed or locked.
+        // Readiness, focus and lock checks still independently gate all input admission.
+        val mayClose=!waiting && !startPending && !editorVisible &&
             !SessionController.isTransitioning() && SessionController.mode!=SessionMode.STOPPED
         if(taskClosure.observe(identity,observation,now,mayClose)) {
             Log.i("UwUMouse","game_task_closed package=${SessionController.targetPackage} display=${SessionController.targetDisplayId}")
             stop()
         }
     }
+    /** Explicit diagnostics only; none of these snapshots run on the physical input path. */
+    fun lifecycleDiagnostics():Map<String,Any?> = mapOf(
+        "operation" to operation,"toolsRequested" to toolsRequested,"waiting" to waiting,
+        "startPending" to startPending,"editorVisible" to editorVisible,
+        "transitioning" to SessionController.isTransitioning(),"mode" to SessionController.mode.wire,
+        "needsTargetLifecycle" to needsTargetLifecycle,"gate" to taskClosure.diagnostics())
     fun refreshControls() {
         if(Looper.myLooper()!=Looper.getMainLooper()) { main.post { refreshControls() }; return }
         if(SessionClosurePolicy.mayStopForegroundService(stopServiceWhenClosed,SessionController.mode,
@@ -712,6 +726,7 @@ object GameCoordinator {
     }
     fun stop() {
         check(Looper.myLooper()==Looper.getMainLooper())
+        taskClosureOwner.clear()
         val wasEditing=editorVisible
         stopServiceWhenClosed=true
         operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList()
@@ -746,7 +761,7 @@ object GameCoordinator {
         }
         return true
     }
-    fun clearTools() { operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
+    fun clearTools() { taskClosureOwner.clear();operation++; waiting=false; startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;profileKeys=emptyMap();profileRows=emptyList(); hideMonitor();editor?.close(); bubble?.hide();controls?.hide(); currentId=null }
     fun geometryChanged() {
         geometryInvalidated=true;settledTarget=null;controls?.hide()
         if(editorVisible) { recordEditorClose("geometry_changed"); editor?.close(); SessionController.editorClosed() }

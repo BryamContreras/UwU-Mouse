@@ -198,6 +198,47 @@ class WindowDumpParserTest {
         }
     }
 
+    @Test fun auxiliaryHidingAlertDuplicatesDoNotExtendTheLastPrimaryWindow() {
+        // Sanitized shape observed on Samsung Android 17: a full Settings dump is
+        // repeated after the final wallpaper entry and before the global footer.
+        val settings = window(name = "dev.example.settings")
+        val wallpaper = window(index = 1, id = "bbb", name = "dev.example.wallpaper",
+            type = "WALLPAPER", visible = false)
+        val duplicate = settings.replace("  Window #0 ", "  #0 ")
+        for (lineEnding in listOf("\n", "\r\n")) {
+            val text = withHidingAlerts(windows(settings, wallpaper), duplicate).replace("\n", lineEnding)
+            val result = parse(text, displays(0 to "123abc").replace("\n", lineEnding))
+            assertTrue(result.reason, result.valid)
+            assertEquals("dev.example.settings", result.focusedPackage)
+            assertEquals(listOf(0x123abc), result.windows.map { it.id })
+            assertEquals(2, result.windows.single().layer)
+        }
+    }
+
+    @Test fun auxiliaryListsCannotCompleteOrReplaceMalformedPrimaryMetadata() {
+        val first = window()
+        val last = window(index = 1, id = "bbb", visible = false)
+        val duplicate = first.replace("  Window #0 ", "  #0 ")
+        val invalid = listOf(
+            withHidingAlerts(windows(first, last.replace("    isVisible=false\n", "")), duplicate),
+            withHidingAlerts(windows(first, last + "\n    isVisible=false"), duplicate),
+            withHidingAlerts(windows(first, last), duplicate).substringBefore("mGlobalConfiguration"),
+            withHidingAlerts(windows(first, last), duplicate + "\n" + window(index = 2, id = "ccc")),
+            withHidingAlerts(windows(first, last), duplicate + "\n  Window #malformed"),
+            withHidingAlerts(windows(first, last), duplicate + "\n  Hiding System Alert Windows:\n" + duplicate),
+            withHidingAlerts(windows(first, last), duplicate).replace("Hiding System Alert Windows:", "Unknown Window List:"),
+        )
+        for (text in invalid) {
+            val result = parse(text)
+            assertFalse(result.reason, result.valid)
+            assertTrue(result.windows.isEmpty())
+            assertNull(result.focusedPackage)
+        }
+    }
+
+    private fun withHidingAlerts(text: String, entries: String): String =
+        text.replace("\n\n  mGlobalConfiguration=", "\n\n  Hiding System Alert Windows:\n$entries\n\n  mGlobalConfiguration=")
+
     @Test fun truncatedUnknownAndOversizedDumpsFailClosed() {
         assertFalse(parse(windows(window()).substringBefore("mGlobalConfiguration")).valid)
         assertFalse(parse(windows(window()) + "  mGlobalConfiguration={}\n").valid)

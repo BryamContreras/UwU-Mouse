@@ -401,7 +401,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         override fun run() {
             if(instance!==this@NativeSessionHost) return
             if(!cursorPresentationActive && cursorCleanupPending) clearCursorInteraction()
-            val needsContext=GameCoordinator.sessionOpen || SessionController.active || GameCoordinator.editorVisible ||
+            val needsContext=GameCoordinator.sessionOpen || GameCoordinator.needsTargetLifecycle || SessionController.active || GameCoordinator.editorVisible ||
                 SessionController.isTransitioning() || SessionController.needsRecoveryContext || cursorCleanupPending || SystemClock.uptimeMillis()<explicitContextUntil ||
                 dev.uwumouse.app.MainActivity.latest.get()?.hasWindowFocus()==true
             if(needsContext) refreshContext()
@@ -1036,7 +1036,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(blocked && (SessionController.active || SessionController.armed)) SessionController.pause(contextBlockReason)
         SessionController.targetChanged(confirmed)
         if(!confirmed) forceMouseOff(if(blocked) "system_window_cover" else "focus_lost")
-        GameCoordinator.observeTargetLifecycle(taskPresence,capturedUptime,displayReady,locked)
+        // Use consumption time after the context and task RPCs and target-state callbacks.
+        // A query-start timestamp must never make a valid later task snapshot look future-dated.
+        GameCoordinator.observeTargetLifecycle(taskPresence,SystemClock.uptimeMillis())
         GameCoordinator.contextChanged(confirmed,targetFrame?.let { Rect(it.left,it.top,it.right,it.bottom) },editorPresentationAllowed,
             resolutionSettingsPresentationAllowed)
     }

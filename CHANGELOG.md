@@ -2,6 +2,16 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.9+47 — unreleased
+
+- Recognize Android 16/17 idle mouse hover and retained empty display entries when confirming global contact release. Pressed contacts, pilfered pointers, incomplete inventories and unknown formats still block closure.
+- Keep repeated auxiliary WindowManager summaries out of the primary window inventory so newer firmware does not invalidate otherwise complete game context.
+- Preserve game-exit tracking after external display removal. Repeated fresh global task absence can close a session even when window metadata is unavailable; minimizing or moving a live game continues to pause it.
+- Exercise the observed firmware formats with JVM regressions and an Android framework regression on every supported API.
+- Expose bounded on-request lifecycle diagnostics to distinguish unknown task queries, preparation, stale samples and window vetoes without adding a per-input task or background process.
+
+Validation on a physical Samsung S25 Ultra running Android 17 covered active and paused game exit in mirroring and DeX, and session closure from Home on the phone and external display. The phone laboratory also reproduced blocked-contact recovery. Original profiles were preserved. The standalone production-parser probe passed 15 checks on Android's regex implementation; local validation passed 104 Flutter and 984 JVM tests. These checks do not certify every firmware or multi-hour gaming session.
+
 ## 0.3.8+46 — 2026-11-10
 
 - Configure custom resolution directly in the System panel: the switch unlocks the width and height fields, and the check and reset icons sit on the same row. Turning the switch off or resetting restores the previous display setting.

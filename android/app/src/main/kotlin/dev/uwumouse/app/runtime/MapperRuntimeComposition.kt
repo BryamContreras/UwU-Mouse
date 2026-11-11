@@ -68,6 +68,7 @@ private class AndroidSessionEvents : SessionEvents {
     override fun requestEditor() = GameCoordinator.editCurrent()
     override fun diagnostics(): Map<String, Any?> = mapOf(
         "sessionOpen" to GameCoordinator.sessionOpen,
+        "gameTaskClosure" to GameCoordinator.lifecycleDiagnostics(),
         "editorVisible" to GameCoordinator.editorVisible,
         "editorLastClose" to GameCoordinator.lastEditorClose,
         "bubbleVisible" to GameCoordinator.bubbleVisible,

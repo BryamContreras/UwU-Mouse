@@ -30,6 +30,7 @@ import dev.uwumouse.app.MainActivity
 import dev.uwumouse.app.activation.ActivationNetworkPermission
 import dev.uwumouse.app.backend.BackendRegistry
 import dev.uwumouse.app.backend.IInjector
+import dev.uwumouse.app.backend.recovery.DispatcherTouchStateParser
 import dev.uwumouse.app.editor.OverlayOpacityBudget
 import dev.uwumouse.app.editor.OverlayWindows
 import dev.uwumouse.app.game.stopSessionThenCleanUp
@@ -105,6 +106,54 @@ class AndroidCompatibilityTest {
         } finally {
             onMain { activity.finish() }
         }
+    }
+
+    @Test fun lifecycleParsersHandleRetiredDisplaysHoverAndRepeatedWindowSummaries() {
+        // Sanitized shape observed on an Android 17 physical device. Exercise Android's
+        // regex implementation on every supported API, independently of the host JDK.
+        val cursor = """
+  TouchStatesByDisplay:
+    LogicalDisplayId 8:
+      TouchedWindows: <none>
+  CursorStatesByDisplay:
+    LogicalDisplayId 8:
+      TouchedWindows: <none>
+    LogicalDisplayId 0:
+      TouchedWindows:
+        0: name='PointerEventDispatcherOverlay0', targetFlags=0x0, forwardingWindowToken=0x0, mDeviceStates=
+          DeviceId(20):[touchingPointers=[], downTimeInTarget=<not set>, hoveringPointers=[Pointer(id=0, MOUSE) at (0, 1027.91)], pilferingPointerIds=<none>]
+  Display: 0
+""".trim('\n', '\r')
+        assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(cursor))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(
+            cursor.replace("touchingPointers=[]", "touchingPointers=[Pointer(id=0, MOUSE) at (0, 1027.91)]")))
+        assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(
+            cursor.replace("downTimeInTarget=<not set>", "downTimeInTarget=100")))
+        val primary = """
+  Window #0 Window{123abc u0 dev.example.game}:
+    mDisplayId=0
+    mOwnerUid=10123 package=dev.example.game
+    mAttrs={ty=BASE_APPLICATION}
+    mHasSurface=true
+    Frames: frame=[0,0][1080,1920]
+    isOnScreen=true
+    isVisible=true
+""".trim('\n', '\r')
+        val windows = "WINDOW MANAGER WINDOWS\n$primary\n" +
+            "  Hiding System Alert Windows:\n" +
+            primary.replace("Window #0 Window", "#0 Window") +
+            "\n  mGlobalConfiguration={}\n  mTopFocusedDisplayId=0\n"
+        val displays = "WINDOW MANAGER DISPLAY CONTENTS\n  Display: mDisplayId=0\n" +
+            "  mCurrentFocus=Window{123abc u0 dev.example.game}\n  mFocusedApp=ActivityRecord{abc}\n"
+        // window-context is a private backend-host dependency; inspect its packaged
+        // production parser without adding a production dependency to the app.
+        val parser = Class.forName("dev.uwumouse.windowcontext.WindowDumpParser")
+        val parsed = parser.getMethod("parse", String::class.java, String::class.java)
+            .invoke(parser.getField("INSTANCE").get(null), windows, displays)
+        val snapshot = parsed.javaClass
+        assertEquals(true, snapshot.getMethod("getValid").invoke(parsed))
+        assertEquals(1, (snapshot.getMethod("getWindows").invoke(parsed) as List<*>).size)
+        assertEquals("dev.example.game", snapshot.getMethod("getFocusedPackage").invoke(parsed))
     }
 
     @Test fun nativeMotionDispatchRunsWhileMainIsOccupiedAndRetainsButtonOrder() {
