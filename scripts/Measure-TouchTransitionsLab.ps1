@@ -160,7 +160,13 @@ try {
             (Get-Field $window 'targetPackage') -eq $receiverId -and (Get-Field $window 'displayId' -1) -eq $DisplayId -and
             (Get-Field $window 'trustedFocus' $false) -and (Get-Field $receiverBefore 'displayId' -1) -eq $DisplayId -and
             (Get-Field $receiverBefore 'activityResumed' $false) -and (Get-Field $receiverBefore 'windowFocused' $false)
-        if($ready){Assert-ProjectLiveReceiver $adbPath $targetSerial $receiverBefore $prepared.uptimeMs;break}
+        if($ready) {
+            # The receiver was read after $prepared. Validate it against a later clock,
+            # so a fresh heartbeat cannot be mistaken for a snapshot from the future.
+            $validation=Read-Mapper -TimeoutMs 3000
+            Assert-ProjectLiveReceiver $adbPath $targetSerial $receiverBefore $validation.uptimeMs
+            break
+        }
         if($preparing.ElapsedMilliseconds -ge 5000){throw 'InputLab was not verified focused on the authorized display.'}
         Start-Sleep -Milliseconds 200
     } while($true)
@@ -224,6 +230,9 @@ finally {
                 }
                 foreach($row in $page.records){$rows.Add($row)}
                 if($null -eq $page.nextRecordsOffset){break}
+                if([int]$page.nextRecordsOffset -ne $rows.Count -or $rows.Count -ge $stopped.storedCount -or $rows.Count -gt 4096) {
+                    throw 'Recorder pagination did not advance through the bounded ring.'
+                }
                 $page=Read-Mapper -Method 'latencySnapshot' -Extra @('--extra',"offset:i:$([int]$page.nextRecordsOffset)",'--extra','limit:i:512')
             }
             if($rows.Count -ne $stopped.storedCount){throw 'Recorder export was incomplete'}

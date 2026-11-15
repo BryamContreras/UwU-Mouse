@@ -82,3 +82,42 @@ El vencimiento de sesión se cuenta desde la última entrada aceptada, con el
 mismo presupuesto de 30 minutos. Los heartbeats no lo renuevan. Las pruebas con
 reloj virtual cubren dos horas de actividad y el vencimiento exacto tras 30
 minutos de inactividad; no equivalen a dos horas de juego físico.
+
+Validación de 0.3.12+50 en S22 Ultra / Android 14 / DeX: ocho ventanas sintéticas
+de cuatro segundos, tres con el motor 0.3.11 y cinco con 0.3.12, en orden
+nuevo → anterior → nuevo. El control conserva 0.3.11 y añade exactamente la
+misma fuente de laboratorio. Hubo 31.980 muestras generadas, 320 ciclos M1 y
+512 bordes de tecla, sin entradas físicas durante las ventanas. Los cinco
+ticks omitidos pertenecen al planificador de la fuente; no se reprodujeron en
+ráfaga. Ninguna muestra admitida venció por antigüedad.
+
+| Motor / mira precisa | Ventanas | Llamadas Binder / eventos táctiles planificados |
+| --- | ---: | ---: |
+| 0.3.11 / apagada | 2 | 935 / 935; 954 / 954 |
+| 0.3.11 / encendida | 1 | 944 / 944 |
+| 0.3.12 / apagada | 3 | 842 / 897; 879 / 933; 875 / 928 |
+| 0.3.12 / encendida | 2 | 897 / 950; 893 / 949 |
+
+Las llamadas compuestas evitaron 271 llamadas separadas: 5,8 % respecto a
+una llamada por cada evento de esas mismas ejecuciones nuevas. Compartieron
+250 observaciones de foco. Las ocho ventanas terminaron con cero errores de
+secuencia y cero contactos en el receptor independiente, sin incremento neto
+de descriptores abiertos; los buffers completos quedaron retenidos. Esto no
+acredita ausencia de fugas durante horas.
+
+Los tiempos variaron y no demuestran una reducción general de latencia:
+la mediana de los grupos MOVE + borde estuvo entre 6,29–6,81 ms en el control
+y 5,96–7,33 ms en el nuevo; sus p95 fueron 13,06–15,49 ms y 12,84–17,45 ms,
+respectivamente. Los grupos no son pares causales de eventos idénticos. La
+batería estuvo entre 31,4 y 32,8 °C; las pruebas no midieron USB, juego ni
+presentación. No atribuir el cambio de una mediana de llamadas ordinarias al
+recorrido completo.
+
+El APK ARM64 procede de [Actions 43664185140](https://github.com/BryamContreras/UwU-Mouse/actions/runs/43664185140),
+commit `24869fe`, con 1.112 pruebas JVM y 104 Flutter correctas. La
+[matriz Android 14–17](https://github.com/BryamContreras/UwU-Mouse/actions/runs/43664187763)
+aprobó catorce casos por API y uno adicional de permisos en API 37. La primera
+ejecución perdió el emulador de API 37 tras cuatro casos, sin una aserción
+fallida registrada; un único reintento reutilizó el mismo par de APK y aprobó
+la suite completa. Las modificaciones posteriores son del script y esta
+documentación; no cambian el código del APK instalado.
