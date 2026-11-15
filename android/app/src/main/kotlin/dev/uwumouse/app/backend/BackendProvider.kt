@@ -127,7 +127,7 @@ class BackendProvider : ContentProvider() {
                 Bundle().apply { putBoolean("accepted",true);putString("json",org.json.JSONObject(imported).toString()) }
             } finally { Binder.restoreCallingIdentity(identity) }
         }
-        if(method in setOf("labPrepare","labProbe","labStop","labFault","labRecreateUi","labStale","labCursor","labMapped","labMacro","labActions","labCamera","cameraTrial","profileCameraMode")) {
+        if(method in setOf("labPrepare","labProbe","labStop","labFault","labRecreateUi","labStale","labCursor","labMapped","labMacro","labActions","labCamera","labTouchTransitions","cameraTrial","profileCameraMode")) {
             val identity=Binder.clearCallingIdentity()
             return try {
                 when(method) {
@@ -147,6 +147,17 @@ class BackendProvider : ContentProvider() {
                     "labMacro" -> SessionController.testMacroLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false)
                     "labActions" -> SessionController.testActionLab(requireNotNull(context),extras?.getInt("displayId",0) ?: 0)
                     "labCamera" -> SessionController.testCameraLab(requireNotNull(context),extras?.getInt("displayId",0) ?: 0)
+                    "labTouchTransitions" -> {
+                        val task=FutureTask<Unit> {
+                            dev.uwumouse.app.runtime.NativeSessionHost.initialize(requireNotNull(context))
+                            SessionController.testTouchTransitionsLab(requireNotNull(context),
+                                extras?.getInt("displayId",0) ?: 0,extras?.getInt("durationMs",4_000) ?: 4_000,
+                                extras?.getBoolean("precision",false) ?: false)
+                        }
+                        if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper()) task.run()
+                        else check(android.os.Handler(android.os.Looper.getMainLooper()).post(task))
+                        task.get(5,TimeUnit.SECONDS)
+                    }
                     "labMapped" -> SessionController.testMappedLab(requireNotNull(context),extras?.getBoolean("automated",false) ?:false,extras?.getBoolean("hold",false) ?:false,extras?.getBoolean("precision",false) ?:false)
                     "cameraTrial" -> SessionController.configureCameraTrial(requireNotNull(extras?.getString("strategy")))
                     "profileCameraMode" -> {

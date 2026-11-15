@@ -1307,6 +1307,209 @@ object SessionController {
         } }
         worker.post(await)
     }
+    @Volatile private var labTouchTransitions:Map<String,Any?> = emptyMap()
+
+    /** Bounded synthetic motor/injection trial. Never selects a game or reads/writes saved profiles. */
+    fun testTouchTransitionsLab(context:Context,displayId:Int=0,durationMs:Int=4_000,precision:Boolean=false) {
+        check(Looper.myLooper()==Looper.getMainLooper()) { "Laboratory setup requires main" }
+        val source=TouchTransitionsLabSource(durationMs)
+        check(labTouchTransitions["running"]!=true) { "Espera a que termine el laboratorio anterior" }
+        check(environment.currentApplicationPackage==TARGET) { "Abre InputLab primero" }
+        useLaboratory(displayId)
+        val display=dev.uwumouse.app.runtime.TargetDisplayGeometry.read(context,displayId)
+        val bounds=requireNotNull(environment.boundsForPackage(TARGET)) { "Receptor sin ventana verificada" }
+        check(targetPackage==TARGET && targetDisplayId==displayId && capturedTargetConfirmed()) { "InputLab sin foco en la pantalla solicitada" }
+        val profile=GameProfile.create(TARGET,"Transiciones InputLab",display.width,display.height,display.rotation).let {
+            it.copy(calibration=it.calibration.copy(confirmed=true,
+                area=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat())),
+                camera=it.camera.copy(enabled=true,mode=CameraSpec.SMOOTH,suspendKey=0,
+                    sensitivityX=.7f,sensitivityY=.7f,updateRateHz=0,precisionAim=precision),
+                action=ActionSpec(.87f,.80f,triggerKind="mouse",code=1,behavior=ActionSpec.TAP),
+                shortcuts=SessionShortcuts(138,139,0))
+        }
+        val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation)
+        armProfile(prepared.copy(bindings=prepared.bindings.copy(
+            ggCameraPolicy=requireNotNull(prepared.bindings.ggCameraPolicy).copy(freeFire=true))),displayId=displayId)
+        activeProfileId=null
+        val run=generation
+        val requestedAt=SystemClock.uptimeMillis()
+        val hardDeadline=requestedAt+10_000L
+        val processFdBefore=runCatching { java.io.File("/proc/self/fd").list()?.size }.getOrNull()
+        val description=mapOf<String,Any?>("sourceOrigin" to "synthetic-app","physicalInput" to false,
+            "packageName" to TARGET,"displayId" to displayId,"requestedDurationMs" to durationMs,"precision" to precision,
+            "sourceBatchHz" to 250,"samplesPerBatch" to 4,"sampleSpacingMs" to 1,"m1PhaseMs" to 50,"directionPhaseMs" to 125,
+            "sourceScope" to "Four synthetic timestamps per app-produced batch; not USB capture or physical polling latency",
+            "probeSourceScope" to "Mapper probe stages during this trial use synthetic-app timestamps even if their legacy names mention mouse/native input",
+            "timingScope" to "Final rolling mapper/backend percentile buffers; retained tails may exclude earlier trial events and do not measure display latency",
+            "observerScope" to "InputLab must independently verify event sequence and final zero contacts",
+            "processOpenFdBefore" to processFdBefore)
+        labTouchTransitions=description+mapOf("running" to true,"finished" to false,"stage" to "preparing")
+        syntheticProbe="Preparando cámara, M1 y WASD sintéticos en InputLab"
+        class Trial {
+            val producer=HandlerThread("UwUTouchLabSource").apply { start() }
+            val producerHandler=Handler(producer.looper)
+            val stopped=java.util.concurrent.atomic.AtomicBoolean()
+            val cleanupStarted=java.util.concurrent.atomic.AtomicBoolean()
+            val completed=java.util.concurrent.atomic.AtomicBoolean()
+            val ownPause=java.util.concurrent.atomic.AtomicBoolean()
+            val failure=java.util.concurrent.atomic.AtomicReference<String?>(null)
+            val sourceStart=AtomicLong()
+            val sourceEnd=AtomicLong()
+            val samples=AtomicLong()
+            val batches=AtomicLong()
+            val buttons=AtomicLong()
+            val keys=AtomicLong()
+            val maxLateness=AtomicLong()
+            val held=java.util.concurrent.atomic.AtomicBoolean()
+            val direction=java.util.concurrent.atomic.AtomicInteger()
+            var before:Map<String,Any?> = emptyMap()
+            var trialSessionId=0L
+            fun sameRun()=run==generation && targetPackage==TARGET && targetDisplayId==displayId &&
+                runtimeProfile?.profile?.id==profile.id
+            fun allowed()=sameRun() && active && targetConfirmed && capturedTargetConfirmed()
+            fun counters():Map<String,Any?> {
+                val backend=runCatching { environment.injector?.status() }.getOrNull()
+                fun timing(values:RollingLatencySamples)=RollingLatencySamples.percentilesMillis(
+                    synchronized(metricsLock) { values.snapshot() })
+                val native=backend?.getBundle("nativeCapture")
+                return mapOf("keys" to inputKeys,"mouse" to inputMouse,"samples" to relativeSamples,"injected" to injected,
+                    "backendSessionId" to backendSessionId,"contacts" to contacts,"releaseUnverified" to releaseUnverified,
+                    "nativeMotionSamples" to native?.getLong("rawMotionSamples"),"nativeKeyFrames" to native?.getLong("keyFrames"),
+                    "expiredCameraSamples" to expiredCameraSamples,"queueMs" to timing(queueWait),"ipcMs" to timing(ipcTime),
+                    "precisionAim" to precisionAimFilter.snapshot(),"queueDiagnostics" to queue.diagnostics().let {
+                        mapOf("currentDepth" to it.currentDepth,"maxDepth" to it.maxDepth,"coalescedMotionEntries" to it.coalescedMotionEntries) },
+                    "backendFocusMs" to backend?.getDoubleArray("focusMs")?.toList(),
+                    "backendPipeMs" to backend?.getDoubleArray("pipeMs")?.toList(),
+                    "backendPossibleContacts" to backend?.getInt("possibleContacts"),
+                    "backendConfirmedContacts" to backend?.getInt("confirmedContacts"),
+                    "touchTransitionSupported" to backend?.getBoolean("touchTransitionBatchSupported",false),
+                    "touchTransitionBatches" to backend?.takeIf { it.containsKey("touchTransitionBatches") }?.getLong("touchTransitionBatches"),
+                    "touchTransitionFrames" to backend?.takeIf { it.containsKey("touchTransitionFrames") }?.getLong("touchTransitionFrames"),
+                    "touchTransitionFocusQueries" to backend?.takeIf { it.containsKey("touchTransitionFocusQueries") }?.getLong("touchTransitionFocusQueries"),
+                    "touchTransitionFocusReuses" to backend?.takeIf { it.containsKey("touchTransitionFocusReuses") }?.getLong("touchTransitionFocusReuses"))
+            }
+            fun collect() {
+                if(!completed.compareAndSet(false,true)) return
+                main.removeCallbacks(watchdog)
+                runCatching { producer.join(200) }
+                val after=counters()
+                if(trialSessionId>0L && backendSessionId!=trialSessionId) failure.compareAndSet(null,"session_replaced_before_snapshot")
+                val deltas=listOf("keys","mouse","samples","injected","expiredCameraSamples","nativeMotionSamples","nativeKeyFrames").associateWith { name ->
+                    val a=before[name] as? Number;val b=after[name] as? Number
+                    if(a!=null && b!=null) b.toLong()-a.toLong() else null
+                }
+                val reason=failure.get()
+                val processFdAfter=runCatching { java.io.File("/proc/self/fd").list()?.size }.getOrNull()
+                labTouchTransitions=description+mapOf("running" to false,"finished" to true,"stage" to "finished","failure" to reason,
+                    "source" to source.snapshot(),"generated" to mapOf("batches" to batches.get(),"samples" to samples.get(),
+                        "buttonEdgesIncludingCleanup" to buttons.get(),"keyEdgesIncludingCleanup" to keys.get(),
+                        "maxProducerLatenessMs" to maxLateness.get()/1e6),
+                    "actualProductionDurationMs" to if(sourceStart.get()>0L) (sourceEnd.get()-sourceStart.get())/1e6 else 0.0,
+                    "before" to before,"after" to after,"counterDeltas" to deltas,
+                    "processOpenFdAfter" to processFdAfter,
+                    "processOpenFdDelta" to if(processFdBefore!=null && processFdAfter!=null) processFdAfter-processFdBefore else null,
+                    "internalStreamClosed" to (contacts==0 && !releaseUnverified),"receiverVerificationRequired" to true)
+                syntheticProbe=if(reason==null) "Transiciones sintéticas terminadas; verificar InputLab independiente" else "Laboratorio de transiciones: $reason"
+                main.post { events.changed() }
+            }
+            fun pauseOwned(reason:String) {
+                synchronized(SessionController) {
+                    if(sameRun()) { ownPause.set(true);pause(reason) }
+                }
+            }
+            val settle=object:Runnable { override fun run() {
+                if(completed.get()) return
+                if(!sameRun()) {
+                    if(!ownPause.get()) failure.compareAndSet(null,"session_changed")
+                    collect();return
+                }
+                if(!queue.isEmpty() || cameraPacer?.pending==true) {
+                    if(SystemClock.uptimeMillis()<hardDeadline) { worker.postDelayed(this,10);return }
+                    failure.compareAndSet(null,"drain_timeout")
+                }
+                pauseOwned("Fin de diagnóstico sintético de transiciones")
+                // pause() enqueues its release before this independent final snapshot.
+                worker.post { collect() }
+            } }
+            fun stop(reason:String?=null) {
+                if(reason!=null) failure.compareAndSet(null,reason)
+                if(!stopped.compareAndSet(false,true)) return
+                sourceEnd.set(System.nanoTime())
+                producerHandler.removeCallbacksAndMessages(null)
+                producer.quitSafely()
+                worker.post {
+                    if(!cleanupStarted.compareAndSet(false,true)) return@post
+                    synchronized(SessionController) {
+                        if(allowed()) {
+                            if(held.getAndSet(false)) { button(1,false);buttons.incrementAndGet() }
+                            val previous=direction.getAndSet(0)
+                            if(previous!=0) { key(previous,false);keys.incrementAndGet() }
+                        }
+                    }
+                    worker.post(settle)
+                }
+            }
+            val produce=object:Runnable { override fun run() { try {
+                if(stopped.get()) return
+                if(SystemClock.uptimeMillis()>=hardDeadline) { stop("hard_timeout");return }
+                val now=System.nanoTime()
+                val elapsed=(now-sourceStart.get())/1_000_000L
+                if(elapsed<0L) { stop("producer_clock_regression");return }
+                val step=source.advance(elapsed)
+                if(step.finished) { stop();return }
+                var admitted=false
+                synchronized(SessionController) {
+                    if(!stopped.get() && allowed()) {
+                        admitted=true
+                        step.tick?.let { tick ->
+                            val last=sourceStart.get()+tick*4_000_000L
+                            val late=(now-last).coerceAtLeast(0L)
+                            if(late>maxLateness.get()) maxLateness.set(late)
+                            mouseBatch(RawMouseMotionBatch(LongArray(4) { last-(3-it)*1_000_000L },
+                                FloatArray(4) { if((tick*4+it)/16%2==0) 4f else -4f },
+                                FloatArray(4) { if((tick*4+it)/32%2==0) 2f else -2f }))
+                            batches.incrementAndGet();samples.addAndGet(4)
+                        }
+                        step.buttonHeld?.let { down -> button(1,down);held.set(down);buttons.incrementAndGet() }
+                        step.directionKey?.let { code ->
+                            val previous=direction.getAndSet(code)
+                            if(previous!=0) { key(previous,false);keys.incrementAndGet() }
+                            key(code,true);keys.incrementAndGet()
+                        }
+                    }
+                }
+                if(!admitted) { stop("target_or_session_lost");return }
+                val delay=(step.nextAtMillis-(System.nanoTime()-sourceStart.get())/1_000_000L).coerceAtLeast(0L)
+                if(!producerHandler.postDelayed(this,delay)) stop("producer_handler_unavailable")
+            } catch(problem:Exception) {
+                stop("producer_exception:${problem.javaClass.simpleName}")
+            } } }
+            val await=object:Runnable { override fun run() {
+                if(stopped.get()) return
+                if(!sameRun() || !capturedTargetConfirmed()) { stop("target_or_session_lost");return }
+                if(!active || !environment.inputDispatchIdle()) {
+                    if(SystemClock.uptimeMillis()<minOf(requestedAt+5_000L,hardDeadline)) worker.postDelayed(this,20)
+                    else stop("preparation_timeout")
+                    return
+                }
+                before=counters();trialSessionId=backendSessionId
+                if(!allowed()) { stop("target_or_session_lost");return }
+                sourceStart.set(System.nanoTime())
+                labTouchTransitions=description+mapOf("running" to true,"finished" to false,"stage" to "producing","before" to before)
+                if(!producerHandler.post(produce)) stop("producer_handler_unavailable")
+            } }
+            val watchdog=Runnable {
+                if(!completed.get()) {
+                    stop("hard_timeout")
+                    pauseOwned("Límite de diez segundos del laboratorio de transiciones")
+                    worker.post { collect() }
+                }
+            }
+            fun start() { worker.post(await);main.postAtTime(watchdog,hardDeadline) }
+        }
+        Trial().start()
+    }
+
     /** Shell-only camera regression, targeted exclusively at the independent InputLab receiver. */
     fun testCameraLab(context:Context,displayId:Int=0) {
         if(Looper.myLooper()!=Looper.getMainLooper()) {
@@ -1676,6 +1879,7 @@ object SessionController {
             "contacts" to contacts, "keys" to inputKeys,
             "mouse" to inputMouse, "relativeSamples" to relativeSamples, "wheelSteps" to wheelSteps.toDouble(),
             "injected" to injected, "probe" to syntheticProbe, "maxQueueDepth" to queueMetrics.first,
+            "labTouchTransitions" to labTouchTransitions,
             "cameraRestarts" to engine?.cameraRestarts, "aimOwner" to engine?.aimOwner,
             "cameraIdleRetirements" to engine?.idleCameraRetirements,
             "cameraIdleCheckPending" to (cameraIdleWakeup!=null),
