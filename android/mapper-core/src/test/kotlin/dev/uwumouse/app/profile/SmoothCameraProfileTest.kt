@@ -24,7 +24,7 @@ class SmoothCameraProfileTest {
             val compiled=prepare(restored)
             assertEquals(p,restored);assertEquals(9,restored.schemaVersion)
             assertTrue(compiled.bindings.continuousCamera)
-            assertNotNull(compiled.bindings.ggCameraPolicy)
+            assertNotNull(compiled.bindings.uwuCameraPolicy)
             assertEquals(CameraSpec.SMOOTH,compiled.profile.camera.mode)
             assertFalse(compiled.bindings.retireBoundedCameraOnIdle)
             assertNull(compiled.bindings.heldFireCameraBounds)
@@ -54,7 +54,7 @@ class SmoothCameraProfileTest {
             p.copy(action=p.action.copy(enabled=false,code=0)))) {
             val compiled=prepare(candidate)
             assertTrue(compiled.bindings.continuousCamera)
-            assertNotNull(compiled.bindings.ggCameraPolicy)
+            assertNotNull(compiled.bindings.uwuCameraPolicy)
             assertFalse(compiled.bindings.retireBoundedCameraOnIdle)
             assertFalse(compiled.bindings.handlesButton(1))
         }
@@ -67,7 +67,7 @@ class SmoothCameraProfileTest {
         assertFalse(compiled.bindings.touches.single { it.button==1 }.mouseAim)
         assertNull(compiled.bindings.fireDragBounds)
         assertNull(compiled.bindings.heldFireCameraBounds)
-        assertNotNull(compiled.bindings.ggCameraPolicy)
+        assertNotNull(compiled.bindings.uwuCameraPolicy)
         assertFalse(compiled.bindings.retireBoundedCameraOnIdle)
     }
 
@@ -80,10 +80,10 @@ class SmoothCameraProfileTest {
         assertFalse(compiled.bindings.cameraMappingEnabled)
         assertFalse(compiled.bindings.continuousCamera)
         assertFalse(compiled.bindings.retireBoundedCameraOnIdle)
-        assertNull(compiled.bindings.ggCameraPolicy)
+        assertNull(compiled.bindings.uwuCameraPolicy)
     }
 
-    @Test fun reloadingSmoothRecreatesGgCameraWithEdgeReleaseAndDelayedNewContact() {
+    @Test fun reloadingSmoothRecreatesUwUCameraWithEdgeReleaseAndDelayedNewContact() {
         val p=profile(CameraSpec.SMOOTH)
         val json=ProfileCodec.encode(p)
         val cameraJson=ProfileCodec.toJson(p).getJSONObject("camera")
@@ -105,7 +105,7 @@ class SmoothCameraProfileTest {
             assertTrue(engine.relativeMouse(3f,-2f))
             assertTrue(composer.snapshot().isEmpty())
             now+=15L
-            assertTrue(engine.dispatchGgCameraTimers())
+            assertTrue(engine.dispatchUwUCameraTimers())
             assertEquals(compiled.geometry.cameraX,composer.snapshot().single().x,0f)
             assertTrue(engine.relativeMouse(3f,-2f))
             assertEquals(compiled.geometry.cameraX+3f*compiled.geometry.sensitivityX,composer.snapshot().single().x,0f)
@@ -119,11 +119,11 @@ class SmoothCameraProfileTest {
         val p=profile(CameraSpec.SMOOTH).let { it.copy(packageName="com.dts.freefireth",
             camera=it.camera.copy(sensitivityX=.5f,sensitivityY=1.8f,customRegion=true)) }
         val compiled=prepare(p)
-        assertTrue(requireNotNull(compiled.bindings.ggCameraPolicy).freeFire)
+        assertTrue(requireNotNull(compiled.bindings.uwuCameraPolicy).freeFire)
         assertEquals(.5f,compiled.geometry.sensitivityX,0f)
         assertEquals(1.8f,compiled.geometry.sensitivityY,0f)
         assertFalse(compiled.bindings.retireBoundedCameraOnIdle)
-        assertFalse(requireNotNull(prepare(p.copy(packageName="com.example.game")).bindings.ggCameraPolicy).freeFire)
+        assertFalse(requireNotNull(prepare(p.copy(packageName="com.example.game")).bindings.uwuCameraPolicy).freeFire)
     }
 
     @Test fun openingLegacyEditorNormalizesOnlyTheDraftAndCancelLeavesTheOldModeUntouched() {

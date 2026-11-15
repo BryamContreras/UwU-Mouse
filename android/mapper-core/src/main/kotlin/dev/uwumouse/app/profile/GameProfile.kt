@@ -100,7 +100,7 @@ data class CameraSpec(
         // Existing profiles remain valid and retain their saved value until explicitly edited.
         val UPDATE_RATES_HZ: Set<Int> = (CAPTURE_RATE_CHOICES_HZ + listOf(60,90,120,144,240)).toSet()
         fun isSupportedMode(mode: String): Boolean = mode == BOUNDED || mode == CONTINUOUS || mode == SMOOTH
-        fun isGgFreeFirePackage(packageName:String):Boolean =
+        fun isFreeFirePackage(packageName:String):Boolean =
             packageName.contains("com.dts.freefire") || packageName.contains("com.garena.game.ffi")
         fun isSupportedUpdateRate(hz: Int): Boolean = hz in UPDATE_RATES_HZ
         fun isSupportedSuspendMouseButton(button:Int):Boolean = button in setOf(0,1,2,4,8,16)

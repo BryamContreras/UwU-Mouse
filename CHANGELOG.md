@@ -2,6 +2,10 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.13+51 — unreleased
+
+- Rename the camera controller, policy, helpers and diagnostics consistently for UwU Mouse. Preserve the camera calculations, event ordering and saved profile format.
+
 ## 0.3.12+50 — unreleased
 
 - Admit ordinary gameplay keys and mouse buttons directly to the ordered mapper queue when their capture, session and pointer ownership are current. Menu, cursor, modifier and complex-action transitions retain their main-thread barriers.

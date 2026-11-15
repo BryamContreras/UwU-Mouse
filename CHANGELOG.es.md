@@ -1,5 +1,9 @@
 # Cambios de UwU Mouse
 
+## 0.3.13+51 — en validación
+
+- Se unifican los nombres del controlador, política, funciones auxiliares y diagnósticos de cámara bajo UwU Mouse, conservando los cálculos, el orden de eventos y el formato de los perfiles guardados.
+
 ## 0.3.12+50 — en validación
 
 - Las teclas y botones de juego ordinarios pueden entrar directamente en la cola ordenada del motor cuando conservan la captura, sesión y propietario del puntero. Menú, cursor, modificadores y acciones complejas mantienen sus barreras de interfaz.

@@ -68,10 +68,10 @@ data class MappingBindings(
     val joystickEnabled: Boolean = true,
     val cameraMappingEnabled: Boolean = true,
     val interlacedCameraHandoff: Boolean = false,
-    // Legacy RAM diagnostic; GG camera owns its package-specific retirement policy.
+    // Legacy RAM diagnostic; UwU Mouse camera owns its package-specific retirement policy.
     val retireBoundedCameraOnIdle:Boolean=false,
     val heldFireCameraBounds:AimBounds?=null,
-    val ggCameraPolicy:GgCameraPolicy?=null,
+    val uwuCameraPolicy:UwUCameraPolicy?=null,
 ) {
     init {
         val configuredDirections = listOf(upKey, downKey, leftKey, rightKey)
@@ -92,7 +92,7 @@ data class MappingBindings(
         require(touches.filter { it.mouseAim }.all { it.button==1 && fireDragBounds?.contains(it.x.toDouble(),it.y.toDouble())==true })
         require(!continuousCamera || touches.none { it.mouseAim }) { "Continuous camera requires independent fixed actions" }
         require(!continuousCamera || cameraMappingEnabled)
-        require(ggCameraPolicy==null || continuousCamera) { "GG camera requires exterior camera coordinates" }
+        require(uwuCameraPolicy==null || continuousCamera) { "UwU Mouse camera requires exterior camera coordinates" }
     }
     fun handlesKey(code: Int): Boolean = (joystickEnabled && (code == upKey || code == downKey || code == leftKey || code == rightKey)) || code == actionKey || touches.any { it.key==code } || code in macroKeys || code in commandKeys
     fun handlesButton(code: Int): Boolean = code == actionButton || touches.any { it.button==code } || code in macroButtons || code in commandButtons
@@ -130,9 +130,9 @@ class MappingEngine(
     private var cameraBounds=cameraBounds(geometry)
     private var lastCameraId: Int? = null
     private var continuousTravel=0.0
-    private var ggCamera=createGgCamera()
-    private var ggRestartsSeen=0L
-    private var ggIdleRetirementsSeen=0L
+    private var uwuCamera=createUwUCamera()
+    private var uwuRestartsSeen=0L
+    private var uwuIdleRetirementsSeen=0L
     var cameraEnabled = false
         private set
     @Volatile var cameraRestarts = 0L
@@ -155,7 +155,7 @@ class MappingEngine(
         return setCameraEnabled(true)
     }
     private fun releaseForModeChange():Boolean {
-        ggCamera?.reset()
+        uwuCamera?.reset()
         physicalKeys.clear();physicalButtons.clear();fireAim=null;lastHorizontal=0;lastVertical=0;cameraEnabled=false;cursorEnabled=false
         cameraX=geometry.cameraX.toDouble();cameraY=geometry.cameraY.toDouble()
         continuousTravel=0.0
@@ -227,7 +227,7 @@ class MappingEngine(
         if (requested == cameraEnabled) return true
         if (composer.paused && requested) return false
         cameraEnabled = requested
-        if(requested) ggCamera?.activate() else ggCamera?.reset()
+        if(requested) uwuCamera?.activate() else uwuCamera?.reset()
         cameraX = geometry.cameraX.toDouble()
         cameraY = geometry.cameraY.toDouble()
         continuousTravel=0.0
@@ -240,7 +240,7 @@ class MappingEngine(
 
     /** The session owner supplies the idle deadline; held physical buttons never retire aim. */
     val canRetireIdleCamera:Boolean get() {
-        if(ggCamera!=null) return false
+        if(uwuCamera!=null) return false
         if(!cameraEnabled || cursorEnabled || composer.paused || composer.releaseUnverified ||
             physicalButtons.isNotEmpty() || fireAim!=null || !composer.hasOwner(CAMERA_OWNER)) return false
         if(bindings.retireBoundedCameraOnIdle) return abs(cameraX-geometry.cameraX)>=geometry.cameraRadiusX.toDouble()*.70 ||
@@ -270,7 +270,7 @@ class MappingEngine(
      */
     fun relativeMouse(dx: Float, dy: Float): Boolean {
         if (!bindings.cameraMappingEnabled || !cameraEnabled || composer.paused || !dx.isFinite() || !dy.isFinite()) return false
-        ggCamera?.let { return acceptGgCameraResult(it.motion(dx,dy)) }
+        uwuCamera?.let { return acceptUwUCameraResult(it.motion(dx,dy)) }
         val displayX=dx.toDouble()*geometry.sensitivityX*if(geometry.invertX) -1 else 1
         val displayY=dy.toDouble()*geometry.sensitivityY*if(geometry.invertY) -1 else 1
         return cameraMotionInDisplay(displayX,displayY)
@@ -280,28 +280,28 @@ class MappingEngine(
     fun syntheticCameraMotion(deltaYInDisplayPixels:Float):Boolean {
         if(!bindings.cameraMappingEnabled || !cameraEnabled || cursorEnabled || composer.paused ||
             fireAim!=null || !deltaYInDisplayPixels.isFinite()) return false
-        ggCamera?.let { return acceptGgCameraResult(it.syntheticMotion(deltaYInDisplayPixels)) }
+        uwuCamera?.let { return acceptUwUCameraResult(it.syntheticMotion(deltaYInDisplayPixels)) }
         return cameraMotionInDisplay(0.0,deltaYInDisplayPixels.toDouble())
     }
 
     /** The Android owner runs these deadlines on the same worker as physical input. */
-    val ggCameraWakeupDelayMillis:Long? get() =
-        if(cameraEnabled && !cursorEnabled && !composer.paused) ggCamera?.nextWakeupDelayMillis else null
+    val uwuCameraWakeupDelayMillis:Long? get() =
+        if(cameraEnabled && !cursorEnabled && !composer.paused) uwuCamera?.nextWakeupDelayMillis else null
 
-    fun dispatchGgCameraTimers():Boolean {
+    fun dispatchUwUCameraTimers():Boolean {
         if(!cameraEnabled || cursorEnabled || composer.paused) return true
-        return ggCamera?.let { acceptGgCameraResult(it.dispatchTimers()) } ?: true
+        return uwuCamera?.let { acceptUwUCameraResult(it.dispatchTimers()) } ?: true
     }
 
-    private fun createGgCamera()=bindings.ggCameraPolicy?.let {
-        GgCameraController(composer,geometry,it,clockMillis)
+    private fun createUwUCamera()=bindings.uwuCameraPolicy?.let {
+        UwUCameraController(composer,geometry,it,clockMillis)
     }
 
-    private fun acceptGgCameraResult(accepted:Boolean):Boolean {
-        ggCamera?.let {
-            cameraRestarts+=it.restarts-ggRestartsSeen
-            idleCameraRetirements+=it.idleRetirements-ggIdleRetirementsSeen
-            ggRestartsSeen=it.restarts;ggIdleRetirementsSeen=it.idleRetirements
+    private fun acceptUwUCameraResult(accepted:Boolean):Boolean {
+        uwuCamera?.let {
+            cameraRestarts+=it.restarts-uwuRestartsSeen
+            idleCameraRetirements+=it.idleRetirements-uwuIdleRetirementsSeen
+            uwuRestartsSeen=it.restarts;uwuIdleRetirementsSeen=it.idleRetirements
         }
         lastOperationSucceeded=accepted
         return accepted
@@ -450,7 +450,7 @@ class MappingEngine(
         beforeOwner=if(bindings.cameraLast) CAMERA_OWNER else null)
 
     fun pause(): Boolean {
-        ggCamera?.reset()
+        uwuCamera?.reset()
         cursorEnabled=false
         physicalKeys.clear()
         physicalButtons.clear();fireAim=null
@@ -477,8 +477,8 @@ class MappingEngine(
     fun updateGeometry(newGeometry: MappingGeometry): Boolean {
         if (composer.activeCount != 0 || composer.releaseUnverified || !heldFireBoundsFit(bindings,newGeometry)) return false
         geometry = newGeometry
-        ggCamera=createGgCamera();ggRestartsSeen=0L;ggIdleRetirementsSeen=0L
-        if(cameraEnabled) ggCamera?.activate()
+        uwuCamera=createUwUCamera();uwuRestartsSeen=0L;uwuIdleRetirementsSeen=0L
+        if(cameraEnabled) uwuCamera?.activate()
         cameraBounds=cameraBounds(newGeometry)
         cameraX = geometry.cameraX.toDouble()
         cameraY = geometry.cameraY.toDouble()
@@ -493,7 +493,7 @@ class MappingEngine(
         geometry = newGeometry
         cameraBounds=cameraBounds(newGeometry)
         bindings = newBindings
-        ggCamera=createGgCamera();ggRestartsSeen=0L;ggIdleRetirementsSeen=0L
+        uwuCamera=createUwUCamera();uwuRestartsSeen=0L;uwuIdleRetirementsSeen=0L
         fixedFireOwner=newBindings.touches.firstOrNull { it.button==LEFT_BUTTON && !it.mouseAim }?.owner
         physicalButtons.clear();fireAim=null
         physicalKeys.clear()

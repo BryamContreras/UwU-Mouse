@@ -28,7 +28,7 @@ class LegacyCameraDraftTest {
         assertSame(decoded, draft.cancel())
         assertEquals(encoded, ProfileCodec.encode(decoded))
         assertEquals(original, decoded)
-        assertNotNull(ProfileCompiler.prepare(decoded, 1000, 600, 0).bindings.ggCameraPolicy)
+        assertNotNull(ProfileCompiler.prepare(decoded, 1000, 600, 0).bindings.uwuCameraPolicy)
     }
 
     @Test fun savingLegacyDraftChangesOnlyModeAndPreservesBothSuspendKindsRatesAndCadence() {
@@ -39,7 +39,7 @@ class LegacyCameraDraftTest {
             val saved = draft.save()
             assertEquals(original.copy(camera = camera.copy(mode = CameraSpec.SMOOTH)), saved)
             assertEquals(saved, ProfileCodec.decode(ProfileCodec.encode(saved)))
-            assertNotNull(ProfileCompiler.prepare(saved, 1000, 600, 0).bindings.ggCameraPolicy)
+            assertNotNull(ProfileCompiler.prepare(saved, 1000, 600, 0).bindings.uwuCameraPolicy)
             assertSame(original, draft.cancel())
         }
     }

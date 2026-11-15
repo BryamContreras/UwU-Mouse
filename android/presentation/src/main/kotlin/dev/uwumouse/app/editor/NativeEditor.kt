@@ -615,11 +615,11 @@ class NativeEditor(
         }
 
         private fun customCameraRegion():Boolean=draft.value.camera.let {
-            it.customRegion && !CameraSpec.isGgFreeFirePackage(draft.value.packageName)
+            it.customRegion && !CameraSpec.isFreeFirePackage(draft.value.packageName)
         }
 
         private fun addCameraRegion() {
-            if(CameraSpec.isGgFreeFirePackage(draft.value.packageName)) return
+            if(CameraSpec.isFreeFirePackage(draft.value.packageName)) return
             var refreshing=false
             val custom=CheckBox(context).apply {
                 text="Usar región personalizada";textSize=13f;setTextColor(Color.WHITE)
@@ -1422,7 +1422,7 @@ class NativeEditor(
             val cw = p.camera.width * a.width; val ch = p.camera.height * a.height
             if(p.camera.enabled) {
                 shapeStyle(EditorDraft.Control.CAMERA, Color.rgb(155, 201, 255))
-                if(cameraRegion() && p.camera.customRegion && !CameraSpec.isGgFreeFirePackage(p.packageName)) canvas.drawRect(cx-cw/2,cy-ch/2,cx+cw/2,cy+ch/2,line)
+                if(cameraRegion() && p.camera.customRegion && !CameraSpec.isFreeFirePackage(p.packageName)) canvas.drawRect(cx-cw/2,cy-ch/2,cx+cw/2,cy+ch/2,line)
                 val cameraRadius=p.camera.markerSizeDp*density/2
                 circleSurface(canvas,cx,cy,cameraRadius,selected()==EditorDraft.Control.CAMERA)
                 canvas.drawCircle(cx,cy,cameraRadius,line);targetGlyph(canvas,cx,cy,cameraRadius,line.color)
@@ -1679,7 +1679,7 @@ class NativeEditor(
                             hitMacro!=null -> { draft.selectMacro(hitMacro);EditorDraft.Control.MACRO }
                             hitAction!=null -> { draft.selectAction(index); EditorDraft.Control.ACTION }
                             p.joystick.enabled && hypot(x - jx, y - jy) <= radius + hit -> EditorDraft.Control.JOYSTICK
-                            p.camera.enabled && (hypot(x-cx,y-cy)<=cr+5*density || (cameraRegion() && p.camera.customRegion && !CameraSpec.isGgFreeFirePackage(p.packageName) && x in (cx-cw/2)..(cx+cw/2) && y in (cy-ch/2)..(cy+ch/2))) -> EditorDraft.Control.CAMERA
+                            p.camera.enabled && (hypot(x-cx,y-cy)<=cr+5*density || (cameraRegion() && p.camera.customRegion && !CameraSpec.isFreeFirePackage(p.packageName) && x in (cx-cw/2)..(cx+cw/2) && y in (cy-ch/2)..(cy+ch/2))) -> EditorDraft.Control.CAMERA
                             else -> null
                         }
                         // Existing controls and their resize handles take precedence over the

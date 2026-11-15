@@ -247,7 +247,7 @@ class EditorDraftTest {
         val saved=draft.save()
         assertEquals(before.copy(calibration=before.calibration.copy(confirmed=true)),saved)
         assertEquals(CameraSpec.SMOOTH,saved.camera.mode)
-        assertNotNull(ProfileCompiler.prepare(saved,1000,600,0).bindings.ggCameraPolicy)
+        assertNotNull(ProfileCompiler.prepare(saved,1000,600,0).bindings.uwuCameraPolicy)
         assertSame(original,draft.cancel())
         assertEquals(CameraSpec.BOUNDED,original.camera.mode)
         assertEquals(before,draft.value)

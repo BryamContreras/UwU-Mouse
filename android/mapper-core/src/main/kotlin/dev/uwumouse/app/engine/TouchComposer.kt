@@ -258,7 +258,7 @@ class TouchComposer(
         return true
     }
 
-    /** GG ends an edge-crossing drag at its candidate, without a preceding MOVE. */
+    /** UwU Mouse ends an edge-crossing drag at its candidate, without a preceding MOVE. */
     @Synchronized fun endAt(owner:String,x:Float,y:Float):Boolean {
         if(!ready(owner,x,y,continuingMove=true) || !flushPendingMove()) return false
         val contact=contacts.firstOrNull { it.owner==owner } ?: return true

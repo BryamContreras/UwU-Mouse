@@ -108,8 +108,8 @@ object SessionController {
     private val precisionAimFilter=PrecisionAimFilter()
     @Volatile private var cameraPacer:CameraMotionPacer?=null
     private var cameraPacerWakeup:Runnable?=null
-    private var ggCameraWakeup:Runnable?=null
-    private var ggCameraWakeupAtMillis=Long.MAX_VALUE
+    private var uwuCameraWakeup:Runnable?=null
+    private var uwuCameraWakeupAtMillis=Long.MAX_VALUE
     private var nativeRatePacing=false
     @Volatile private var cameraResetBatchSupported=false
     @Volatile private var cameraResetBatches=0L
@@ -206,10 +206,10 @@ object SessionController {
                     cadence?.input("mouse",code,x!=0f,cadenceCanStart)
                 }
                 3 -> if (camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled() &&
-                    (runtimeProfile?.bindings?.ggCameraPolicy==null || code==InputQueueEntry.NO_POINTER_EPOCH ||
+                    (runtimeProfile?.bindings?.uwuCameraPolicy==null || code==InputQueueEntry.NO_POINTER_EPOCH ||
                         pointerTransition.admitsMotion(code))) {
                     if(!admitPhysicalCameraSample(queue.consumingSampleTimeNanos)) return@InputQueue
-                    if(nativeRatePacing && (runtimeProfile?.bindings?.ggCameraPolicy!=null ||
+                    if(nativeRatePacing && (runtimeProfile?.bindings?.uwuCameraPolicy!=null ||
                         runtimeProfile?.bindings?.continuousCamera==false || cameraResetBatchSupported)) {
                         if(!beginBoundedMoveDrain() || engine?.relativeMouse(precisionMouseX(x),y)!=true) {
                             if(active) pause("No se pudo integrar el movimiento de cámara")
@@ -220,7 +220,7 @@ object SessionController {
                 8 -> if(camera && !pointerTransition.pending && cursorActionRunner?.pending!=true && cameraShortcutEnabled() &&
                     (code==InputQueueEntry.NO_POINTER_EPOCH || pointerTransition.admitsMotion(code))) {
                     val batch=queue.consumingMotionBatch ?: return@InputQueue
-                    if(runtimeProfile?.bindings?.ggCameraPolicy==null &&
+                    if(runtimeProfile?.bindings?.uwuCameraPolicy==null &&
                         runtimeProfile?.bindings?.continuousCamera==true && !cameraResetBatchSupported) {
                         val sumX=batch.filteredXSum { dx,time -> precisionAimFilter.filterX(dx,time) }
                         if(cameraPacer?.offer(sumX,batch.ySum(),enqueued,batch.timesNanos.last())==false && active)
@@ -284,7 +284,7 @@ object SessionController {
         }
     }, { pause("Cola saturada; transiciones detenidas") }, beforeDrain={
         inputDrainPacer=if(active && targetConfirmed && runtimeProfile?.bindings?.continuousCamera==true &&
-            runtimeProfile?.bindings?.ggCameraPolicy==null && !cameraResetBatchSupported) cameraPacer else null
+            runtimeProfile?.bindings?.uwuCameraPolicy==null && !cameraResetBatchSupported) cameraPacer else null
         inputDrainGeneration=generation
         inputDrainPacer?.beginInputBatch()
     }, afterDrain={
@@ -296,12 +296,12 @@ object SessionController {
             else if(!pacer.endInputBatch() && active) pause("No se pudo enviar el movimiento de cámara pendiente")
         }
         requestCameraIdleRetirement()
-        requestGgCameraWakeup()
+        requestUwUCameraWakeup()
     })
 
     /** Worker admission only: old physical displacements never build a delayed camera tail. */
     private fun admitPhysicalCameraSample(sampleTimeNanos:Long):Boolean {
-        if(runtimeProfile?.bindings?.ggCameraPolicy==null || sampleTimeNanos==InputQueueEntry.NO_SAMPLE_TIME) return true
+        if(runtimeProfile?.bindings?.uwuCameraPolicy==null || sampleTimeNanos==InputQueueEntry.NO_SAMPLE_TIME) return true
         val age=CameraSampleAgePolicy.ageNanos(sampleTimeNanos,System.nanoTime())
         synchronized(metricsLock) {
             if(age==CameraSampleAgePolicy.INVALID_AGE) invalidCameraTimeSamples++
@@ -324,35 +324,35 @@ object SessionController {
 
     /** One bounded wakeup per moving burst; defer while application input is queued. */
     private fun usesIdleCameraRetirement():Boolean=runtimeProfile?.bindings?.let {
-        it.ggCameraPolicy==null && (it.continuousCamera || it.retireBoundedCameraOnIdle)
+        it.uwuCameraPolicy==null && (it.continuousCamera || it.retireBoundedCameraOnIdle)
     }==true
 
-    private fun requestGgCameraWakeup() {
+    private fun requestUwUCameraWakeup() {
         if(!active || !targetConfirmed || !camera || pointerTransitionPending) return
         val currentEngine=engine ?: return
-        val delay=currentEngine.ggCameraWakeupDelayMillis ?: return
+        val delay=currentEngine.uwuCameraWakeupDelayMillis ?: return
         val due=SystemClock.uptimeMillis()+delay
-        if(ggCameraWakeup!=null && ggCameraWakeupAtMillis<=due) return
-        ggCameraWakeup?.let { worker.removeCallbacks(it) }
+        if(uwuCameraWakeup!=null && uwuCameraWakeupAtMillis<=due) return
+        uwuCameraWakeup?.let { worker.removeCallbacks(it) }
         val run=generation
         val task=object:Runnable {
             override fun run() {
-                if(ggCameraWakeup!==this) return
-                ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
+                if(uwuCameraWakeup!==this) return
+                uwuCameraWakeup=null;uwuCameraWakeupAtMillis=Long.MAX_VALUE
                 if(run!=generation || engine!==currentEngine || !active || !targetConfirmed || !camera ||
                     pointerTransitionPending) return
-                if(!currentEngine.dispatchGgCameraTimers()) {
+                if(!currentEngine.dispatchUwUCameraTimers()) {
                     if(active) pause("No se pudo renovar el contacto de cámara")
                     return
                 }
                 publishEngineState()
-                requestGgCameraWakeup()
+                requestUwUCameraWakeup()
             }
         }
-        ggCameraWakeup=task
-        ggCameraWakeupAtMillis=due
+        uwuCameraWakeup=task
+        uwuCameraWakeupAtMillis=due
         if(!worker.postDelayed(task,delay)) {
-            ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
+            uwuCameraWakeup=null;uwuCameraWakeupAtMillis=Long.MAX_VALUE
             pause("El hilo de cámara no está disponible")
         }
     }
@@ -482,8 +482,8 @@ object SessionController {
     }
     private fun precisionMouseX(dx:Float):Float=precisionAimFilter.filterX(dx,queue.consumingSampleTimeNanos)
     private fun discardPacedMotion() {
-        ggCameraWakeup?.let { worker.removeCallbacks(it) }
-        ggCameraWakeup=null;ggCameraWakeupAtMillis=Long.MAX_VALUE
+        uwuCameraWakeup?.let { worker.removeCallbacks(it) }
+        uwuCameraWakeup=null;uwuCameraWakeupAtMillis=Long.MAX_VALUE
         cameraIdleWakeup?.let { worker.removeCallbacks(it) }
         cameraIdleWakeup=null;cameraIdlePolicy.reset()
         precisionAimFilter.reset()
@@ -745,9 +745,9 @@ object SessionController {
                 mergeGeometry.cameraRadiusX.toDouble()/mergeGeometry.sensitivityX,
                 mergeGeometry.cameraRadiusY.toDouble()/mergeGeometry.sensitivityY,
                 preserveSamples=runtimeProfile?.profile?.camera?.precisionAim==true || cameraResetBatchSupported ||
-                    runtimeProfile?.bindings?.ggCameraPolicy!=null)
+                    runtimeProfile?.bindings?.uwuCameraPolicy!=null)
             else queue.disableCameraMerge()
-            queue.configureMotionBatchCoalescing(runtimeProfile?.bindings?.ggCameraPolicy!=null)
+            queue.configureMotionBatchCoalescing(runtimeProfile?.bindings?.uwuCameraPolicy!=null)
             if (run != generation) { releaseOnWorker(); return false }
             composer = TouchComposer(SystemClock::uptimeMillis, { frame ->
                 if (run != generation || stopping || !(active || (testRunning && probeStarted))) false else {
@@ -870,7 +870,7 @@ object SessionController {
                                 cadenceLastDeltaAtMs=submitted
                             }
                             publishEngineState()
-                            requestGgCameraWakeup()
+                            requestUwUCameraWakeup()
                             accepted && active && run==generation
                         }
                     },canContinue={ run==generation && active && targetConfirmed && camera &&
@@ -923,7 +923,7 @@ object SessionController {
                     if(engine?.relativeMouse(dx,dy)==true) cameraIdlePolicy.motionDelivered(SystemClock.elapsedRealtimeNanos())
                     publishEngineState()
                     requestCameraIdleRetirement()
-                    requestGgCameraWakeup()
+                    requestUwUCameraWakeup()
                     active && run==generation && composer?.paused!=true && engine?.lastOperationSucceeded!=false
                 }
             },{ delayNanos ->
@@ -937,7 +937,7 @@ object SessionController {
             check(nativeRateSupported || requestedRate !in setOf(100,1000)) {
                 "Actualiza el motor para limitar la captura nativa"
             }
-            check(nativeRateSupported || requestedRate==0 || prepared?.bindings?.ggCameraPolicy==null) {
+            check(nativeRateSupported || requestedRate==0 || prepared?.bindings?.uwuCameraPolicy==null) {
                 "Actualiza el motor para limitar la captura sin alterar la compensación de cámara"
             }
             sessionPacer.configure(if(nativeRateSupported) 0 else requestedRate)
@@ -1035,7 +1035,7 @@ object SessionController {
     fun mouseBatch(batch:RawMouseMotionBatch) {
         val run=generation
         if(!active || !targetConfirmed || pointerTransitionPending) return
-        val pointerEpoch=if(runtimeProfile?.bindings?.ggCameraPolicy!=null)
+        val pointerEpoch=if(runtimeProfile?.bindings?.uwuCameraPolicy!=null)
             pointerTransition.motionEpoch() ?: return else InputQueueEntry.NO_POINTER_EPOCH
         enqueueMouseBatch(batch,run,camera && usesIdleCameraRetirement(),pointerEpoch)
     }
@@ -1046,7 +1046,7 @@ object SessionController {
     fun nativeCameraRoute(captureId:Long,buttons:Int,excludedKeys:Set<Int> = emptySet()):NativeMotionDispatchGate.Route? {
         val run=generation
         val prepared=runtimeProfile ?: return null
-        if(!active || !targetConfirmed || !camera || pointerTransitionPending || prepared.bindings.ggCameraPolicy==null) return null
+        if(!active || !targetConfirmed || !camera || pointerTransitionPending || prepared.bindings.uwuCameraPolicy==null) return null
         val pointerEpoch=pointerTransition.motionEpoch() ?: return null
         if(nativeGameplayPrepared!==prepared) {
             nativeGameplayPolicy=NativeGameplayPolicy.prepare(prepared);nativeGameplayPrepared=prepared
@@ -1059,7 +1059,7 @@ object SessionController {
     /** No lifecycle/UI/Binder callback: callers can hold the native ownership monitor. */
     private fun admitsNativeGameplay(route:NativeMotionDispatchGate.Route):Boolean =
         route.generation==generation && active && targetConfirmed && camera && !pointerTransitionPending &&
-            runtimeProfile?.bindings?.ggCameraPolicy!=null && pointerTransition.admitsMotion(route.pointerEpoch)
+            runtimeProfile?.bindings?.uwuCameraPolicy!=null && pointerTransition.admitsMotion(route.pointerEpoch)
 
     fun tryNativeGameplayKey(route:NativeMotionDispatchGate.Route,code:Int,down:Boolean):NativeMotionDispatchGate.Admission {
         if(code !in route.gameplay.keys || !admitsNativeGameplay(route)) return NativeMotionDispatchGate.Admission.STALE
@@ -1088,7 +1088,7 @@ object SessionController {
     fun tryNativeCameraBatch(batch:RawMouseMotionBatch,route:NativeMotionDispatchGate.Route):Boolean {
         val run=route.generation
         if(run!=generation || !active || !targetConfirmed || !camera || pointerTransitionPending ||
-            runtimeProfile?.bindings?.ggCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
+            runtimeProfile?.bindings?.uwuCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
         // This camera policy owns its timers on the worker. Legacy idle-retirement
         // policies keep the main route and cannot seed another generation's idle state.
         enqueueMouseBatch(batch,run,trackIdle=false,pointerEpoch=route.pointerEpoch)
@@ -1101,7 +1101,7 @@ object SessionController {
         if(sampleTimeNanos<0L || !dx.isFinite() || !dy.isFinite()) return false
         val run=route.generation
         if(run!=generation || !active || !targetConfirmed || !camera || pointerTransitionPending ||
-            runtimeProfile?.bindings?.ggCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
+            runtimeProfile?.bindings?.uwuCameraPolicy==null || !pointerTransition.admitsMotion(route.pointerEpoch)) return false
         inputMouseCount.incrementAndGet()
         if(dx!=0f || dy!=0f) {
             relativeSampleCount.incrementAndGet()
@@ -1423,7 +1423,7 @@ object SessionController {
         }
         val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation)
         armProfile(prepared.copy(bindings=prepared.bindings.copy(
-            ggCameraPolicy=requireNotNull(prepared.bindings.ggCameraPolicy).copy(freeFire=true))),displayId=displayId)
+            uwuCameraPolicy=requireNotNull(prepared.bindings.uwuCameraPolicy).copy(freeFire=true))),displayId=displayId)
         activeProfileId=null
         val run=generation
         val requestedAt=SystemClock.uptimeMillis()
@@ -1624,7 +1624,7 @@ object SessionController {
         val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation)
         // Exercise Free Fire's mathematical policy without ever targeting the game or saving a profile.
         armProfile(prepared.copy(bindings=prepared.bindings.copy(
-            ggCameraPolicy=requireNotNull(prepared.bindings.ggCameraPolicy).copy(freeFire=true))))
+            uwuCameraPolicy=requireNotNull(prepared.bindings.uwuCameraPolicy).copy(freeFire=true))))
         activeProfileId=null
         val run=generation
         val deadline=SystemClock.uptimeMillis()+5000
@@ -1747,7 +1747,7 @@ object SessionController {
         val probe=ProfileCompiler.prepare(mirrored,size.x,size.y,display.rotation)
         // Existing recovery scripts probe the exterior-coordinate capability directly;
         // this laboratory override is never offered as a game-camera setting.
-        armProfile(if(holdContinuous) probe.copy(bindings=probe.bindings.copy(ggCameraPolicy=null)) else probe)
+        armProfile(if(holdContinuous) probe.copy(bindings=probe.bindings.copy(uwuCameraPolicy=null)) else probe)
         activeProfileId=null
         if(!automated && !holdContinuous) return
         val run=generation;val deadline=SystemClock.uptimeMillis()+5000
@@ -2011,7 +2011,7 @@ object SessionController {
             },"cameraOverlap" to runtimeProfile?.bindings?.overlapCameraHandoff,
             "cameraDistinctIds" to runtimeProfile?.bindings?.distinctCameraContacts,
             "cameraMode" to runtimeProfile?.profile?.camera?.mode,"continuousCameraSession" to originalContinuousCamera,
-            "ggCameraKind" to runtimeProfile?.bindings?.ggCameraPolicy?.let { if(it.freeFire) "freeFireStandard" else "mainView" },
+            "uwuCameraKind" to runtimeProfile?.bindings?.uwuCameraPolicy?.let { if(it.freeFire) "freeFireStandard" else "mainView" },
             "cameraRate" to cameraPacer?.diagnostics(),"cameraDeliveryWaitMs" to percentiles(cameraDeliveryWait),
             "precisionAim" to precisionAimFilter.snapshot(),
             "actionRuntime" to actionState,
@@ -2035,7 +2035,7 @@ object SessionController {
                 "clock" to "CLOCK_MONOTONIC","sampleAgeMs" to percentiles(cameraSourceAge),
                 "maxSampleAgeMs" to maxCameraSourceAgeNanos/1e6,"expiredSamples" to expiredCameraSamples,
                 "invalidTimeSamples" to invalidCameraTimeSamples,
-                "scope" to "Last 2048 physical GG camera sample ages at worker admission, including expired samples; excludes injection and presentation"),
+                "scope" to "Last 2048 physical UwU camera sample ages at worker admission, including expired samples; excludes injection and presentation"),
             "backendTimingSessionId" to backend?.getLong("timingSessionId"),
             "backendFocusMs" to backend?.getDoubleArray("focusMs")?.toList(),
             "backendPipeMs" to backend?.getDoubleArray("pipeMs")?.toList(),

@@ -1,7 +1,7 @@
 package dev.uwumouse.app.session
 
 /**
- * A physical GG-camera sample is admitted against the kernel's CLOCK_MONOTONIC clock.
+ * A physical UwU Mouse camera sample is admitted against the kernel's CLOCK_MONOTONIC clock.
  * Callers must use System.nanoTime(), never elapsedRealtimeNanos() (which includes sleep).
  * An expired displacement is discarded before it changes camera/filter state; no catch-up tail.
  */

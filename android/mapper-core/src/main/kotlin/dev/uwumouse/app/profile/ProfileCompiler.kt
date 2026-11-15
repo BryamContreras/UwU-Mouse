@@ -8,7 +8,7 @@ import dev.uwumouse.app.engine.PreparedMacroStep
 import dev.uwumouse.app.engine.PreparedRepeat
 import dev.uwumouse.app.engine.PreparedCursorAction
 import dev.uwumouse.app.engine.AimBounds
-import dev.uwumouse.app.engine.GgCameraPolicy
+import dev.uwumouse.app.engine.UwUCameraPolicy
 
 /** Immutable execution snapshot; building this is control-plane work, never input-event work. */
 data class PreparedProfile(val profile: GameProfile, val geometry: MappingGeometry, val bindings: MappingBindings,
@@ -52,8 +52,8 @@ object ProfileCompiler {
         val action = profile.actions.firstOrNull() ?: ActionSpec(.5f, .5f, code=0, enabled=false)
         val actions = profile.actions.withIndex().toList()
         val commands = actions.filter { it.value.behavior != ActionSpec.TAP }
-        val ggCameraPolicy=if(camera.enabled) {
-            val freeFire=CameraSpec.isGgFreeFirePackage(profile.packageName)
+        val uwuCameraPolicy=if(camera.enabled) {
+            val freeFire=CameraSpec.isFreeFirePackage(profile.packageName)
             val bounds=if(camera.customRegion && !freeFire) AimBounds(
                 area.displayX(camera.x-camera.width/2),area.displayY(camera.y-camera.height/2),
                 area.displayX(camera.x+camera.width/2),area.displayY(camera.y+camera.height/2))
@@ -63,7 +63,7 @@ object ProfileCompiler {
                 AimBounds(area.left+insetX,area.top+insetY,
                     Math.nextDown(area.right-insetX),Math.nextDown(area.bottom-insetY))
             }
-            GgCameraPolicy(freeFire,bounds,maxOf(area.width,area.height))
+            UwUCameraPolicy(freeFire,bounds,maxOf(area.width,area.height))
         } else null
         val geometry = MappingGeometry(currentWidth.toFloat(), currentHeight.toFloat(),
             joystickX = area.displayX(j.x), joystickY = area.displayY(j.y),
@@ -76,7 +76,7 @@ object ProfileCompiler {
         val bindings = MappingBindings(j.upKey, j.downKey, j.leftKey, j.rightKey,
             actionKey = null, actionButton = null, distinctCameraContacts = true, overlapCameraHandoff = false, cameraLast = true,
             continuousCamera = camera.enabled,
-            ggCameraPolicy = ggCameraPolicy,
+            uwuCameraPolicy = uwuCameraPolicy,
             joystickEnabled = j.enabled, cameraMappingEnabled = camera.enabled,
             commandKeys = commands.filter { it.value.triggerKind == "key" }.map { it.value.code }.toSet(),
             commandButtons = commands.filter { it.value.triggerKind == "mouse" }.map { it.value.code }.toSet(),

@@ -175,7 +175,7 @@ class ProfileValidationTest {
         val bounded=ProfileCompiler.prepare(original,2400,1080,1)
         assertTrue(bounded.bindings.continuousCamera)
         assertEquals(CameraSpec.SMOOTH,bounded.profile.camera.mode)
-        assertNotNull(bounded.bindings.ggCameraPolicy)
+        assertNotNull(bounded.bindings.uwuCameraPolicy)
         val chosen=original.copy(camera=original.camera.copy(mode=CameraSpec.CONTINUOUS))
         val continuous=ProfileCompiler.prepare(chosen,2400,1080,1)
         assertTrue(continuous.bindings.continuousCamera)

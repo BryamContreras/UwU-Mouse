@@ -87,7 +87,7 @@ class SmoothMotionStabilityTest {
         val game=GameArea(0f,0f,1280f,720f)
         val small=Harness(profile(1920,1080,game))
         val large=Harness(profile(2560,1440,game))
-        assertEquals(1280f,requireNotNull(small.prepared.bindings.ggCameraPolicy).referenceWidth,0f)
+        assertEquals(1280f,requireNotNull(small.prepared.bindings.uwuCameraPolicy).referenceWidth,0f)
         val raw=RawMouseMotionBatch(LongArray(256) { it*1_000_000L },FloatArray(256) { 2f },FloatArray(256) { 1f })
         small.batch(raw);large.batch(raw)
         assertEquals(small.camera(),large.camera())

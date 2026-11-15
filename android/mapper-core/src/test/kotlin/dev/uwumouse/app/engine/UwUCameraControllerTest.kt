@@ -3,14 +3,14 @@ package dev.uwumouse.app.engine
 import org.junit.Assert.*
 import org.junit.Test
 
-class GgCameraControllerTest {
+class UwUCameraControllerTest {
     @Test fun genericCameraWithoutAContactNeedsNoIdleWakeupsOrClockReads() {
         var now=1000L
         var clockReads=0
         val composer=TouchComposer({now},{true},continuousCamera=true)
         val geometry=MappingGeometry(1000f,2000f)
-        val controller=GgCameraController(composer,geometry,
-            GgCameraPolicy(false,AimBounds(50f,50f,950f,1950f),2000f),{ clockReads++;now })
+        val controller=UwUCameraController(composer,geometry,
+            UwUCameraPolicy(false,AimBounds(50f,50f,950f,1950f),2000f),{ clockReads++;now })
         controller.activate()
         val readsAfterActivation=clockReads
         repeat(10_000) {
@@ -28,8 +28,8 @@ class GgCameraControllerTest {
         val frames=mutableListOf<TouchFrame>()
         val composer=TouchComposer({ deliveryClockReads++;1000L },{ frames+=it;true },continuousCamera=true)
         val geometry=MappingGeometry(2560f,1440f)
-        val controller=GgCameraController(composer,geometry,
-            GgCameraPolicy(true,AimBounds(0f,0f,2560f,1440f),2560f),{ idleClockReads++;1000L })
+        val controller=UwUCameraController(composer,geometry,
+            UwUCameraPolicy(true,AimBounds(0f,0f,2560f,1440f),2560f),{ idleClockReads++;1000L })
         controller.activate()
         repeat(1000) {
             assertTrue(controller.motion(.25f,-.5f))
@@ -59,8 +59,8 @@ class GgCameraControllerTest {
                 else -> true
             }
         },continuousCamera=true)
-        val controller=GgCameraController(composer,geometry,
-            GgCameraPolicy(freeFire,AimBounds(50f,50f,950f,1950f),maxOf(geometry.width,geometry.height)),{now}).apply { activate() }
+        val controller=UwUCameraController(composer,geometry,
+            UwUCameraPolicy(freeFire,AimBounds(50f,50f,950f,1950f),maxOf(geometry.width,geometry.height)),{now}).apply { activate() }
         fun camera():Contact=composer.snapshot().single { it.owner==MappingEngine.CAMERA_OWNER }
         fun startAtAnchor() {
             assertTrue(controller.motion(1f,0f))

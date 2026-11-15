@@ -307,11 +307,14 @@ propio en menús y hover normal en el editor, además de pulsación táctil. No 
 otra ventana para cada tooltip. El alcance de las mediciones y las comprobaciones
 está en Frecuencia y rendimiento (informe local no distribuido).
 
-## Cámara: Región suave y comportamiento de GG Mouse
+## Cámara: Región suave de UwU Mouse
 
 `smooth` es la única política de cámara para perfiles de juego; no hay selector.
-Deriva del control principal visible en el Java de GG Mouse Pro 3.3.2, con ajustes
-para conservar fracciones y reducir la dependencia de la agrupación de entradas.
+La implementación actual se organiza en `UwUCameraController` y `UwUCameraPolicy`,
+con el binding `uwuCameraPolicy` y el diagnóstico `uwuCameraKind`. El diseño de
+esta política tomó como referencia un análisis previo de comportamiento de otra
+aplicación, con ajustes para conservar fracciones y reducir la dependencia de la
+agrupación de entradas.
 Desde 0.3.6 integra la curva horizontal de forma reversible, en lugar de aplicar
 una aproximación de Euler independiente a cada muestra.
 Los perfiles nuevos usan sensibilidad X/Y de **0,70** y captura a **250 Hz**.
@@ -329,7 +332,8 @@ La política depende del paquete del juego:
   primera muestra inicia el contacto; su delta no mueve la cámara. Salir del área
   retira el dedo y descarta la muestra que cruza el borde; el reinicio espera al
   menos 15 ms. La renovación por quietud utiliza 700 ms sin movimiento, con
-  comprobaciones cada 350 ms. Se conservan estas pérdidas de muestras de GG.
+  comprobaciones cada 350 ms. Esta política conserva los descartes por borde y
+  durante la espera de reinicio.
 - En paquetes que contienen `com.dts.freefire` o `com.garena.game.ffi`, se utiliza
   su política específica de Free Fire: contacto continuo, ancla fija y límites
   finitos de coordenadas **±666 666**. No reinicia al cruzar el área ni durante
@@ -369,7 +373,7 @@ consumir. La ruta escalar no construye arrays. El consumidor puede unir hasta
 256 muestras contiguas del mismo modo/generación, copiándolas una sola vez y
 aplicando filtro y compensación individualmente antes de agrupar MOVE.
 
-La cámara GG física compara el tiempo original con `System.nanoTime()`
+La cámara de UwU Mouse compara el tiempo físico original con `System.nanoTime()`
 (`CLOCK_MONOTONIC`, igual que la captura nativa), con un presupuesto de 100 ms.
 Las muestras antiguas o futuras inválidas se descartan antes del filtro; las
 recientes se conservan. Se limpia el historial de precisión conservando M1.
@@ -385,7 +389,7 @@ transición temporal a cursor; al entrar se liberan contactos y al regresar se
 inician cámara y filtro desde cero. Conserva sensibilidad y orientación del juego.
 Si el cursor ya era el modo base, mantener/soltar no fuerza otra transición.
 
-La primera integración GG pasó con **753 pruebas JVM registradas**, cero
+La primera integración de esta política pasó con **753 pruebas JVM registradas**, cero
 fallos, compilación del host y revisión de **129 clases** para ABI JSON. También
 pasaron **68 pruebas Flutter** y el análisis Flutter. El APK de desarrollo
 `62715C…`, de **72 113 153 bytes**, se instaló como **UwU Mouse Native Preview**
@@ -438,12 +442,11 @@ los límites ni la confirmación del destino para inyectar. Se retira cuando dej
 comprobarse el contexto del juego, se bloquea o desconecta su pantalla, o aparece
 una ventana ajena que lo cubre.
 
-El APK local analizado de GG Mouse Pro 1.18.0 ejecuta `wm size ancho×alto` y,
-por separado, `wm density`; su configuración es global para la pantalla
-predeterminada. La versión que contiene el APK se verificó directamente: el
-nombre del archivo no acredita una versión más reciente. UwU implementa la
-operación equivalente mediante WMS sobre una pantalla explícita, con un contrato
-Binder limitado y capacidad opcional, sin aceptar comandos arbitrarios.
+El análisis local previo de una aplicación de referencia mostró operaciones
+`wm size ancho×alto` y, por separado, `wm density`, globales para la pantalla
+predeterminada. Esa observación corresponde únicamente al APK examinado.
+UwU Mouse implementa el cambio mediante WMS sobre una pantalla explícita, con un
+contrato Binder limitado y capacidad opcional, sin aceptar comandos arbitrarios.
 
 El controlador de la app cancela preparaciones pendientes, bloquea rearmados,
 termina el stream y retira las dos fuentes de captura. El supervisor vuelve a

@@ -2,20 +2,20 @@ package dev.uwumouse.app.engine
 
 import kotlin.math.abs
 
-/** The main camera policy; auxiliary Free Look uses different defaults in GG. */
-data class GgCameraPolicy(val freeFire:Boolean,val bounds:AimBounds,val referenceWidth:Float) {
+/** The UwU Mouse camera policy for calibrated game regions. */
+data class UwUCameraPolicy(val freeFire:Boolean,val bounds:AimBounds,val referenceWidth:Float) {
     init { require(referenceWidth.isFinite() && referenceWidth>0f) }
 }
 
 /**
- * GG-derived camera motion. Original samples are integrated before delivery coalesces;
+ * UwU Mouse camera motion. Original samples are integrated before delivery coalesces;
  * Double coordinates retain fractional motion and every gesture uses the same anchor.
- * Free Fire integrates GG's standard curve reversibly over the calibrated game area.
+ * Free Fire integrates the standard curve reversibly over the calibrated game area.
  */
-class GgCameraController(
+class UwUCameraController(
     private val composer:TouchComposer,
     private val geometry:MappingGeometry,
-    private val policy:GgCameraPolicy,
+    private val policy:UwUCameraPolicy,
     private val clockMillis:()->Long,
 ) {
     init { require(composer.continuousCamera) }

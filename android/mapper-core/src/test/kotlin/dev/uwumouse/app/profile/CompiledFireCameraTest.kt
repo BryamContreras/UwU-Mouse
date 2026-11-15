@@ -56,7 +56,7 @@ class CompiledFireCameraTest {
             assertEquals(9,h.camera().id);assertEquals(held,h.controls())
         }
         h.now+=10_000L
-        assertTrue(h.engine.dispatchGgCameraTimers())
+        assertTrue(h.engine.dispatchUwUCameraTimers())
         assertEquals(0L,h.engine.cameraRestarts);assertEquals(0L,h.engine.idleCameraRetirements)
         assertEquals(3,h.composer.activeCount)
         assertTrue(h.engine.pause());assertEquals(0,h.journal.snapshot().possibleContacts)
@@ -83,7 +83,7 @@ class CompiledFireCameraTest {
         val up=h.frames.last()
         assertEquals(TouchComposer.POINTER_UP,up.action and 255);assertEquals(9,up.ids[up.action ushr 8])
         assertTrue(h.engine.relativeMouse(1f,0f))
-        h.now+=15L;assertTrue(h.engine.dispatchGgCameraTimers())
+        h.now+=15L;assertTrue(h.engine.dispatchUwUCameraTimers())
         assertEquals(held,h.controls());assertEquals(h.prepared.geometry.cameraX,h.camera().x,0f)
         assertTrue(h.engine.relativeMouse(3f,-2f))
         assertEquals(h.prepared.geometry.cameraX+3f*h.prepared.geometry.sensitivityX,h.camera().x,.0001f)
@@ -94,7 +94,7 @@ class CompiledFireCameraTest {
     @Test fun genericIdleReleaseKeepsMappedButtonsAndWasdHeld() {
         val h=Harness(freeFire=false);h.startCamera();h.holdFireAndMove()
         val held=h.controls()
-        h.now+=700L;assertTrue(h.engine.dispatchGgCameraTimers())
+        h.now+=700L;assertTrue(h.engine.dispatchUwUCameraTimers())
         assertEquals(held,h.composer.snapshot());assertEquals(1L,h.engine.idleCameraRetirements)
         assertTrue(h.engine.pause());assertEquals(0,h.journal.snapshot().possibleContacts)
     }

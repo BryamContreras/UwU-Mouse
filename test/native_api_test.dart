@@ -323,7 +323,7 @@ void main() {
       isFalse,
     );
   });
-  test('GG capture rates are supported without changing saved rates', () {
+  test('UwU Mouse capture rates are supported without changing saved rates', () {
     for (final rate in [125, 250, 100, 1000]) {
       final wire = displayProfileWire('phone', 'rate-$rate');
       (wire['camera']! as Map)['updateRateHz'] = rate;
