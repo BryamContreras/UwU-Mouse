@@ -121,3 +121,60 @@ ejecución perdió el emulador de API 37 tras cuatro casos, sin una aserción
 fallida registrada; un único reintento reutilizó el mismo par de APK y aprobó
 la suite completa. Las modificaciones posteriores son del script y esta
 documentación; no cambian el código del APK instalado.
+
+En S25 Ultra / Android 17 se repitieron ocho ventanas de cuatro segundos con
+el mismo patrón y herramientas: tres con 0.3.12, tres con el mismo control
+0.3.11 y dos con 0.3.13+51. Esta última renombra clases, funciones y diagnósticos
+de cámara a UwU; no cambia cálculos ni el formato de perfiles. Las versiones y
+hashes de cada ventana se conservan por separado.
+
+| Equipo y motor | Ventanas | Medianas MOVE + borde por ventana | p95 por ventana |
+| --- | ---: | ---: | ---: |
+| S22 / 0.3.12 | 5 | 5,96–7,33 ms | 12,84–17,45 ms |
+| S25 / control 0.3.11 | 3 | 3,42–3,61 ms | 4,98–5,80 ms |
+| S25 / 0.3.12 | 3 | 3,56–3,78 ms | 5,00–5,14 ms |
+| S25 / 0.3.13 | 2 | 3,69–3,71 ms | 5,29–6,37 ms |
+
+En las ocho ventanas del S25 se generaron 31.988 muestras, 320 ciclos M1 y 512
+bordes de tecla. Tres ticks de fuente se omitieron sin catch-up y no se omitió
+ningún borde M1/WASD. Cero errores de secuencia, muestras vencidas, contactos
+pendientes, sobrescrituras o incremento neto de descriptores. Las cinco
+ventanas optimizadas transportaron 5.634 eventos planificados en 5.408
+llamadas: 226 llamadas evitadas, **4,01 %** frente a una llamada por evento
+de esas mismas ventanas. Hubo 224 reutilizaciones de foco. En las dos ventanas
+del APK 0.3.13 exacto fueron 2.162 llamadas para 2.250 eventos, 88 evitadas.
+
+No se demostró menor latencia frente al control del S25. Los rangos se solapan
+y las poblaciones de eventos varían con el drenaje. Tampoco se puede atribuir
+la diferencia entre equipos sólo al teléfono: InputLab midió 1.075×806 en el
+S22 y 1.384×895 en el S25; Android 17 añadió una cabecera de 40 píxeles a los
+límites de ventana. El estado térmico registrado fue 1–2 en el S22 y 0 en el
+S25, cuya batería pasó de 28,2 a 26,3–26,5 °C entre las fases. Son mediciones
+sintéticas de motor e inyección, sin latencia USB ni presentación del juego.
+
+0.3.13+51 quedó instalada en el S25 conservando sus tres perfiles. Se comprobó
+el inicio de Free Fire en DeX con cursor propio; después el usuario activó la
+cámara y continuó jugando. El
+[APK firmado 43666333191](https://github.com/BryamContreras/UwU-Mouse/actions/runs/43666333191)
+aprobó 1.112 pruebas JVM y 104 Flutter; la
+[matriz 43666336237](https://github.com/BryamContreras/UwU-Mouse/actions/runs/43666336237)
+aprobó las 57 comprobaciones de framework/permisos en el primer intento, sin
+reintentos. Ambos workflows corresponden al código de aplicación `3b40efc`;
+esta ampliación posterior sólo documenta resultados.
+
+Durante ese juego se registró además una ventana física pasiva de diez
+segundos, sin generador de pruebas. Los snapshots abarcan 12,330 s y el buffer
+sólo retuvo sus 1,606 s finales: 4.096 filas y 14.783 sobrescritas. En ese tramo,
+784 muestras originales de mouse hasta el worker dieron p50/p95/p99 de
+0,159/0,944/1,845 ms; 825 RPC ordinarias de envío a ACK dieron
+0,776/1,464/2,256 ms. Son poblaciones y tramos diferentes: no sumar percentiles
+ni presentarlos como diez segundos completos o tiempo hasta la imagen.
+
+El intervalo de contadores mostró 4.958 lotes directos de cámara, 41 teclas
+directas y cinco operaciones compuestas, sin muestras vencidas, overflow ni
+fallos de operaciones compuestas. Hubo cinco DOWN y cinco UP M1, pero M1 estaba
+pulsado en ambos extremos; no implica cinco clics completos. El perfil tenía
+cadencia M1 activada y produjo 165 ticks propios, por lo que ese botón conservó
+la ruta MAIN prevista para esa función. La captura del perfil estaba en modo
+automático/sin límite, frente a 250 Hz en la muestra física anterior del S22.
+Fue juego natural sin carga PvP impuesta ni comparación física controlada.
