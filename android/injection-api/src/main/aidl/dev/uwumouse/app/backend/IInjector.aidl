@@ -55,4 +55,7 @@ interface IInjector {
     Bundle getDisplayResolution(int displayId);
     Bundle applyDisplayResolution(int displayId, String displayUniqueId, int width, int height, IBinder owner);
     Bundle restoreDisplayResolution(int displayId, String displayUniqueId);
+    // Already-ready MOVE followed by one contact edge; every stage retains its own journal and ACK.
+    int injectTouchTransition(long sessionId, in int[] actions, in long[] downTimes, in long[] eventTimes,
+        in int[] counts, in int[] ids, in float[] xs, in float[] ys, in ParcelFileDescriptor progress);
 }

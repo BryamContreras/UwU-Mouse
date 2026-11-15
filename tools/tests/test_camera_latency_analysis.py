@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from analyze_camera_latency import ACK, SUBMIT, analyze, analyze_directory, compare, main, pair_injection, pair_physical
+from analyze_camera_latency import ACK, SUBMIT, TRANSITION_ACK, TRANSITION_SUBMIT, analyze, analyze_directory, compare, main, pair_injection, pair_physical, pair_touch_transition
 
 
 def row(sequence, stage, observed_ms, source_ms=1000, action=-1, event_time=-1):
@@ -59,6 +59,120 @@ class CameraLatencyAnalysisTest(unittest.TestCase):
         self.assertEqual(3, result["submitToAckMs"]["minMs"])
         self.assertEqual(10, result["submitToAckMs"]["maxMs"])
         self.assertEqual(2, result["byMaskedAction"]["2"]["count"])
+
+    def test_compact_and_ordinary_rpc_populations_stay_separate_with_repeated_times(self):
+        rows = [row(1, SUBMIT, 1001, action=2, event_time=1000),
+                row(2, ACK, 1003, action=2, event_time=1000),
+                row(3, TRANSITION_SUBMIT, 1004, action=261, event_time=1000),
+                row(4, TRANSITION_ACK, 1014, action=261, event_time=1000),
+                row(5, SUBMIT, 1015, action=2, event_time=1000),
+                row(6, ACK, 1018, action=2, event_time=1000),
+                row(7, TRANSITION_SUBMIT, 1019, action=261, event_time=1000),
+                row(8, TRANSITION_ACK, 1039, action=261, event_time=1000)]
+        ordinary = pair_injection(rows)
+        compact = pair_touch_transition(rows)
+        self.assertEqual(2, ordinary["submitToAckMs"]["count"])
+        self.assertEqual(3, ordinary["submitToAckMs"]["maxMs"])
+        self.assertEqual(2, compact["submitToAckMs"]["count"])
+        self.assertEqual(10, compact["submitToAckMs"]["minMs"])
+        self.assertEqual(20, compact["submitToAckMs"]["maxMs"])
+        self.assertEqual({"5"}, set(compact["byMaskedAction"]))
+        self.assertEqual(2, compact["stageRecordCounts"]["submitRecords"])
+        self.assertEqual(2, compact["stageRecordCounts"]["validAckTimingRecords"])
+
+    def test_crossing_another_rpc_submit_cannot_match_a_dangling_ordinary_submit(self):
+        rows = [row(1, SUBMIT, 1001, action=2, event_time=1000),
+                row(2, TRANSITION_SUBMIT, 1002, action=261, event_time=1000),
+                row(3, TRANSITION_ACK, 1006, action=261, event_time=1000),
+                row(4, ACK, 1007, action=2, event_time=1000)]
+        ordinary = pair_injection(rows)
+        self.assertEqual(0, ordinary["submitToAckMs"]["count"])
+        self.assertEqual(1, ordinary["pairing"]["submitInterruptedByOtherRpc"])
+        self.assertEqual(1, ordinary["pairing"]["ackWithoutSubmit"])
+        self.assertEqual(1, pair_touch_transition(rows)["submitToAckMs"]["count"])
+
+    def test_compact_return_does_not_claim_two_successful_frame_acks_or_known_progress(self):
+        values = list(fixture([row(1, TRANSITION_SUBMIT, 1001, action=262, event_time=1000),
+                               row(2, TRANSITION_ACK, 1008, action=262, event_time=1000)]))
+        values[0].update(touchTransitionBatches=0, touchTransitionUnknownProgress=0)
+        values[1].update(touchTransitionBatches=1, touchTransitionUnknownProgress=1)
+        result = analyze(*values)
+        self.assertEqual(1, result["touchTransitionPairing"]["submitToAckMs"]["count"])
+        self.assertEqual(0, result["injectionPairing"]["submitToAckMs"]["count"])
+        self.assertEqual(1, result["runtimeDiagnostics"]["counterDeltas"]["touchTransitionUnknownProgress"])
+        self.assertTrue(result["compactTransitionsObserved"])
+        self.assertIn("unknown progress", result["touchTransitionPairing"]["scope"])
+
+    def test_compact_pairs_with_source_worker_timing_are_usable_without_ordinary_rpc_pairs(self):
+        rows = minimal_timing_rows()
+        rows[2]["stage"] = TRANSITION_SUBMIT
+        rows[3]["stage"] = TRANSITION_ACK
+        result = analyze(*fixture(rows))
+        self.assertTrue(result["timingAvailable"])
+        self.assertEqual(0, result["timingCoverage"]["syntheticSubmitAckPairs"])
+        self.assertEqual(1, result["timingCoverage"]["syntheticTouchTransitionPairs"])
+        self.assertEqual(1, result["timingCoverage"]["totalSyntheticRpcPairs"])
+
+    def test_missing_or_mismatched_compact_return_is_counted_without_inventing_pairs(self):
+        rows = [row(10, TRANSITION_ACK, 1001, action=261, event_time=1000),
+                row(11, TRANSITION_SUBMIT, 1002, action=261, event_time=1000),
+                row(12, TRANSITION_ACK, 1003, action=262, event_time=1000),
+                row(13, TRANSITION_SUBMIT, 1004, action=261, event_time=1000)]
+        result = pair_touch_transition(rows)
+        self.assertEqual(0, result["submitToAckMs"]["count"])
+        self.assertEqual({"ackWithoutSubmit": 1, "mismatchedPairs": 1, "submitWithoutAck": 1}, result["pairing"])
+
+    def test_runtime_counters_and_idle_gauges_have_distinct_scopes(self):
+        values = list(fixture(minimal_timing_rows()))
+        values[0].update(backendTouchTransitionBatches=4, backendTouchTransitionFrames=8,
+                         backendTouchTransitionFocusQueries=4, backendTouchTransitionFocusReuses=4,
+                         sessionIdleBudgetMs=1800000, sessionIdleRemainingMs=1799000,
+                         windowContext={"motionTransport": {"gameplayDirectKeyFrames": 10, "gameplayStaleFrames": 2}})
+        values[1].update(backendTouchTransitionBatches=7, backendTouchTransitionFrames=14,
+                         backendTouchTransitionFocusQueries=8, backendTouchTransitionFocusReuses=6,
+                         sessionIdleBudgetMs=1800000, sessionIdleRemainingMs=1799990,
+                         touchTransitionIpcMs=[2, 5, 20],
+                         windowContext={"motionTransport": {"gameplayDirectKeyFrames": 25, "gameplayStaleFrames": 3}})
+        diagnostics = analyze(*values)["runtimeDiagnostics"]
+        self.assertEqual(3, diagnostics["counterDeltas"]["backendTouchTransitionBatches"])
+        self.assertEqual(6, diagnostics["counterDeltas"]["backendTouchTransitionFrames"])
+        self.assertEqual(2, diagnostics["counterDeltas"]["backendTouchTransitionFocusReuses"])
+        self.assertEqual([2, 5, 20], diagnostics["after"]["touchTransitionIpcMs"])
+        self.assertEqual(1799990, diagnostics["after"]["sessionIdleRemainingMs"])
+        self.assertNotIn("sessionIdleRemainingMs", diagnostics["counterDeltas"])
+        self.assertEqual(15, diagnostics["nativeTransportCounterDeltas"]["gameplayDirectKeyFrames"])
+        self.assertEqual(1, diagnostics["nativeTransportCounterDeltas"]["gameplayStaleFrames"])
+        self.assertIsNone(diagnostics["nativeTransportCounterDeltas"]["gameplayOverflowFrames"])
+
+    def test_synthetic_app_manifest_never_labels_reused_native_stages_as_physical(self):
+        rows = minimal_timing_rows()
+        rows[2]["stage"] = TRANSITION_SUBMIT
+        rows[3]["stage"] = TRANSITION_ACK
+        synthetic = analyze(*fixture(rows), manifest={"sourceOrigin": "synthetic-app", "syntheticInputConfirmed": True})
+        physical = analyze(*fixture(rows), manifest={"physicalInputConfirmed": True})
+        self.assertFalse(synthetic["physicalInputConfirmed"])
+        self.assertEqual({}, synthetic["physicalSourceStageMs"])
+        self.assertIsNone(synthetic["physicalPairing"])
+        self.assertEqual(1, synthetic["syntheticSourcePairing"]["binderReceiptToWorkerMs"]["count"])
+        self.assertTrue(synthetic["timingAvailable"])
+        self.assertFalse(compare([synthetic, physical])["sameSourceOrigin"])
+        self.assertFalse(compare([synthetic, physical])["allPhysicalInputConfirmed"])
+
+    def test_synthetic_worker_only_fixture_does_not_require_a_fake_kernel_receipt(self):
+        rows = [row(1, "mapper_mouse_worker_latest_sample", 1001),
+                row(2, TRANSITION_SUBMIT, 1002, action=261, event_time=1000),
+                row(3, TRANSITION_ACK, 1006, action=261, event_time=1000)]
+        result = analyze(*fixture(rows), manifest={"syntheticInputConfirmed": True})
+        self.assertTrue(result["timingAvailable"])
+        self.assertEqual(1, result["timingCoverage"]["syntheticSourceWorkerSamples"])
+        self.assertEqual(0, result["timingCoverage"]["physicalBinderWorkerPairs"])
+        self.assertIsNone(result["physicalPairing"])
+
+    def test_conflicting_physical_and_synthetic_declarations_reject_comparison(self):
+        result = analyze(*fixture(minimal_timing_rows()), manifest={"physicalInputConfirmed": True, "syntheticInputConfirmed": True})
+        self.assertTrue(result["inputOrigin"]["conflictingDeclarations"])
+        self.assertFalse(result["physicalInputConfirmed"])
+        self.assertFalse(result["comparableInternalTiming"])
 
     def test_never_pairs_across_intervening_submit_or_identity_mismatch(self):
         rows = [row(1, SUBMIT, 1001, action=2, event_time=1000),
@@ -266,6 +380,7 @@ class CameraLatencyAnalysisTest(unittest.TestCase):
             self.assertEqual(2, main([str(directory), "--output", str(output)]))
             self.assertEqual(1, len(json.loads(output.read_text())["trials"]))
             self.assertFalse(json.loads(output.read_text())["trials"][0]["timingAvailable"])
+            self.assertEqual(0, json.loads(output.read_text())["trials"][0]["touchTransitionPairing"]["stageRecordCounts"]["submitRecords"])
 
     def test_comparison_requires_both_physical_and_synthetic_timing_pairs(self):
         complete_rows = minimal_timing_rows()

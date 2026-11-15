@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
 import android.os.Process
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.Settings
 import android.view.Display
@@ -40,18 +41,27 @@ import dev.uwumouse.app.session.SessionService
 import dev.uwumouse.app.session.InputQueue
 import dev.uwumouse.app.session.NativeMotionDispatchGate
 import dev.uwumouse.app.session.RawMouseMotionBatch
+import dev.uwumouse.app.session.NativeGameplayPolicy
+import dev.uwumouse.app.session.TouchTransitionClient
+import dev.uwumouse.app.session.TouchTransitionProgress
+import dev.uwumouse.app.engine.TouchComposer
+import dev.uwumouse.app.engine.TouchFrame
+import dev.uwumouse.app.engine.TouchTransitionResult
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.IOException
+import java.nio.ByteBuffer
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.FutureTask
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Real framework/window checks. These tests never acquire evdev or inject into another app. */
@@ -207,6 +217,76 @@ class AndroidCompatibilityTest {
             worker.quitSafely()
             worker.join(3_000)
         }
+    }
+
+    @Test fun ordinaryGameplayKeysAndButtonsReachTheWorkerWhileMainIsOccupied() {
+        val worker=HandlerThread("UwUGameplayCompatibility").apply { start() }
+        val main=Handler(Looper.getMainLooper())
+        val gate=NativeMotionDispatchGate()
+        val route=NativeMotionDispatchGate.Route(77,7,0,42,NativeGameplayPolicy(setOf(51),1))
+        val occupied=CountDownLatch(1);val release=CountDownLatch(1);val consumed=CountDownLatch(5)
+        val trace=CopyOnWriteArrayList<String>()
+        val overflow=AtomicBoolean()
+        val queue=InputQueue(Handler(worker.looper),{ type,code,x,_,_,generation ->
+            assertEquals(7L,generation)
+            trace+="$type:$code:${x.toInt()}"
+            consumed.countDown()
+        },{ overflow.set(true) })
+        fun key(current:NativeMotionDispatchGate.Route,code:Int,down:Boolean)=
+            if(queue.offerNative(1,code,if(down) 1f else 0f,generation=current.generation))
+                NativeMotionDispatchGate.Admission.ACCEPTED else NativeMotionDispatchGate.Admission.OVERFLOW
+        fun mouse(buttons:Int,dx:Float)=gate.dispatchButtons(77,buttons) { current,changed ->
+            if(queue.offerNativeMouseReport(System.nanoTime(),dx,0f,buttons,changed,current.generation,current.pointerEpoch))
+                NativeMotionDispatchGate.Admission.ACCEPTED else NativeMotionDispatchGate.Admission.OVERFLOW
+        }
+        try {
+            gate.resetButtons(true);gate.publish(route)
+            assertTrue(main.post { occupied.countDown();release.await(10,TimeUnit.SECONDS) })
+            assertTrue(occupied.await(3,TimeUnit.SECONDS))
+            assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,gate.dispatchKey(77,12,17,51,true,false,::key))
+            assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,mouse(1,4f))
+            assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,mouse(0,0f))
+            assertEquals(NativeMotionDispatchGate.Dispatch.DIRECT,gate.dispatchKey(77,12,17,51,false,false,::key))
+            assertTrue("Gameplay input waited for main",consumed.await(3,TimeUnit.SECONDS))
+            assertEquals(listOf("1:51:1","3:42:4","2:1:1","2:1:0","1:51:0"),trace.toList())
+            assertEquals(0,gate.pendingCallbacks);assertEquals(0,gate.ownedKeyCount)
+            assertFalse(overflow.get())
+        } finally { release.countDown();worker.quitSafely();worker.join(3_000) }
+    }
+
+    @Test fun cancellingAnInFlightTouchTransitionClosesItsNextProgressCheckpoint() {
+        val entered=CountDownLatch(1);val releaseAck=CountDownLatch(1);val cancelled=CountDownLatch(1)
+        val secondPrevented=AtomicBoolean();val secondSent=AtomicBoolean()
+        val failure=AtomicReference<Throwable?>();val result=AtomicReference<TouchTransitionResult?>()
+        val backend=Proxy.newProxyInstance(IInjector::class.java.classLoader,arrayOf(IInjector::class.java)) { _,method,args ->
+            check(method.name=="injectTouchTransition")
+            val descriptor=requireNotNull(args?.last() as? ParcelFileDescriptor)
+            ParcelFileDescriptor.AutoCloseOutputStream(ParcelFileDescriptor.dup(descriptor.fileDescriptor)).use { output ->
+                fun checkpoint(stage:Int)=ByteBuffer.allocate(12).putInt(TouchTransitionProgress.MAGIC)
+                    .putInt(stage).putInt(stage-1).array()
+                output.write(checkpoint(1));entered.countDown()
+                check(releaseAck.await(5,TimeUnit.SECONDS))
+                try { output.write(checkpoint(2));secondSent.set(true) }
+                catch(_:IOException) { secondPrevented.set(true) }
+            }
+            1
+        } as IInjector
+        val client=TouchTransitionClient(backend,7)
+        val frames=listOf(
+            TouchFrame(TouchComposer.MOVE,100,100,intArrayOf(0),floatArrayOf(20f),floatArrayOf(30f)),
+            TouchFrame(TouchComposer.POINTER_DOWN or (1 shl 8),100,100,intArrayOf(0,1),floatArrayOf(20f,40f),floatArrayOf(30f,50f)))
+        val injector=Thread({ try { result.set(client.inject(frames)) } catch(problem:Throwable) {failure.set(problem)} },"UwUTransitionFixture")
+        try {
+            injector.start()
+            assertTrue(entered.await(3,TimeUnit.SECONDS))
+            Thread({ client.cancelPending();cancelled.countDown() },"UwUTransitionCancel").start()
+            assertTrue("Cancellation waited for inject()'s monitor",cancelled.await(3,TimeUnit.SECONDS))
+            releaseAck.countDown();injector.join(3_000)
+            assertFalse(injector.isAlive);assertNull(failure.get())
+            assertTrue(secondPrevented.get());assertFalse(secondSent.get())
+            assertFalse(requireNotNull(result.get()).progressKnown)
+            assertTrue(client.acceptedFrames.isEmpty());assertNull(client.lastAttemptedFrame)
+        } finally { client.cancelPending();releaseAck.countDown();injector.join(3_000) }
     }
 
     @Test fun installedNativeLibrariesAndActivationTlsLoad() {

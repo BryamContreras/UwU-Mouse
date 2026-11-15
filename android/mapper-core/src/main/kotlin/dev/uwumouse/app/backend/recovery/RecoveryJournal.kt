@@ -118,6 +118,13 @@ class RecoveryJournal(
     @Synchronized fun canExpire(sessionId: Long): Boolean =
         sessionId == this.sessionId && state == RecoveryInjectionState.ACTIVE
 
+    /** Recheck immutable operation ownership without copying any contact/frame arrays. */
+    @Synchronized fun ownsActiveOperation(original:RecoverySnapshot):Boolean =
+        original.state==RecoveryInjectionState.ACTIVE && state==RecoveryInjectionState.ACTIVE && attempted==null &&
+            sessionId==original.sessionId && width==original.width && height==original.height &&
+            targetUid==original.targetUid && displayId==original.displayId && source==original.source &&
+            deviceId==original.deviceId && coordinatePolicy==original.coordinatePolicy
+
     /**
      * Import only an old CANCEL candidate after the previous guardian was lost completely.
      * The authorized caller supplies its surviving journal copy; no DOWN or receiver receipt is

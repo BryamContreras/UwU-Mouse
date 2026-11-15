@@ -19,6 +19,7 @@ import dev.uwumouse.app.engine.TouchFrame
 import dev.uwumouse.app.engine.TouchCoordinatePolicy
 import dev.uwumouse.app.engine.CameraResetSequence
 import dev.uwumouse.app.engine.CameraResetKind
+import dev.uwumouse.app.engine.TouchTransitionSequence
 import java.io.*
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -107,6 +108,11 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private var cameraResetPrefetchHits=0L
     private var cameraResetLastEventTimes=LongArray(0)
     private var cameraResetLastDurationNanos=0L
+    private var touchTransitionBatches=0L
+    private var touchTransitionFrames=0L
+    private var touchTransitionFocusQueries=0L
+    private var touchTransitionFocusReuses=0L
+    private var touchTransitionLastDurationNanos=0L
     private val taskManager=Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
     private val focusMethod=Class.forName("android.app.IActivityTaskManager").getMethod("getFocusedRootTaskInfo")
     // Cache reflection metadata, never a focus result. Every admission still queries Android.
@@ -119,6 +125,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         (focusDisplayField ?: info.javaClass.getField("displayId")).getInt(info)
     private val motionDisplayMethod=InputEvent::class.java.getMethod("getDisplayId")
     private var expiry:Runnable?=null
+    private val idleExpiry=SessionIdleExpiry(SystemClock::uptimeMillis)
     private val pointer = PointerPresentation { type ->
         // AOSP Android 15+ keeps this hidden compatibility method as a no-op. Report the
         // limitation instead of marking the system cursor hidden when it is still visible.
@@ -314,6 +321,12 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
     private fun clearExpiry() {
         expiry?.let { handler.removeCallbacks(it) }
         expiry=null
+        idleExpiry.clear()
+    }
+
+    /** Only real accepted input refreshes inactivity, never capture leases or status polling. */
+    private fun markSessionActivity(sessionId:Long) {
+        if(!closed && state=="ACTIVE" && journal.canExpire(sessionId)) idleExpiry.acceptedActivity(sessionId)
     }
 
     private fun authorize() { check(Binder.getCallingUid()==appUid) { "Unauthorized client" } }
@@ -456,7 +469,9 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         val key=existing ?: ForwardedKey(keyCode,scanCode,eventTime,metaState)
         if(existing!=null && action==KeyEvent.ACTION_DOWN) key.repeats++
         if(action==KeyEvent.ACTION_DOWN) forwardedKeys[keyCode]=key
+        val activitySessionId=idleExpiry.sessionId
         val accepted=sendKey(key,action,eventTime,metaState)
+        if(accepted) markSessionActivity(activitySessionId)
         if(accepted && action==KeyEvent.ACTION_UP) forwardedKeys.remove(keyCode)
         if(!accepted) keyReleaseUnverified=forwardedKeys.isNotEmpty()
         return accepted
@@ -731,14 +746,27 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         syncCapturePointer()
         pointer.setSessionActive(targetPackage!="dev.uwumouse.inputlab")
         clearExpiry()
-        val timeout=Runnable { synchronized(this) {
-            if(!closed && journal.canExpire(id)) {
+        val timeout=object:Runnable {
+            override fun run() { synchronized(this@SupervisedInjector) {
+                if(expiry!==this) return@synchronized
+                if(closed || !journal.canExpire(id)) { clearExpiry();return@synchronized }
+                val remaining=idleExpiry.remainingMillis(id)
+                if(remaining==null) { clearExpiry();return@synchronized }
+                // One timer survives an active session. Activity itself never posts/removes it.
+                if(remaining>0L && handler.postDelayed(this,remaining)) return@synchronized
                 releaseInternal()
-                if(!recoveryScheduled && !forceStopped) state="PAUSED_TIMEOUT"
-            }
-        } }
+                if(!recoveryScheduled && !forceStopped) {
+                    state="PAUSED_TIMEOUT"
+                    error=if(remaining==0L) "Sesión inactiva durante 30 minutos"
+                        else "No se pudo renovar la expiración por inactividad"
+                }
+            } }
+        }
         expiry=timeout
-        handler.postDelayed(timeout,30*60*1000L)
+        if(!handler.postDelayed(timeout,idleExpiry.begin(id))) {
+            releaseInternal()
+            throw IllegalStateException("No se pudo programar la expiración por inactividad")
+        }
         timingSessionId=id
         focusTimingCount=0L; pipeTimingCount=0L
         return id
@@ -764,10 +792,109 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                 pipeTimes[(pipeTimingCount++ and 511L).toInt()]=SystemClock.elapsedRealtimeNanos()-pipeStart
             }
             journal.acknowledged(sessionId,frame,accepted)
-            if(accepted) injected++ else scheduleRecovery("INJECTION_REJECTED")
+            if(accepted) { injected++;markSessionActivity(sessionId) } else scheduleRecovery("INJECTION_REJECTED")
             accepted
         } catch(e:Exception) { journal.fail(sessionId); scheduleRecovery("WORKER_PIPE: ${e.javaClass.simpleName}"); false }
     }
+    /** One already-ready MOVE/edge pair. No frame is written before the preceding ACK. */
+    @Synchronized override fun injectTouchTransition(sessionId:Long,actions:IntArray,downTimes:LongArray,
+        eventTimes:LongArray,counts:IntArray,ids:IntArray,xs:FloatArray,ys:FloatArray,
+        progress:ParcelFileDescriptor?):Int {
+        var writer:ParcelFileDescriptor.AutoCloseOutputStream?=null
+        var operationFocus:TouchOperationFocus?=null
+        val started=SystemClock.elapsedRealtimeNanos()
+        try {
+            if(progress!=null) writer=ParcelFileDescriptor.AutoCloseOutputStream(progress)
+            authorize()
+            require(progress!=null && writer!=null) { "A touch transition progress pipe is required" }
+            val descriptor=progress.fileDescriptor
+            require(OsConstants.S_ISFIFO(Os.fstat(descriptor).st_mode)) { "Touch progress must be a pipe" }
+            val flags=Os.fcntlInt(descriptor,OsConstants.F_GETFL,0)
+            Os.fcntlInt(descriptor,OsConstants.F_SETFL,flags or OsConstants.O_NONBLOCK)
+            require(actions.size==2 && downTimes.size==2 && eventTimes.size==2 && counts.size==2 &&
+                counts.all { it in 1..10 }) { "Touch transition requires two bounded frames" }
+            val total=counts.sum()
+            require(ids.size==total && xs.size==total && ys.size==total)
+            var offset=0
+            val sequence=TouchTransitionSequence(actions.indices.map { index ->
+                val end=offset+counts[index]
+                TouchFrame(actions[index],downTimes[index],eventTimes[index],ids.copyOfRange(offset,end),
+                    xs.copyOfRange(offset,end),ys.copyOfRange(offset,end)).also { offset=end }
+            })
+            val original=journal.snapshot()
+            val previous=original.activeFrame ?: return 0
+            val channel=connection ?: return 0
+            val captureId=ownedCaptureId
+            if(sessionId!=original.sessionId || original.attempted!=null ||
+                !touchTransitionOwnershipValid(sessionId,original,channel,captureId)) return 0
+            require(sequence.matchesPrevious(previous)) { "Touch transition changed the original gesture" }
+            val now=SystemClock.uptimeMillis()
+            var prior:TouchFrame?=previous
+            var priorTime=previous.eventTime
+            for(frame in sequence.frames) {
+                require(frame.eventTime>=priorTime && frame.eventTime<=now && now-frame.eventTime<5000 &&
+                    coordinatePolicy.allowsCoordinates(frame,original.width,original.height,prior)) {
+                    "Touch transition does not match the original coordinate policy"
+                }
+                prior=TouchTransitionSequence.postEvent(frame);priorTime=frame.eventTime
+            }
+            val output=requireNotNull(writer)
+            val record=ByteBuffer.allocate(12).putInt(0x55545431)
+            val focus=TouchOperationFocus(SystemClock::elapsedRealtimeNanos,::cameraResetFocused)
+            operationFocus=focus
+            touchTransitionBatches++
+            return TouchTransitionExecutor.execute(sequence,object:TouchTransitionExecutor.Port {
+                override fun contextAllowsStage():Boolean =
+                    touchTransitionOwnershipValid(sessionId,original,channel,captureId) &&
+                        focus.allowsStage {
+                            cameraResetMetadataAllows(original) &&
+                                touchTransitionOwnershipValid(sessionId,original,channel,captureId)
+                        }
+                override fun admissionLost() {
+                    releaseInternal()
+                    if(state!="BLOCKED" && !recoveryScheduled) state="PAUSED_FOCUS"
+                }
+                override fun prepare(frame:TouchFrame):Boolean =
+                    TouchEventAgePolicy.admits(frame,SystemClock.uptimeMillis()) && journal.prepare(sessionId,frame)
+                override fun writeAttempt(stage:Int,acceptedBefore:Int) {
+                    record.putInt(4,stage);record.putInt(8,acceptedBefore)
+                    output.write(record.array())
+                }
+                override fun abortUnsent(frame:TouchFrame):Boolean = journal.abortUnsent(sessionId,frame)
+                override fun send(frame:TouchFrame):Boolean {
+                    val before=SystemClock.elapsedRealtimeNanos()
+                    return try { this@SupervisedInjector.send(frame,sessionId,1) }
+                    finally { pipeTimes[(pipeTimingCount++ and 511L).toInt()]=SystemClock.elapsedRealtimeNanos()-before }
+                }
+                override fun acknowledge(frame:TouchFrame,accepted:Boolean):Boolean =
+                    journal.acknowledged(sessionId,frame,accepted)
+                override fun admitted(frame:TouchFrame) {
+                    injected++;touchTransitionFrames++;markSessionActivity(sessionId)
+                }
+                override fun recoveryNeeded(reason:String) {
+                    journal.fail(sessionId);scheduleRecovery("TOUCH_TRANSITION_$reason")
+                }
+            })
+        } finally {
+            operationFocus?.let { touchTransitionFocusQueries+=it.queries;touchTransitionFocusReuses+=it.reused }
+            touchTransitionLastDurationNanos=SystemClock.elapsedRealtimeNanos()-started
+            runCatching { if(writer!=null) writer.close() else progress?.close() }
+        }
+    }
+
+    private fun touchTransitionOwnershipValid(sessionId:Long,original:RecoverySnapshot,
+        channel:WorkerConnection,captureId:Long):Boolean {
+        if(closed || forceStopped || recoveryScheduled || state!="ACTIVE" ||
+            client?.asBinder()?.isBinderAlive!=true || original.sessionId!=sessionId ||
+            !journal.ownsActiveOperation(original) || coordinatePolicy!=original.coordinatePolicy ||
+            targetUid!=original.targetUid || connection!==channel || !channel.alive ||
+            channel.displayId!=original.displayId) return false
+        val capture=nativeCapture
+        if(!captureRequired) return targetPackage=="dev.uwumouse.inputlab" && captureId==0L && capture?.active!=true
+        return captureId>0L && ownedCaptureId==captureId && capture?.activeId==captureId && capture.active &&
+            capture.targetPackage==targetPackage && capture.displayId==original.displayId
+    }
+
     /**
      * One camera-only sequential/interlaced replacement, with per-frame worker ACKs as inject.
      * The caller owns a fresh pipe for this operation. A complete 12-byte record is committed
@@ -887,6 +1014,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                     check(journal.acknowledged(sessionId,frame,accepted)) { "Camera reset journal ACK mismatch" }
                     if(!accepted) { scheduleRecovery("CAMERA_RESET_REJECTED");return -(index+1) }
                     injected++;cameraResetFrames++;cameraResetLastEventTimes[index]=frame.eventTime
+                    markSessionActivity(sessionId)
                 } catch(failure:Exception) {
                     journal.fail(sessionId);scheduleRecovery("CAMERA_RESET_PIPE: ${failure.javaClass.simpleName}")
                     return -(index+1)
@@ -1217,6 +1345,13 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("continuousCameraSupported",true)
             putBoolean("cameraResetBatchSupported",true)
             putBoolean("cameraResetInterlacedSupported",true)
+            putBoolean("touchTransitionBatchSupported",true)
+            putLong("touchTransitionBatches",touchTransitionBatches);putLong("touchTransitionFrames",touchTransitionFrames)
+            putLong("touchTransitionFocusQueries",touchTransitionFocusQueries)
+            putLong("touchTransitionFocusReuses",touchTransitionFocusReuses)
+            putDouble("touchTransitionLastDurationMs",touchTransitionLastDurationNanos/1e6)
+            putLong("sessionIdleBudgetMs",idleExpiry.budgetMillis)
+            putLong("sessionIdleRemainingMs",idleExpiry.remainingMillis(snap.sessionId) ?: -1L)
             putLong("cameraResetBatches",cameraResetBatches);putLong("cameraResetFrames",cameraResetFrames)
             putLong("cameraResetInterlacedBatches",cameraResetInterlacedBatches)
             putString("cameraResetLastKind",cameraResetLastKind)

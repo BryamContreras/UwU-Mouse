@@ -41,6 +41,14 @@ class InputQueue(private val worker: Handler, private val consume: (Int, Int, Fl
     }
     fun offer(type: Int, code: Int = 0, x: Float = 0f, y: Float = 0f, generation: Long = 0L,
               sampleTimeNanos: Long = InputQueueEntry.NO_SAMPLE_TIME): Boolean {
+        val accepted=offerNative(type,code,x,y,generation,sampleTimeNanos)
+        if(!accepted) overflow()
+        return accepted
+    }
+
+    /** Queue-only ingress; callers holding native ownership report failure after releasing it. */
+    fun offerNative(type:Int,code:Int=0,x:Float=0f,y:Float=0f,generation:Long=0L,
+                    sampleTimeNanos:Long=InputQueueEntry.NO_SAMPLE_TIME):Boolean {
         val accepted = synchronized(this) {
             if (!buffer.offer(type, code, x, y, SystemClock.elapsedRealtimeNanos(), generation, sampleTimeNanos))
                 return@synchronized false
@@ -50,11 +58,17 @@ class InputQueue(private val worker: Handler, private val consume: (Int, Int, Fl
             }
             true
         }
-        // Do not enter lifecycle locks while holding the queue lock.
-        if (!accepted) overflow()
         return accepted
     }
     fun offerMotionBatch(batch:RawMouseMotionBatch,generation:Long,pointerEpoch:Int=InputQueueEntry.NO_POINTER_EPOCH):Boolean {
+        val accepted=offerNativeMotionBatch(batch,generation,pointerEpoch)
+        if(!accepted) overflow()
+        return accepted
+    }
+
+    /** No lifecycle callback is invoked while a native admission monitor may be held. */
+    fun offerNativeMotionBatch(batch:RawMouseMotionBatch,generation:Long,
+                               pointerEpoch:Int=InputQueueEntry.NO_POINTER_EPOCH):Boolean {
         val accepted=synchronized(this) {
             if(!buffer.offerMotionBatch(batch,SystemClock.elapsedRealtimeNanos(),generation,pointerEpoch)) return@synchronized false
             if(!scheduled) {
@@ -63,8 +77,20 @@ class InputQueue(private val worker: Handler, private val consume: (Int, Int, Fl
             }
             true
         }
-        if(!accepted) overflow()
         return accepted
+    }
+
+    fun nativeOverflow() = overflow()
+
+    fun offerNativeMouseReport(sampleTimeNanos:Long,dx:Float,dy:Float,buttons:Int,changed:Int,
+                               generation:Long,pointerEpoch:Int):Boolean = synchronized(this) {
+        if(!buffer.offerMouseReport(dx,dy,buttons,changed,SystemClock.elapsedRealtimeNanos(),generation,
+                sampleTimeNanos,pointerEpoch)) return@synchronized false
+        if(!scheduled) {
+            scheduled=true
+            if(!worker.post(drain)) { scheduled=false;buffer.clear();return@synchronized false }
+        }
+        true
     }
     /** Limits are raw relative deltas prepared from camera radius / absolute sensitivity. */
     @Synchronized fun configureCameraMerge(maxDx: Double, maxDy: Double, preserveSamples:Boolean=false) =

@@ -19,6 +19,7 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.os.Process
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import dev.uwumouse.app.session.*
 import dev.uwumouse.app.backend.BackendRegistry
 import dev.uwumouse.app.backend.IPhysicalInputCallback
@@ -83,6 +84,11 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var directCameraBatches=0L
     @Volatile private var mainCameraBatches=0L
     @Volatile private var staleCameraBatches=0L
+    @Volatile private var directGameplayMouseFrames=0L
+    @Volatile private var directGameplayKeyFrames=0L
+    @Volatile private var staleGameplayFrames=0L
+    @Volatile private var overflowGameplayFrames=0L
+    private val nativeReleaseCheckPending=AtomicBoolean()
     @Volatile private var ignoredUnknownKeys=0L
     @Volatile private var lastUnknownScanCode=-1
     private val keyMap=LinuxKeyMap.load()
@@ -141,9 +147,36 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             keyDown:Boolean,keyRepeat:Boolean) {
             if(captureId!=nativeCaptureId && !startingNativeCapture) return
             if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_capture_binder_receipt",eventTimeNanos)
+            if(!startingNativeCapture && captureId==nativeCaptureId && eventTimeNanos>=0L &&
+                buttonState and 31.inv()==0 && wheel==0f && horizontalWheel==0f) {
+                val gameplay=when {
+                    kind==1 && keyScanCode>=0 && relX==0f && relY==0f ->
+                        motionDispatch.dispatchKey(captureId,deviceId,keyScanCode,keyMap.keyCode(keyScanCode,deviceId),
+                            keyDown,keyRepeat) { route,code,down -> SessionController.tryNativeGameplayKey(route,code,down) }
+                    kind==0 && buttonState!=physicalButtons && keyScanCode<0 && !keyDown && !keyRepeat && relX.isFinite() && relY.isFinite() ->
+                        motionDispatch.dispatchButtons(captureId,buttonState) { route,changed ->
+                            SessionController.tryNativeGameplayMouse(route,eventTimeNanos,relX,relY,buttonState,changed)
+                        }
+                    else -> NativeMotionDispatchGate.Dispatch.DEFERRED
+                }
+                if(gameplay!=NativeMotionDispatchGate.Dispatch.DEFERRED) {
+                    if(gameplay==NativeMotionDispatchGate.Dispatch.DIRECT) {
+                        if(kind==1) directGameplayKeyFrames++ else {
+                            directGameplayMouseFrames++;recordNativeCameraMotion(1,deviceId)
+                        }
+                        if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_gameplay_direct_dispatch",eventTimeNanos)
+                    } else if(gameplay==NativeMotionDispatchGate.Dispatch.STALE) staleGameplayFrames++
+                    else overflowGameplayFrames++
+                    if(gameplay==NativeMotionDispatchGate.Dispatch.OVERFLOW) {
+                        SessionController.nativeGameplayOverflow()
+                    }
+                    if((kind==1 && !keyDown) || (kind==0 && buttonState==0)) notifyNativeGameplayRelease()
+                    return
+                }
+            }
             // Sparse/1000 Hz input reaches JNI through the scalar callback. It uses the
             // same ordered camera lane as a batch, without adding JNI/Binder arrays or
-            // waiting for UI. Keys, wheels and button edges retain the main barrier.
+            // waiting for UI. Controls without ordinary gameplay ownership retain the main barrier.
             if(NativeMotionDispatchGate.isMotionOnlyFrame(kind,eventTimeNanos,relX,relY,wheel,horizontalWheel,
                     buttonState,keyScanCode,keyDown,keyRepeat)) {
                 val dispatch=dispatchNativeCameraMotion(captureId,buttonState,deviceId,1,eventTimeNanos) {
@@ -179,7 +212,6 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             }
         }
     }
-    private val mouseButtons = MouseButtonGate()
     private val consumedKeys = HashSet<Long>()
     private val nativeKeys=HashSet<Long>()
     private val profileSwitches=ProfileSwitchGate()
@@ -384,10 +416,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private var cursorSystemStartY=0f
     private var cursorOpenNotifications=false
     private var captureEpoch=-1L
-    @Volatile private var physicalButtons=0
+    private val physicalButtons:Int get()=motionDispatch.physicalButtons
     val physicalMouseButtons:Int get()=physicalButtons
-    @Volatile private var physicalButtonsKnown=false
-    private fun keysReleased()=consumedKeys.isEmpty() && nativeKeys.isEmpty() && profileSwitches.isEmpty
+    private val physicalButtonsKnown:Boolean get()=motionDispatch.physicalButtonsKnown
+    private fun keysReleased()=consumedKeys.isEmpty() && nativeKeys.isEmpty() && profileSwitches.isEmpty && motionDispatch.ownedKeyCount==0
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var appliedMouseCapture = false
     val mouseCaptured:Boolean get()=appliedMouseCapture
@@ -395,7 +427,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     fun inputDispatchIdle():Boolean = nativeCaptureId!=0L && !startingNativeCapture && appliedMouseCapture &&
         physicalButtonsKnown && physicalButtons==0 && motionDispatch.pendingCallbacks==0 && pendingNativeSamples.get()==0
     private var requestedMouseCapture = false
-    private var sourceTailPending = false
+    @Volatile private var sourceTailPending = false
     private var deferredSourceChanges = 0L
     private var tailTimeouts = 0L
     private var controlTraceUntil = 0L
@@ -447,13 +479,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         }
     }
     fun captureMouse(enabled: Boolean,epoch:Long=-1) {
+        // Finish any queue-only native admission before changing its physical baseline.
+        motionDispatch.publish(null)
         // A new session can reuse still-applied sources while a previous key UP is deferred.
         // Reset ownership even in that case; held buttons never seed the new engine.
         if (enabled) {
             if(captureEpoch!=epoch) clearCaptureReleaseWait()
             if(captureEpoch!=epoch) clearCursorInteraction()
-            if(appliedMouseCapture && captureEpoch==epoch && physicalButtonsKnown) mouseButtons.rebase(physicalButtons)
-            else mouseButtons.reset()
+            if(appliedMouseCapture && physicalButtonsKnown) motionDispatch.rebaseButtons(physicalButtons)
+            else motionDispatch.resetButtonBaseline()
             captureEpoch=epoch
         }
         requestedMouseCapture = enabled
@@ -521,7 +555,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         }
         captureAttemptEpoch++
         motionDispatch.publish(null)
-        mouseButtons.reset()
+        motionDispatch.resetButtonBaseline()
         val previous=nativeCaptureId
         nativeCaptureId=0L
         if(previous!=0L) runCatching { BackendRegistry.injector?.stopCapture(previous) }
@@ -566,8 +600,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         appliedMouseRateHz=if(appliedMouseCapture) rate else 0
         if(!appliedMouseCapture) SessionController.nativeMouseReleased()
         // The reader rejects held inputs before and after taking exclusive ownership.
-        physicalButtonsKnown=nativeCaptureId!=0L
-        if(physicalButtonsKnown) { physicalButtons=0;mouseButtons.rebase(0);menuAwaitingRelease=false }
+        motionDispatch.resetButtons(nativeCaptureId!=0L)
+        if(physicalButtonsKnown) { motionDispatch.clearKeyOwners();menuAwaitingRelease=false }
         updateCursorPresentation()
         GameCoordinator.refreshControls()
         if(!appliedMouseCapture) main.postDelayed({
@@ -630,12 +664,22 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         for(callback in nativeMainCallbacks.abandon()) callback(false)
     }
 
+    private fun notifyNativeGameplayRelease() {
+        // The ordinary source-change check normally has nothing to do. Wake main only
+        // when a control-plane change was actually waiting for the physical tail.
+        if(!sourceTailPending || !nativeReleaseCheckPending.compareAndSet(false,true)) return
+        if(!main.post {
+            nativeReleaseCheckPending.set(false)
+            if(sourceTailPending) scheduleSourceChange()
+        }) nativeReleaseCheckPending.set(false)
+    }
+
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
         if(DisplayResolutionController.changing || GameCoordinator.resolutionPanelVisible || GameCoordinator.menuTextInputActive || captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
             menuAwaitingRelease || wantsMenuPointer()) return null
-        val route=SessionController.nativeCameraRoute(captureId,physicalButtons) ?: return null
+        val route=SessionController.nativeCameraRoute(captureId,physicalButtons,GameCoordinator.profileSwitchBindings().keys) ?: return null
         return route.takeIf { captureEpoch==it.generation }
     }
 
@@ -679,7 +723,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             recordNativeCameraMotion(batch.size,deviceIds.last())
             mainCameraBatches++
             if(InputLatencyProbe.enabled) InputLatencyProbe.recordStage("native_camera_main_dispatch",batch.timesNanos.last())
-            physicalButtons=buttons;physicalButtonsKnown=true
+            motionDispatch.observeButtons(buttons)
             SessionController.mouseBatch(batch)
             if(wheel!=0f) SessionController.wheel(wheel)
         } else if(batch.size>1 && buttons==0 && !menuAwaitingRelease && !cursorGameDown && !cursorUiOwned &&
@@ -703,6 +747,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                                 wheel:Float,buttons:Int,scanCode:Int,down:Boolean,repeat:Boolean) {
         if(!SessionController.targetConfirmed) { forceMouseOff("native_context_lost");return }
         if(kind==1) {
+            val owner=motionDispatch.ownedKey(deviceId,scanCode,release=!down)
+            if(owner!=null) {
+                if(!down) {
+                    val admission=SessionController.tryNativeGameplayKey(owner.route,owner.code,false)
+                    if(admission==NativeMotionDispatchGate.Admission.OVERFLOW) SessionController.nativeGameplayOverflow()
+                    scheduleSourceChange()
+                }
+                return
+            }
             val code=keyMap.keyCode(scanCode,deviceId)
             if(code==KeyEvent.KEYCODE_UNKNOWN) {
                 // Optional vendor/media keys must not stop mapped movement. Do not
@@ -746,16 +799,16 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         val token=if(InputLatencyProbe.enabled) InputLatencyProbe.recordReceipt(if(menuPointer) "native_menu_motion" else "native_motion",timeNanos,System.nanoTime(),
             InputDevice.SOURCE_MOUSE,MotionEvent.ACTION_HOVER_MOVE,deviceId,code=buttons,active=SessionController.active,targetConfirmed=true,
             cursorMode=SessionController.cursorMode || menuPointer) else 0L
-        val released=if(physicalButtonsKnown) physicalButtons and buttons.inv() else 0
-        val physicalChanged=if(physicalButtonsKnown) physicalButtons xor buttons else 0
-        physicalButtons=buttons;physicalButtonsKnown=true
+        val observation=motionDispatch.observeButtons(buttons)
+        val released=observation.released
+        val physicalChanged=observation.changed
         if(sourceTailPending && buttons==0 && keysReleased()) scheduleSourceChange()
         if(menuPointer) {
             handleMenuPointer(timeNanos,dx,dy,wheel,buttons)
             return
         }
         if(menuAwaitingRelease) {
-            mouseButtons.rebase(buttons)
+            motionDispatch.rebaseButtons(buttons)
             if(buttons==0) menuAwaitingRelease=false
             return
         }
@@ -778,7 +831,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             return
         }
         SessionController.mouse(dx,dy,timeNanos)
-        val changed=mouseButtons.transitions(buttons)
+        val changed=motionDispatch.buttonTransitions(buttons)
         for(button in buttonMasks) if(changed and button!=0 && releasedMapped and button==0 &&
             suspendHandled and button==0 && SessionController.consumesButton(button))
             SessionController.button(button,buttons and button!=0)
@@ -800,6 +853,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private fun forceMouseOff(reason: String) {
         clearCaptureReleaseWait()
         motionDispatch.publish(null)
+        motionDispatch.clearKeyOwners()
         captureAttemptEpoch++
         requestedMouseCapture = false
         main.removeCallbacks(applySources); main.removeCallbacks(sourceTailTimeout); sourceTailPending = false
@@ -819,7 +873,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             consumedKeys.clear()
             profileSwitches.clear()
             appliedMouseCapture=false
-            physicalButtonsKnown=false
+            motionDispatch.resetButtons()
             if (pending > 0) Log.w("UwUMouseKeys", "control_tail_unverified reason=$reason pending=$pending timeouts=$tailTimeouts")
         }
     }
@@ -962,6 +1016,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
                 "cameraDirectBatches" to directCameraBatches,"cameraMainBatches" to mainCameraBatches,
                 "cameraStaleBatches" to staleCameraBatches,
+                "gameplayDirectMouseFrames" to directGameplayMouseFrames,"gameplayDirectKeyFrames" to directGameplayKeyFrames,
+                "gameplayStaleFrames" to staleGameplayFrames,"gameplayOverflowFrames" to overflowGameplayFrames,
+                "gameplayOwnedKeys" to motionDispatch.ownedKeyCount,
                 "mainCallbackQueueDepth" to nativeMainCallbacks.metrics().depth,
                 "mainCallbackQueueMaxDepth" to nativeMainCallbacks.metrics().maxDepth,
                 "mainDrains" to nativeMainDrains,"mainDrainedCallbacks" to nativeMainDrainedCallbacks,
@@ -1310,7 +1367,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(!cursorPresentationActive || !cursorPresentationForMenu) return
         cursorPosition.moveInput(dx,dy,cursorSensitivity);cursorX=cursorPosition.x;cursorY=cursorPosition.y;cursorSamples++
         if(!cursorOverlay.moveTo(cursorX,cursorY)) return
-        val changed=mouseButtons.transitions(buttons)
+        val changed=motionDispatch.buttonTransitions(buttons)
         if(buttons!=0) { menuHoverPending=false;GameCoordinator.clearMenuPointerHover() }
         if(cursorBlocked.any { it.contains(cursorX,cursorY) }) {
             menuHoverPending=false;GameCoordinator.clearMenuPointerHover()
@@ -1353,7 +1410,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             cursorSystemGesture=false;cursorOpenNotifications=false
             SessionController.pause("Gesto del cursor cancelado");return
         }
-        val changed=mouseButtons.transitions(event.buttonState)
+        val changed=motionDispatch.buttonTransitions(event.buttonState)
         val primaryChanged=changed and MotionEvent.BUTTON_PRIMARY != 0
         val down=event.buttonState and MotionEvent.BUTTON_PRIMARY != 0
         for(button in buttonMasks) if(changed and button!=0 && event.buttonState and button!=0 && SessionController.isCursorCommandButton(button)) {
@@ -1441,6 +1498,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             })
     }
     private fun forgetDevicePresses(deviceId:Int) {
+        motionDispatch.removeDeviceKeys(deviceId)
         consumedKeys.removeAll { (it shr 32).toInt()==deviceId }
         nativeKeys.removeAll { (it shr 32).toInt()==deviceId }
         profileSwitches.removeDevice(deviceId)

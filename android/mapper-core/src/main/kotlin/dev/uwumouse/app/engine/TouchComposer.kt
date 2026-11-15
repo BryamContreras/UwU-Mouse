@@ -27,6 +27,7 @@ class TouchComposer(
     val continuousCamera: Boolean = false,
     private val resetSink:((CameraResetSequence)->CameraResetResult)?=null,
     private val orderedContacts:Boolean=false,
+    private val transitionSink:((TouchTransitionSequence)->TouchTransitionResult)?=null,
 ) {
     init { require(maxContacts in 1..10) }
 
@@ -39,6 +40,7 @@ class TouchComposer(
     private val contacts = ArrayList<StoredContact>(maxContacts)
     private var moveBatch=false
     private var pendingMove=false
+    private var controlBoundary=false
     private var downTime = 0L
     private var lastEventTime = 0L
     var paused: Boolean = false
@@ -50,6 +52,7 @@ class TouchComposer(
     var recoveryCandidateKnown:Boolean = true
         private set
     val supportsCameraReset:Boolean get()=resetSink!=null
+    val supportsTouchTransition:Boolean get()=transitionSink!=null
     val activeCount: Int @Synchronized get() = contacts.size
 
     @Synchronized fun snapshot(): List<Contact> = contacts.map { Contact(it.owner,it.id,it.x,it.y) }
@@ -123,7 +126,7 @@ class TouchComposer(
         if(!result.progressKnown) {
             // No stage can be inferred from a lost final reply without the app-owned progress record.
             // The guardian must resolve its journal; never manufacture a local CANCEL candidate.
-            moveBatch=false;paused=true;releaseUnverified=true;recoveryCandidateKnown=false
+            moveBatch=false;controlBoundary=false;paused=true;releaseUnverified=true;recoveryCandidateKnown=false
             lastError="CAMERA_RESET_PROGRESS_UNKNOWN"
             return false
         }
@@ -172,23 +175,51 @@ class TouchComposer(
         if(moveBatch && pendingMove) for(contact in contacts) {
             contact.x=contact.submittedX;contact.y=contact.submittedY
         }
-        pendingMove=false;moveBatch=false
+        pendingMove=false;moveBatch=false;controlBoundary=false
     }
+
+    /**
+     * A control may compact an existing MOVE with its contact edge. An ordinary contact
+     * movement (for example a diagonal joystick change) must first publish that MOVE.
+     * The worker brackets only the control; these methods do not retain the monitor.
+     */
+    @Synchronized fun beginControlBoundary():Boolean {
+        if(paused || releaseUnverified || controlBoundary) return false
+        controlBoundary=true
+        return true
+    }
+
+    @Synchronized fun endControlBoundary() { controlBoundary=false }
 
     @Synchronized fun begin(owner: String, x: Float, y: Float, avoidId: Int? = null, preferredId: Int? = null, beforeOwner:String?=null): Boolean {
         if (!ready(owner, x, y)) return false
-        if(!flushPendingMove()) return false
-        if (contacts.any { it.owner == owner }) return move(owner, x, y)
-        if (contacts.size == maxContacts) { lastError = "CONTACT_LIMIT"; return false }
+        if (contacts.any { it.owner == owner }) return flushPendingMove() && move(owner, x, y)
+        if (contacts.size == maxContacts) {
+            if(!flushPendingMove()) return false
+            lastError = "CONTACT_LIMIT"; return false
+        }
         // A replacement camera finger should have a different identity even when the game
         // samples both edges in one rendered frame. Pointer count and the legacy ID range stay fixed.
         val free = freeIds(owner)
-        if (free.isEmpty()) { lastError = "CONTACT_LIMIT"; return false }
+        if (free.isEmpty()) {
+            if(!flushPendingMove()) return false
+            lastError = "CONTACT_LIMIT"; return false
+        }
         val id = preferredId?.takeIf { it in free && it != avoidId }
             ?: free.firstOrNull { it != avoidId } ?: free.first()
-        if (contacts.isEmpty()) downTime = now()
         val index=if(orderedContacts) contacts.indexOfFirst { it.id>id }.takeIf { it>=0 } ?: contacts.size
             else beforeOwner?.let { name -> contacts.indexOfFirst { it.owner==name }.takeIf { it>=0 } } ?: contacts.size
+        if(canCompactPendingMove()) {
+            val previous=submittedFrame()
+            val move=frame(MOVE)
+            val proposed=contacts.toMutableList().apply { add(index,StoredContact(owner,id,x,y)) }
+            val edge=TouchFrame(POINTER_DOWN or (index shl 8),downTime,now(),
+                IntArray(proposed.size) { proposed[it].id },FloatArray(proposed.size) { proposed[it].x },
+                FloatArray(proposed.size) { proposed[it].y })
+            return performTouchTransition(listOf(move,edge),previous,proposed.associate { it.id to it.owner })
+        }
+        if(!flushPendingMove()) return false
+        if (contacts.isEmpty()) downTime = now()
         contacts.add(index,StoredContact(owner, id, x, y))
         val action = if (contacts.size == 1) DOWN else POINTER_DOWN or (index shl 8)
         return deliver(action)
@@ -196,6 +227,10 @@ class TouchComposer(
 
     @Synchronized fun move(owner: String, x: Float, y: Float): Boolean {
         if (!ready(owner, x, y, continuingMove = true)) return false
+        // A MOVE caused by this control cannot overwrite the pending camera/joystick
+        // positions from before the control. Sample-to-sample motion outside the scope
+        // retains the existing coalescing rule.
+        if(controlBoundary && pendingMove && (!flushPendingMove() || paused)) return false
         val index = contactIndex(owner)
         if (index < 0) { lastError = "UNKNOWN_OWNER"; return false }
         val old = contacts[index]
@@ -207,6 +242,13 @@ class TouchComposer(
 
     @Synchronized fun end(owner: String): Boolean {
         if (paused) return false
+        val pendingIndex=contactIndex(owner)
+        if(pendingIndex>=0 && canCompactPendingMove()) {
+            val previous=submittedFrame()
+            val move=frame(MOVE)
+            val edge=frame(if(contacts.size==1) UP else POINTER_UP or (pendingIndex shl 8))
+            return performTouchTransition(listOf(move,edge),previous,contacts.associate { it.id to it.owner })
+        }
         if(!flushPendingMove()) return false
         val index = contactIndex(owner)
         if (index < 0) return true // Idempotent release after a duplicate physical up.
@@ -250,6 +292,7 @@ class TouchComposer(
 
     /** Global cancellation is reserved for stopping/recovering the entire session. */
     @Synchronized fun cancelAll(): Boolean {
+        controlBoundary=false
         if(!recoveryCandidateKnown) { paused=true;releaseUnverified=true;return false }
         discardMoveBatch()
         paused = true
@@ -321,6 +364,48 @@ class TouchComposer(
         for(contact in contacts) { contact.submittedX=contact.x;contact.submittedY=contact.y }
     }
 
+    private fun hasChangedPositions():Boolean {
+        for(index in contacts.indices) {
+            val contact=contacts[index]
+            if(contact.x!=contact.submittedX || contact.y!=contact.submittedY) return true
+        }
+        return false
+    }
+
+    private fun canCompactPendingMove():Boolean = transitionSink!=null && pendingMove && hasChangedPositions()
+
+    /** Snapshot of the only admitted state if the compact call stops before its first attempt. */
+    private fun submittedFrame()=TouchFrame(MOVE,downTime,lastEventTime,
+        IntArray(contacts.size) { contacts[it].id },FloatArray(contacts.size) { contacts[it].submittedX },
+        FloatArray(contacts.size) { contacts[it].submittedY })
+
+    private fun performTouchTransition(plannedFrames:List<TouchFrame>,previous:TouchFrame,owners:Map<Int,String>):Boolean {
+        val sequence=TouchTransitionSequence(plannedFrames)
+        // No unsubmitted MOVE may be replayed by reentrant cancellation or a later drain.
+        pendingMove=false
+        val result=try { requireNotNull(transitionSink).invoke(sequence) }
+            catch(_:Exception) { TouchTransitionResult(0,0,progressKnown=false) }
+        if(!result.progressKnown) {
+            moveBatch=false;controlBoundary=false;paused=true;releaseUnverified=true;recoveryCandidateKnown=false
+            lastError="TOUCH_TRANSITION_PROGRESS_UNKNOWN"
+            return false
+        }
+        val possible=result.attemptedCount.takeIf { it>result.acceptedCount }
+        val last=(possible ?: result.acceptedCount)-1
+        val candidate=if(last<0) previous else if(possible!=null) plannedFrames[last]
+            else TouchTransitionSequence.postEvent(plannedFrames[last])
+        contacts.clear()
+        if(candidate!=null) {
+            downTime=candidate.downTime
+            for(index in candidate.ids.indices) {
+                contacts+=StoredContact(requireNotNull(owners[candidate.ids[index]]),candidate.ids[index],candidate.xs[index],candidate.ys[index])
+            }
+        }
+        recordSubmittedPositions()
+        if(result.acceptedCount==2) { lastError=null;return true }
+        return failPossibleStream()
+    }
+
     private fun flushPendingMove():Boolean {
         if(!pendingMove) return !paused
         // Clear before entering the sink: an ambiguous reply must retain the attempted
@@ -328,12 +413,7 @@ class TouchComposer(
         pendingMove=false
         // Integration can return every finger to its submitted position within one batch.
         // No movement remains to publish, just as move() suppresses an unchanged position.
-        var changed=false
-        for(index in contacts.indices) {
-            val contact=contacts[index]
-            if(contact.x!=contact.submittedX || contact.y!=contact.submittedY) { changed=true;break }
-        }
-        if(!changed) return !paused
+        if(!hasChangedPositions()) return !paused
         return deliver(MOVE)
     }
 
@@ -344,7 +424,7 @@ class TouchComposer(
     }
 
     private fun failPossibleStream():Boolean {
-        pendingMove=false;moveBatch=false
+        pendingMove=false;moveBatch=false;controlBoundary=false
         paused = true
         // A binder failure can occur after delivery. Cancel the possible full pointer set.
         val cancelled = contacts.isEmpty() || send(frame(CANCEL))

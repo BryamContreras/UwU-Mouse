@@ -14,10 +14,22 @@ import sys
 PHYSICAL_STAGES = {
     "native_capture_binder_receipt", "native_camera_direct_dispatch",
     "native_camera_main_dispatch", "mapper_mouse_worker_latest_sample",
-    "native_motion_current_receipt", "native_key_receipt",
+    "native_motion_current_receipt", "native_key_receipt", "native_gameplay_direct_dispatch",
 }
 SUBMIT = "injectionSubmit_syntheticComposition"
 ACK = "injectionAck_syntheticComposition"
+TRANSITION_SUBMIT = "touchTransitionSubmit_syntheticComposition"
+TRANSITION_ACK = "touchTransitionAck_syntheticComposition"
+RPC_SUBMITS = {SUBMIT, TRANSITION_SUBMIT}
+RPC_COUNTERS = ("touchTransitionBatches", "touchTransitionFailures", "touchTransitionUnknownProgress",
+                "backendTouchTransitionBatches", "backendTouchTransitionFrames",
+                "backendTouchTransitionFocusQueries", "backendTouchTransitionFocusReuses")
+RUNTIME_FIELDS = RPC_COUNTERS + ("touchTransitionBatchSupported", "touchTransitionIpcMs",
+                               "backendTouchTransitionLastDurationMs", "sessionIdleBudgetMs", "sessionIdleRemainingMs")
+TRANSPORT_COUNTERS = ("batches", "samples", "cameraDirectBatches", "cameraMainBatches", "cameraStaleBatches",
+                      "gameplayDirectMouseFrames", "gameplayDirectKeyFrames", "gameplayStaleFrames",
+                      "gameplayOverflowFrames", "mainDrains", "mainDrainedCallbacks")
+TRANSPORT_GAUGES = ("pendingCallbacks", "pendingSamples", "mainCallbackQueueDepth", "mainCallbackQueueMaxDepth", "mainMaxDrainMs")
 LIMITATIONS = [
     "Kernel timestamps exclude peripheral latency; worker timing uses only the latest sample of each consumed entry.",
     "Submit/ACK timing starts at synthetic touch composition, not physical input, and does not prove game processing or display presentation.",
@@ -26,6 +38,8 @@ LIMITATIONS = [
     "Probe recording adds overhead. Session diagnostic percentiles are rolling, overlapping stages and must not be added.",
     "If the ring overwrote rows, probe statistics describe the retained tail, not the entire requested interval.",
     "M1 press/release rates use the entire diagnostic endpoint interval, which can exceed both the probe recording and its retained tail. POINTER_DOWN/UP counts also include keys and other mapped contacts.",
+    "Ordinary injection RPCs contain one frame; compact touch-transition RPCs contain two planned frames and may finish partially or with unknown progress. Their timing distributions are separate. Compacting changes the ordinary-event population, so its median alone is not total injection performance.",
+    "Synthetic application/callback fixtures do not establish USB, kernel capture, or physical Binder ingress latency, even when they reuse stage names from the native input path.",
 ]
 PRECISION_COUNTERS = ("activeSamples", "attenuatedSamples", "flickSamples", "invalidSamples", "timingResets", "reversals")
 
@@ -238,17 +252,22 @@ def pair_physical(rows):
             "scope": "Unique same sourceTimeNanos at Binder receipt and latest-sample worker stage; excludes capture before Binder and injection after worker."}
 
 
-def pair_injection(rows):
+def pair_operation(rows, submit_stage, ack_stage, scope):
     pending = None
     values, by_action = [], defaultdict(list)
     counts = Counter()
+    stages = Counter()
     for row in rows:
         stage = row.get("stage")
-        if stage == SUBMIT:
+        if stage == submit_stage:
+            stages["submitRecords"] += 1
+            stages["validSubmitTimingRecords"] += int(valid_time(row))
             if pending is not None:
                 counts["submitWithoutAck"] += 1
             pending = row
-        elif stage == ACK:
+        elif stage == ack_stage:
+            stages["ackRecords"] += 1
+            stages["validAckTimingRecords"] += int(valid_time(row))
             if pending is None:
                 counts["ackWithoutSubmit"] += 1
                 continue
@@ -270,24 +289,65 @@ def pair_injection(rows):
             value = (row["observedTimeNanos"] - submit["observedTimeNanos"]) / 1e6
             values.append(value)
             by_action[str(row["action"] & 255)].append(value)
+        elif stage in RPC_SUBMITS and pending is not None:
+            # Both RPC types use the same serialized composer. A different operation's
+            # submit is a boundary, not permission to match an earlier dangling submit.
+            counts["submitInterruptedByOtherRpc"] += 1
+            pending = None
     if pending is not None:
         counts["submitWithoutAck"] += 1
     return {"submitToAckMs": summary(values),
             "byMaskedAction": {key: summary(value) for key, value in sorted(by_action.items())},
-            "pairing": dict(counts), "scope": "Sequential synthetic composition submit/ACK pairs. ACK may be a rejection; records do not contain its result."}
+            "stageRecordCounts": {key: stages[key] for key in ("submitRecords", "ackRecords", "validSubmitTimingRecords", "validAckTimingRecords")},
+            "pairing": dict(counts), "scope": scope}
+
+
+def pair_injection(rows):
+    return pair_operation(rows, SUBMIT, ACK,
+        "Ordinary one-frame synthetic composition RPCs only; compact transitions are excluded. ACK may be a rejection. Compacting changes this ordinary-event population, so its median is not the latency of all input events or all injection RPCs.")
+
+
+def pair_touch_transition(rows):
+    return pair_operation(rows, TRANSITION_SUBMIT, TRANSITION_ACK,
+        "One compact RPC for two planned events, MOVE then contact edge; each still has its own worker ACK. Source time is first MOVE composition and action identifies the edge. A return may have partial/unknown progress; records do not encode success or per-frame timing, so do not divide by two or pool with ordinary one-frame RPCs.")
+
+
+def input_origin(manifest):
+    declared = manifest.get("sourceOrigin", manifest.get("inputSource"))
+    synthetic = (manifest.get("syntheticInputConfirmed") is True or manifest.get("syntheticConfirmed") is True
+                 or declared in ("synthetic", "synthetic-app", "synthetic-callback"))
+    physical = manifest.get("physicalInputConfirmed") is True
+    return {"origin": "synthetic-app" if synthetic else "physical" if physical else "unconfirmed",
+            "syntheticConfirmed": synthetic, "physicalConfirmed": physical and not synthetic,
+            "conflictingDeclarations": synthetic and physical}
+
+
+def runtime_diagnostics(before, after):
+    transport_before = nested(before, "windowContext", "motionTransport") or {}
+    transport_after = nested(after, "windowContext", "motionTransport") or {}
+    return {
+        "before": {key: before.get(key) for key in RUNTIME_FIELDS},
+        "after": {key: after.get(key) for key in RUNTIME_FIELDS},
+        "counterDeltas": {key: counter_delta(before, after, key) for key in RPC_COUNTERS},
+        "nativeTransportBefore": {key: transport_before.get(key) for key in TRANSPORT_COUNTERS + TRANSPORT_GAUGES},
+        "nativeTransportAfter": {key: transport_after.get(key) for key in TRANSPORT_COUNTERS + TRANSPORT_GAUGES},
+        "nativeTransportCounterDeltas": {key: counter_delta(transport_before, transport_after, key) for key in TRANSPORT_COUNTERS},
+        "scope": "Counters span diagnostic endpoints; missing metadata is null. Idle budget/remaining, queue maxima and duration values are snapshots, not counter deltas. Percentiles are independent rolling buffers and must not be added or subtracted.",
+    }
 
 
 def analyze(before, after, start, stop, rows, manifest=None):
     manifest = manifest or {}
     errors = validate_export(start, stop, rows)
-    physical, synthetic, other = {}, {}, {}
+    origin = input_origin(manifest)
+    physical, synthetic_source, synthetic, other = {}, {}, {}, {}
     if any(not isinstance(row, dict) or not isinstance(row.get("stage"), str) for row in rows):
         raise ValueError("each record must be an object with a stage string")
     for stage in sorted({row.get("stage", "unknown") for row in rows}):
         matching = [row for row in rows if row.get("stage") == stage]
         values = [(row["observedTimeNanos"] - row["sourceTimeNanos"]) / 1e6
                   for row in matching if valid_time(row)]
-        target = physical if stage in PHYSICAL_STAGES else synthetic if stage.endswith("_syntheticComposition") else other
+        target = (synthetic_source if origin["syntheticConfirmed"] else physical) if stage in PHYSICAL_STAGES else synthetic if stage.endswith("_syntheticComposition") else other
         target[stage] = dict(summary(values), invalidTimingCount=len(matching) - len(values))
     endpoints = endpoint_checks(before, after)
     ended_early = (isinstance(stop.get("stoppedTimeNanos"), int)
@@ -295,21 +355,36 @@ def analyze(before, after, start, stop, rows, manifest=None):
                    and stop["stoppedTimeNanos"] < stop["deadlineTimeNanos"])
     complete = not errors and stop.get("overwrittenCount") == 0 and not ended_early
     workload = workload_checks(before, after, endpoints, manifest)
-    physical_pairs = pair_physical(rows) if not errors else None
+    source_pairs = pair_physical(rows) if not errors else None
+    physical_pairs = None if origin["syntheticConfirmed"] else source_pairs
+    synthetic_source_pairs = source_pairs if origin["syntheticConfirmed"] else None
+    if synthetic_source_pairs is not None:
+        synthetic_source_pairs["scope"] = "Synthetic app/callback source timestamp match only; this fixture does not measure kernel capture or physical Binder ingress."
     injection_pairs = pair_injection(rows) if not errors else None
+    transition_pairs = pair_touch_transition(rows) if not errors else None
     physical_pair_count = physical_pairs["binderReceiptToWorkerMs"]["count"] if physical_pairs is not None else 0
     injection_pair_count = injection_pairs["submitToAckMs"]["count"] if injection_pairs is not None else 0
-    timing_available = physical_pair_count > 0 and injection_pair_count > 0
+    transition_pair_count = transition_pairs["submitToAckMs"]["count"] if transition_pairs is not None else 0
+    synthetic_worker_count = synthetic_source.get("mapper_mouse_worker_latest_sample", {}).get("count", 0)
+    source_timing_available = synthetic_worker_count > 0 if origin["syntheticConfirmed"] else physical_pair_count > 0
+    timing_available = source_timing_available and injection_pair_count + transition_pair_count > 0
+    diagnostics = runtime_diagnostics(before, after)
+    compact_observed = ((transition_pairs is not None and transition_pairs["stageRecordCounts"]["submitRecords"] > 0)
+                        or any((diagnostics["counterDeltas"].get(key) or 0) > 0 for key in
+                               ("touchTransitionBatches", "backendTouchTransitionBatches")))
     return {
         "schemaVersion": 1, "manifest": manifest, "probeExportValid": not errors,
         "probeExportErrors": errors, "endpoints": endpoints,
         "workloadValidation": workload,
-        "physicalInputConfirmed": manifest.get("physicalInputConfirmed") is True,
+        "inputOrigin": origin, "physicalInputConfirmed": origin["physicalConfirmed"],
         "timingAvailable": timing_available,
         "timingCoverage": {"physicalBinderWorkerPairs": physical_pair_count,
                            "syntheticSubmitAckPairs": injection_pair_count,
-                           "scope": "At least one valid pair of each type is required for comparison; counts do not establish statistical confidence."},
-        "comparableInternalTiming": not errors and endpoints["stableFreshEndpoints"] and timing_available,
+                           "syntheticTouchTransitionPairs": transition_pair_count,
+                           "totalSyntheticRpcPairs": injection_pair_count + transition_pair_count,
+                           "syntheticSourceWorkerSamples": synthetic_worker_count,
+                           "scope": "Requires source/worker timing and at least one ordinary or compact RPC pair. Counts do not establish statistical confidence; RPC types remain separate populations."},
+        "comparableInternalTiming": not errors and endpoints["stableFreshEndpoints"] and timing_available and not origin["conflictingDeclarations"],
         "fullRequestedProbeWindowRetained": complete,
         "recordingEndedBeforeDeadline": ended_early,
         "ring": {key: stop.get(key) for key in ("capacity", "totalRecorded", "storedCount", "overwrittenCount", "stopReason")},
@@ -318,8 +393,15 @@ def analyze(before, after, start, stop, rows, manifest=None):
         "probeRecordingIntervalMs": (stop["stoppedTimeNanos"] - stop["startedTimeNanos"]) / 1e6 if not errors else None,
         "retainedObservedSpanMs": ((max(row["observedTimeNanos"] for row in rows) - min(row["observedTimeNanos"] for row in rows)) / 1e6) if rows and not errors else None,
         "physicalSourceStageMs": physical, "syntheticCompositionStageMs": synthetic,
+        "syntheticSourceStageMs": synthetic_source,
+        "sourceTimingScope": ("Explicit synthetic app/callback fixture; source/worker times exclude physical USB, kernel capture and native Binder ingress."
+                              if origin["syntheticConfirmed"] else
+                              "Stage names describe native/kernel source timestamps; physical origin requires the separate operator confirmation and is not proved by names alone."),
         "otherStageMs": other, "physicalPairing": physical_pairs,
-        "injectionPairing": injection_pairs,
+        "syntheticSourcePairing": synthetic_source_pairs,
+        "injectionPairing": injection_pairs, "touchTransitionPairing": transition_pairs,
+        "runtimeDiagnostics": diagnostics,
+        "compactTransitionsObserved": compact_observed,
         "rollingDiagnosticsAfter": {key: after.get(key) for key in (
             "queueMs", "ipcMs", "cameraDeliveryWaitMs", "backendFocusMs", "backendPipeMs",
             "backendFocusCount", "backendPipeCount", "cameraMotionFreshness", "queueDiagnostics")},
@@ -367,9 +449,11 @@ def compare(reports):
             "sameDeclaredDeviceAndApplication": len(set(device_signatures)) <= 1 if all(all(v is not None for v in pair) for pair in device_signatures) else None,
             "allStableValidInternalTiming": comparable,
             "allPhysicalInputConfirmed": physical,
+            "sameSourceOrigin": len({r["inputOrigin"]["origin"] for r in reports}) <= 1,
+            "compactTransitionsObservedInAnyTrial": any(r["compactTransitionsObserved"] for r in reports),
             "allFullProbeWindowsRetained": all(r["fullRequestedProbeWindowRetained"] for r in reports),
             "allDeclaredWorkloadsVerified": all(r["workloadValidation"]["matchesDeclaredWorkload"] is True for r in reports),
-            "scope": "Each trial is reported independently; null checks lack metadata. Profile ID is not a settings hash. Match APK/device/profile/rate/thermal conditions before attributing a before/after difference."}
+            "scope": "Each trial is reported independently; null checks lack metadata. Profile ID is not a settings hash. Match APK/device/profile/rate/thermal conditions before attributing a before/after difference. Ordinary one-frame and compact two-event RPCs remain separate; changes to the ordinary-event population prevent interpreting its median alone as total injection performance. Synthetic fixtures do not measure physical kernel/USB latency."}
 
 
 def main(argv=None):

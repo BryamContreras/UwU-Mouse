@@ -2,6 +2,14 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.12+50 — unreleased
+
+- Admit ordinary gameplay keys and mouse buttons directly to the ordered mapper queue when their capture, session and pointer ownership are current. Menu, cursor, modifier and complex-action transitions retain their main-thread barriers.
+- Submit an already available camera MOVE and following contact edge in one bounded Binder call. Android still receives two ordered events and each event retains its own worker acknowledgment, focus admission and recovery checkpoint. Joystick MOVE boundaries remain unchanged.
+- Share a recent positive focus observation only within that two-event operation; slow queries and changed window metadata force fresh admission. Pausing cancels the next unsent progress checkpoint without waiting for the active call's monitor.
+- Replace the absolute 30-minute session cutoff with 30 minutes of inactivity since the last accepted input. Background heartbeats do not extend it, and expired or closed sessions cannot be revived by late acknowledgments.
+- Add an isolated InputLab workload and separate composite-operation measurements. Synthetic timestamps are labeled explicitly and are not physical mouse latency.
+
 ## 0.3.11+49 — unreleased
 
 - Share one immediately scheduled, bounded main-thread drain for native callbacks that require UI ownership. Preserve native event order, button/key barriers and capture checks while avoiding a Handler message for every deferred sample.

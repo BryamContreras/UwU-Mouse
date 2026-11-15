@@ -122,6 +122,25 @@ class InputQueueBuffer {
         return true
     }
 
+    /** Reserve a whole native report before publishing its movement and ordered button edges. */
+    fun offerMouseReport(dx:Float,dy:Float,buttons:Int,changed:Int,enqueuedAtNanos:Long,generation:Long,
+                         sampleTimeNanos:Long,pointerEpoch:Int):Boolean {
+        if(!dx.isFinite() || !dy.isFinite() || buttons and 31.inv()!=0 || changed and 31.inv()!=0) return false
+        val moving=dx!=0f || dy!=0f
+        val required=(if(moving) 1 else 0)+Integer.bitCount(changed)
+        if(required>CAPACITY-size) return false
+        // The owner holds its queue monitor until every entry is present. No consumer can
+        // wake between the displacement and the button that ended this physical report.
+        if(moving) check(offer(3,pointerEpoch,dx,dy,enqueuedAtNanos,generation,sampleTimeNanos))
+        var button=1
+        while(button<=16) {
+            if(changed and button!=0)
+                check(offer(2,button,if(buttons and button!=0) 1f else 0f,0f,enqueuedAtNanos,generation))
+            button=button shl 1
+        }
+        return true
+    }
+
     private fun mergeRelative(last: Int, x: Float, y: Float, sampleTimeNanos: Long): Boolean {
         if (preserveCameraSamples) return false // Precision filtering needs each original displacement/time.
         if (!cameraMergeEnabled) {

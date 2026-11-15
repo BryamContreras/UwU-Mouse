@@ -1,5 +1,13 @@
 # Cambios de UwU Mouse
 
+## 0.3.12+50 — en validación
+
+- Las teclas y botones de juego ordinarios pueden entrar directamente en la cola ordenada del motor cuando conservan la captura, sesión y propietario del puntero. Menú, cursor, modificadores y acciones complejas mantienen sus barreras de interfaz.
+- Un MOVE de cámara ya pendiente y el siguiente borde de contacto comparten una llamada Binder acotada. Android sigue recibiendo dos eventos ordenados, cada uno con su confirmación y control de recuperación. Los movimientos del joystick conservan sus límites anteriores.
+- La observación positiva de foco se comparte únicamente dentro de esa operación de dos eventos y con vigencia de 8 ms desde el inicio de la consulta. Pausar impide el siguiente envío aún no iniciado sin esperar al monitor de la llamada activa.
+- Se sustituye el corte absoluto de 30 minutos por 30 minutos de inactividad desde la última entrada aceptada. Los latidos no renuevan el plazo y una confirmación tardía no revive una sesión cerrada o vencida.
+- Se añade una carga aislada de InputLab y se separan las medidas de operaciones compuestas. Sus marcas sintéticas no representan latencia física del mouse.
+
 ## 0.3.11+49 — en validación
 
 - Los callbacks nativos que requieren la interfaz comparten un drenaje inmediato y acotado, conservando el orden nativo y las barreras de botones y teclas. Reduce mensajes de Handler sin esperar a completar un lote.
