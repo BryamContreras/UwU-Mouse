@@ -80,14 +80,68 @@ class PrecisionAimFilterTest {
         }
     }
 
-    @Test fun releaseCannotReplaySuppressedDisplacementAndNextPressStartsFresh() {
+    @Test fun releaseCannotReplaySuppressedDisplacementAndNextPressKeepsPhysicalCadence() {
         val filter=firing()
         repeat(10) { filter.filterX(1f,it*8_000_000L) }
         filter.setFiring(false)
         exact(-1f,filter.filterX(-1f,81_000_000L))
         exact(0f,filter.filterX(0f,82_000_000L))
         filter.setFiring(true)
-        exact(firing().filterX(1f,83_000_000L),filter.filterX(1f,83_000_000L))
+        exact(1f,filter.filterX(1f,83_000_000L))
+        assertEquals(true,filter.snapshot()["firing"])
+        assertEquals(1f,filter.snapshot()["lastGain"])
+    }
+
+    @Test fun repeatedClicksAt250And1000HertzDoNotAttenuateTheFirstFastReport() {
+        for((interval,dx) in listOf(4_000_000L to 4f,1_000_000L to 1f)) {
+            val filter=PrecisionAimFilter().apply { configure(true) }
+            var time=0L
+            exact(dx,filter.filterX(dx,time))
+            repeat(100) { index ->
+                val input=if(index%2==0) dx else -dx
+                filter.setFiring(true)
+                time+=interval
+                exact(input,filter.filterX(input,time))
+                filter.setFiring(false)
+                time+=interval
+                exact(-input,filter.filterX(-input,time))
+            }
+            assertEquals(100L,filter.snapshot()["flickSamples"])
+            assertEquals(0L,filter.snapshot()["attenuatedSamples"])
+            assertEquals(false,filter.snapshot()["firing"])
+        }
+    }
+
+    @Test fun aNewPressUsesCurrentMediumSpeedWithoutThePreviousGainOrDirection() {
+        val filter=firing()
+        assertEquals(.06f,filter.filterX(.1f,0L),.000001f)
+        filter.setFiring(false)
+        exact(2f,filter.filterX(2f,4_000_000L))
+        filter.setFiring(true)
+        // Two units in four milliseconds are 500 units/s, regardless of the earlier hold.
+        assertEquals(1.4074074f,filter.filterX(2f,8_000_000L),.000001f)
+        filter.setFiring(false)
+        exact(-2f,filter.filterX(-2f,12_000_000L))
+        filter.setFiring(true)
+        assertEquals(-1.4074074f,filter.filterX(-2f,16_000_000L),.000001f)
+        assertEquals(0L,filter.snapshot()["reversals"])
+    }
+
+    @Test fun aQuietIntervalBetweenClicksKeepsTheLegacyStartupRatherThanAddingDamping() {
+        val filter=PrecisionAimFilter().apply { configure(true) }
+        exact(8f,filter.filterX(8f,0L))
+        filter.setFiring(true)
+        exact(8f,filter.filterX(8f,1_000_000L))
+        filter.setFiring(false)
+        exact(8f,filter.filterX(8f,2_000_000L))
+        filter.setFiring(true)
+        exact(8f,filter.filterX(8f,52_000_000L))
+        assertEquals(0L,filter.snapshot()["timingResets"])
+
+        // Within an uninterrupted hold, retain the existing real-interval classification.
+        val held=firing()
+        exact(8f,held.filterX(8f,0L))
+        assertEquals(4.8f,held.filterX(8f,50_000_000L),.000001f)
     }
 
     @Test fun pauseOrModeResetClearsTriggerOwnershipAndTimingHistory() {
@@ -97,7 +151,7 @@ class PrecisionAimFilterTest {
         assertEquals(false,filter.snapshot()["firing"])
         exact(-1f,filter.filterX(-1f,1_000_000L))
         filter.setFiring(true)
-        exact(firing().filterX(1f,2_000_000L),filter.filterX(1f,2_000_000L))
+        exact(1f,filter.filterX(1f,2_000_000L))
         filter.configure(false)
         exact(1f,filter.filterX(1f,3_000_000L))
         assertEquals(false,filter.snapshot()["enabled"])
@@ -105,12 +159,58 @@ class PrecisionAimFilterTest {
         assertEquals(0L,filter.snapshot()["activeSamples"])
     }
 
-    @Test fun zeroClearsTheEstimateAndCannotCreateAnyAutonomousMovement() {
+    @Test fun zeroClearsTheEstimateButKeepsPhysicalCadenceWithoutAutonomousMovement() {
         val filter=firing()
         repeat(8) { filter.filterX(1f,it*8_000_000L) }
         exact(-0f,filter.filterX(-0f,65_000_000L))
         exact(0f,filter.filterX(0f,66_000_000L))
-        exact(firing().filterX(-1f,67_000_000L),filter.filterX(-1f,67_000_000L))
+        exact(-1f,filter.filterX(-1f,67_000_000L))
+    }
+
+    @Test fun fullResetAndMotionDiscontinuityDropCadenceWithoutRestoringTriggerOwnership() {
+        val filter=PrecisionAimFilter().apply { configure(true) }
+        exact(1f,filter.filterX(1f,0L))
+        filter.setFiring(true)
+        exact(1f,filter.filterX(1f,1_000_000L))
+        filter.reset()
+        assertEquals(false,filter.snapshot()["firing"])
+        filter.setFiring(true)
+        exact(firing().filterX(1f,2_000_000L),filter.filterX(1f,2_000_000L))
+        exact(1f,filter.filterX(1f,3_000_000L))
+        filter.discardMotionHistory()
+        assertEquals(true,filter.snapshot()["firing"])
+        exact(firing().filterX(1f,4_000_000L),filter.filterX(1f,4_000_000L))
+    }
+
+    @Test fun invalidPhysicalTimesBetweenClicksCannotSeedTheNextPress() {
+        for(time in listOf(Long.MIN_VALUE,9_000_000L,10_000_000L,111_000_000L)) {
+            val filter=PrecisionAimFilter().apply { configure(true) }
+            exact(1f,filter.filterX(1f,10_000_000L))
+            exact(1f,filter.filterX(1f,time))
+            filter.setFiring(true)
+            val nextTime=maxOf(time,10_000_000L)+1_000_000L
+            exact(firing().filterX(1f,nextTime),filter.filterX(1f,nextTime))
+            assertEquals(0L,filter.snapshot()["timingResets"])
+        }
+    }
+
+    @Test fun nonFiniteInputBetweenClicksPreservesItsBitsButDropsPhysicalCadence() {
+        for(value in listOf(Float.POSITIVE_INFINITY,Float.NEGATIVE_INFINITY,Float.fromBits(0x7fc00042))) {
+            val filter=PrecisionAimFilter().apply { configure(true) }
+            exact(1f,filter.filterX(1f,0L))
+            exact(value,filter.filterX(value,1_000_000L))
+            filter.setFiring(true)
+            exact(firing().filterX(1f,2_000_000L),filter.filterX(1f,2_000_000L))
+            assertEquals(0L,filter.snapshot()["invalidSamples"])
+        }
+    }
+
+    @Test fun zeroWithInvalidTimeCannotKeepTheOldPhysicalCadence() {
+        val filter=firing()
+        filter.filterX(1f,10_000_000L)
+        exact(-0f,filter.filterX(-0f,10_000_000L))
+        exact(firing().filterX(1f,11_000_000L),filter.filterX(1f,11_000_000L))
+        assertEquals(1L,filter.snapshot()["timingResets"])
     }
 
     @Test fun activeNonFiniteSamplesAreRejectedToZeroAndClearState() {

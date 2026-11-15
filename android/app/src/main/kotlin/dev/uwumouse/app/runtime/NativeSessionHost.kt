@@ -48,6 +48,33 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     val nativeCaptureError:String get()=CaptureFailureMessages.describe(captureFailure)
     private val motionDispatch=NativeMotionDispatchGate()
     private val pendingNativeSamples=AtomicInteger()
+    private val nativeMainCallbacks=NativeCallbackQueue<(Boolean)->Unit>()
+    @Volatile private var nativeMainDrains=0L
+    @Volatile private var nativeMainDrainedCallbacks=0L
+    @Volatile private var nativeMainMaxDrainNanos=0L
+    private val drainNativeMain:Runnable=object:Runnable {
+        override fun run() {
+            val started=System.nanoTime()
+            nativeMainDrains++
+            try {
+                // Yield to lifecycle/UI work without waiting to fill a batch. No callback
+                // overtakes another native callback. UI messages posted between arrivals
+                // may run after this drain budget; every callback rechecks current state.
+                for(ignored in 0 until 64) {
+                    val callback=nativeMainCallbacks.poll() ?: break
+                    callback(true)
+                    nativeMainDrainedCallbacks++
+                    if(System.nanoTime()-started>=4_000_000L) break
+                }
+            } finally {
+                nativeMainMaxDrainNanos=maxOf(nativeMainMaxDrainNanos,System.nanoTime()-started)
+                if(nativeMainCallbacks.finishDrain() && !main.post(this)) {
+                    abandonNativeMainCallbacks()
+                    nativeCallback.onCaptureLost(nativeCaptureId,"main_thread_unavailable")
+                }
+            }
+        }
+    }
     private var rateCapabilityBinder:android.os.IBinder?=null
     private var nativeRateSupported=false
     private var appliedMouseRateHz=0
@@ -95,15 +122,17 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 pendingNativeSamples.addAndGet(-size)
                 onCaptureLost(captureId,"native_callback_queue_overflow");return
             }
-            if(!main.post {
+            if(!enqueueNativeMain { deliver ->
                 try {
-                    if(captureId==nativeCaptureId) {
+                    if(deliver && captureId==nativeCaptureId) {
                         receivedMotionBatches++;receivedBatchedSamples+=size
                         receiveMotionBatch(batch,deviceIds,devicePaths,wheel,buttonState)
                     }
-                } finally { pendingNativeSamples.addAndGet(-size);motionDispatch.complete(nativeCameraRoute()) }
+                } finally {
+                    pendingNativeSamples.addAndGet(-size)
+                    motionDispatch.complete(if(deliver) nativeCameraRoute() else null)
+                }
             }) {
-                pendingNativeSamples.addAndGet(-size);motionDispatch.complete(null)
                 onCaptureLost(captureId,"main_thread_unavailable")
             }
         }
@@ -125,12 +154,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             if(!motionDispatch.defer()) {
                 onCaptureLost(captureId,"native_callback_queue_overflow");return
             }
-            if(!main.post {
+            if(!enqueueNativeMain { deliver ->
                 try {
-                    if(captureId==nativeCaptureId) receivePhysical(kind,eventTimeNanos,deviceId,devicePath,
+                    if(deliver && captureId==nativeCaptureId) receivePhysical(kind,eventTimeNanos,deviceId,devicePath,
                         relX,relY,wheel,buttonState,keyScanCode,keyDown,keyRepeat)
-                } finally { motionDispatch.complete(nativeCameraRoute()) }
-            }) { motionDispatch.complete(null);onCaptureLost(captureId,"main_thread_unavailable") }
+                } finally { motionDispatch.complete(if(deliver) nativeCameraRoute() else null) }
+            }) { onCaptureLost(captureId,"main_thread_unavailable") }
         }
         override fun onCaptureLost(captureId:Long,reason:String) {
             if(startingNativeCapture) {
@@ -587,6 +616,20 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(captureFailure.isEmpty()) scheduleSourceChange()
     }
 
+    /** Main owns buttons/keys/UI; only amortize Handler scheduling for its ordered callbacks. */
+    private fun enqueueNativeMain(callback:(Boolean)->Unit):Boolean = when(nativeMainCallbacks.offer(callback)) {
+        NativeCallbackQueue.Offer.QUEUED -> true
+        NativeCallbackQueue.Offer.SCHEDULE -> if(main.post(drainNativeMain)) true else {
+            abandonNativeMainCallbacks();false
+        }
+        NativeCallbackQueue.Offer.FULL -> { callback(false);false }
+    }
+
+    private fun abandonNativeMainCallbacks() {
+        // Cancellation only balances counters/gate reservations; no UI or input is delivered.
+        for(callback in nativeMainCallbacks.abandon()) callback(false)
+    }
+
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
@@ -919,6 +962,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
                 "cameraDirectBatches" to directCameraBatches,"cameraMainBatches" to mainCameraBatches,
                 "cameraStaleBatches" to staleCameraBatches,
+                "mainCallbackQueueDepth" to nativeMainCallbacks.metrics().depth,
+                "mainCallbackQueueMaxDepth" to nativeMainCallbacks.metrics().maxDepth,
+                "mainDrains" to nativeMainDrains,"mainDrainedCallbacks" to nativeMainDrainedCallbacks,
+                "mainMaxDrainMs" to nativeMainMaxDrainNanos/1e6,
                 "pendingSamples" to pendingNativeSamples.get()),
             "unknownKeys" to mapOf("ignored" to ignoredUnknownKeys,"lastScanCode" to lastUnknownScanCode),
             "keyLayouts" to keyMap.diagnostics(),

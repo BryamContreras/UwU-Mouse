@@ -1,5 +1,13 @@
 # Cambios de UwU Mouse
 
+## 0.3.11+49 — en validación
+
+- Los callbacks nativos que requieren la interfaz comparten un drenaje inmediato y acotado, conservando el orden nativo y las barreras de botones y teclas. Reduce mensajes de Handler sin esperar a completar un lote.
+- Mira precisa conserva el tiempo físico reciente entre disparos, limpiando ganancia y dirección en cada pulsación. Los arranques dispersos conservan el intervalo nominal anterior; pausa, discontinuidad y tiempos inválidos limpian el historial.
+- Nuevas ventanas de medición física y análisis separado de entrada original, motor y confirmación de inyección. Expone cobertura del buffer, clics realmente observados y contaminación de la carga solicitada.
+
+La ruta de inyección continúa siendo síncrona. Su confirmación no demuestra que el juego haya procesado el evento ni presentado la imagen. Protocolo y límites en [medición de cámara](docs/PVP_LATENCY.md).
+
 ## 0.3.8+46 — 2026-11-10
 
 - Se añaden iconos a las opciones de Sistema, apariencia, editor, perfiles y activación; se corrigen iconos de cerrar, actualizar y ajustes que mostraban un mando genérico.

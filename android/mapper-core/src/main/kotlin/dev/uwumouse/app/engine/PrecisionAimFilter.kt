@@ -20,8 +20,9 @@ class PrecisionAimFilter {
     @Volatile private var timingResets=0L
     @Volatile private var reversals=0L
     @Volatile private var lastGain=1f
-    private var haveSample=false
+    private var havePhysicalSample=false
     private var lastSampleTimeNanos=0L
+    private var haveEstimate=false
     private var direction=0
     private var smoothedSpeed=0.0
     // Polling intervals often repeat. Reuse the exact exponential, never an approximation.
@@ -38,7 +39,8 @@ class PrecisionAimFilter {
     }
 
     fun setFiring(held:Boolean) {
-        if(firing!=held) { firing=held; clearMotion() }
+        // A button edge changes damping ownership, not the physical mouse cadence.
+        if(firing!=held) { firing=held; clearEstimate() }
     }
 
     /** Pause, editing and mode changes clear both timing history and physical-trigger ownership. */
@@ -52,18 +54,31 @@ class PrecisionAimFilter {
 
     fun filterX(dx:Float,sampleTimeNanos:Long):Float {
         // Preserve the original Float, including signed zero/NaN payload, on the legacy path.
-        if(!enabled || !firing) return dx
-        activeSamples++
-        if(!dx.isFinite()) { invalidSamples++; clearMotion(); return 0f }
-        if(dx==0f) { clearMotion(); return dx }
-        if(sampleTimeNanos<0L || (haveSample && sampleTimeNanos<=lastSampleTimeNanos)) {
-            timingResets++; clearMotion(); return dx
+        if(!enabled) return dx
+        if(firing) activeSamples++
+        if(!dx.isFinite()) {
+            if(firing) invalidSamples++
+            clearMotion()
+            return if(firing) 0f else dx
         }
-        val elapsed=if(haveSample) sampleTimeNanos-lastSampleTimeNanos else NOMINAL_SAMPLE_NANOS
-        if(haveSample && elapsed>RESET_GAP_NANOS) {
-            timingResets++; clearMotion(); return dx
+        if(sampleTimeNanos<0L || (havePhysicalSample && sampleTimeNanos<=lastSampleTimeNanos)) {
+            if(firing) timingResets++
+            clearMotion(); return dx
         }
-        val dtNanos=elapsed.coerceIn(MIN_SAMPLE_NANOS,MAX_SAMPLE_NANOS)
+        val elapsed=if(havePhysicalSample) sampleTimeNanos-lastSampleTimeNanos else NOMINAL_SAMPLE_NANOS
+        if(havePhysicalSample && elapsed>RESET_GAP_NANOS) {
+            if(firing) timingResets++
+            clearMotion(); return dx
+        }
+        // Track valid source times between clicks, without retaining a firing gain or direction.
+        lastSampleTimeNanos=sampleTimeNanos;havePhysicalSample=true
+        if(!firing) return dx
+        if(dx==0f) { clearEstimate(); return dx }
+        // Warm starts require continuous motion within the existing nominal interval.
+        // A sparse first report cannot reveal the mouse polling rate; keep the legacy
+        // 8 ms startup interval instead of adding damping after a quiet button transition.
+        val estimateElapsed=if(haveEstimate) elapsed else minOf(elapsed,NOMINAL_SAMPLE_NANOS)
+        val dtNanos=estimateElapsed.coerceIn(MIN_SAMPLE_NANOS,MAX_SAMPLE_NANOS)
         if(dtNanos!=coefficientIntervalNanos) {
             coefficientSeconds=dtNanos/1_000_000_000.0
             coefficientAlpha=1.0-exp(-dtNanos/SMOOTHING_NANOS)
@@ -79,10 +94,10 @@ class PrecisionAimFilter {
         // nominal interval and real intervals on a fast mouse, changing the gain each sample.
         if(rawSpeed>=FLICK_SPEED) {
             flickSamples++;lastGain=1f;smoothedSpeed=FLICK_SPEED
-            direction=nextDirection;lastSampleTimeNanos=sampleTimeNanos;haveSample=true
+            direction=nextDirection;haveEstimate=true
             return dx
         }
-        if(!haveSample || changedDirection) smoothedSpeed=rawSpeed
+        if(!haveEstimate || changedDirection) smoothedSpeed=rawSpeed
         else smoothedSpeed+=(rawSpeed-smoothedSpeed)*coefficientAlpha
         direction=nextDirection
         // Slowdown responds immediately; speeding up blends until the flick threshold.
@@ -92,7 +107,7 @@ class PrecisionAimFilter {
         val gain=FINE_GAIN+(1.0-FINE_GAIN)*blend
         val outputMagnitude=(magnitude*gain).coerceIn(0.0,magnitude)
         val output=(if(nextDirection>0) outputMagnitude else -outputMagnitude).toFloat()
-        lastSampleTimeNanos=sampleTimeNanos; haveSample=true
+        haveEstimate=true
         lastGain=(outputMagnitude/magnitude).toFloat()
         if(abs(output)<abs(dx)) attenuatedSamples++
         return output
@@ -108,7 +123,12 @@ class PrecisionAimFilter {
     )
 
     private fun clearMotion() {
-        haveSample=false; lastSampleTimeNanos=0L; direction=0; smoothedSpeed=0.0; lastGain=1f
+        havePhysicalSample=false;lastSampleTimeNanos=0L
+        clearEstimate()
+    }
+
+    private fun clearEstimate() {
+        haveEstimate=false;direction=0;smoothedSpeed=0.0;lastGain=1f
     }
 
     companion object {

@@ -2,6 +2,14 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.11+49 — unreleased
+
+- Share one immediately scheduled, bounded main-thread drain for native callbacks that require UI ownership. Preserve native event order, button/key barriers and capture checks while avoiding a Handler message for every deferred sample.
+- Preserve recent physical sample timing between firing presses when precision aim is enabled. Reset its gain and direction on each button edge; sparse starts retain the previous nominal interval and pause or invalid input clears timing history.
+- Add repeatable physical camera/click measurement windows and an offline analyzer separating original input timing from synthetic composition and injection ACKs. Report retained-ring coverage, observed click rate and contaminated workload labels explicitly.
+
+These changes retain the synchronous injection path. An ACK does not establish game processing or display presentation. See [camera measurement](docs/PVP_LATENCY.md) for the protocol and limitations.
+
 ## 0.3.10+48 — unreleased
 
 - Adapt confirmed calibration to the game's current verified window in memory, so moving, maximizing and resizing desktop windows do not require rewriting the saved profile.

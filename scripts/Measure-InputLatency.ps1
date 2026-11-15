@@ -28,8 +28,15 @@ function Call-Mapper([string]$Method,[string[]]$Extra=@()) {
 }
 function Read-Receiver {
     # Optional, independent observer. It is never launched or installed by this script.
-    $wire=((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json 2>$null)-join '')
-    if($LASTEXITCODE -eq 0 -and $wire.StartsWith('{')) { return ($wire | ConvertFrom-Json) }
+    $receiverErrorPreference=$ErrorActionPreference
+    try {
+        # Windows PowerShell wraps native stderr as an error even when redirected.
+        # An absent optional laboratory must not abort a physical game measurement.
+        $ErrorActionPreference='Continue'
+        $wire=((& $adbPath -s $targetSerial shell run-as dev.uwumouse.inputlab cat files/input-lab-live.json 2>$null)-join '')
+        $receiverExitCode=$LASTEXITCODE
+    } finally { $ErrorActionPreference=$receiverErrorPreference }
+    if($receiverExitCode -eq 0 -and $wire.StartsWith('{')) { return ($wire | ConvertFrom-Json) }
     return $null
 }
 $before=Call-Mapper 'diagnostics'
