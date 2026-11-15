@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory=$true)][ValidateRange(0,2147483647)][int]$DisplayId,
     [ValidateRange(100,10000)][int]$DurationMs=4000,
     [switch]$Precision,
+    [switch]$Instrumented,
     [string]$Destination
 )
 . "$PSScriptRoot\AndroidTools.ps1"
@@ -67,8 +68,8 @@ function Save-DeviceText([string]$Name,[string[]]$Arguments) {
         ($value.stdout+$value.stderr+"`nexitCode="+$value.exitCode) | Set-Content -LiteralPath (Join-Path $Destination $Name) -Encoding UTF8
     } catch { $_.Exception.Message | Set-Content -LiteralPath (Join-Path $Destination $Name) -Encoding UTF8 }
 }
-function Read-Mapper([string]$Method='diagnostics',[int]$TimeoutMs=10000) {
-    $value=Invoke-LabAdb -Arguments @('shell','content','call','--uri',"content://$applicationId.backend",'--method',$Method) -TimeoutMs $TimeoutMs
+function Read-Mapper([string]$Method='diagnostics',[int]$TimeoutMs=10000,[string[]]$Extra=@()) {
+    $value=Invoke-LabAdb -Arguments (@('shell','content','call','--uri',"content://$applicationId.backend",'--method',$Method)+$Extra) -TimeoutMs $TimeoutMs
     $wire=$value.stdout.Trim()
     if($wire -notmatch '(?s)^Result: Bundle\[\{json=(.*)\}\]$'){throw "No mapper JSON for $Method"}
     return ($Matches[1] | ConvertFrom-Json)
@@ -95,14 +96,14 @@ function Save-Thermal([string]$Phase) {
 }
 
 $manifest=[ordered]@{
-    schemaVersion=1; sourceOrigin='synthetic-app'; physicalInput=$false; physicalInputConfirmed=$false
+    schemaVersion=1; sourceOrigin='synthetic-app'; syntheticInputConfirmed=$true; physicalInput=$false; physicalInputConfirmed=$false
     workload='lab-touch-transitions'; serial=$targetSerial; applicationId=$applicationId; receiverApplicationId=$receiverId
     displayId=$DisplayId; requestedDurationMs=$DurationMs; precision=[bool]$Precision
     requestedClickRateHz=10; sourceBatchHz=250; samplesPerBatch=4; sampleSpacingMs=1; directionPhaseMs=125
     receiverReset='Only InputLab is force-stopped/reopened, on the explicitly selected display; no application data is cleared.'
     profiles='RAM-only diagnostic profile; saved profiles are exported before and after.'
-    probeEnabled=$false
-    probeExclusionReason='InputLatencyProbe is intentionally disabled: this synthetic RAM session arms and closes itself, and legacy mapper stage names alone do not prove physical input. Use lab-result.json and the independent receiver; do not apply physical stable-session pairing.'
+    probeEnabled=[bool]$Instrumented
+    probeScope='Optional recorder includes synthetic session setup and closure. Inspect paired RPCs and retained coverage separately; closed endpoints cannot pass the physical stable-session protocol. Source timestamps are synthetic even when legacy stage names mention mouse/native input.'
     latencyScope='App-produced inputs through the mapper and real injector into InputLab. No USB/peripheral, game, display-presentation or photon latency claim.'
     logcatScope='Bounded filtered tails, never a cleared device log or a guaranteed complete trial interval.'
     gameRestore=$false; installsApks=$false; startedUtc=[DateTime]::UtcNow.ToString('o')
@@ -114,6 +115,7 @@ $receiverBefore=$null
 $controllerAfter=$null
 $lab=$null
 $started=$false
+$probe=$null
 $polls=New-Object System.Collections.Generic.List[object]
 try {
     $initial=Read-Mapper
@@ -165,6 +167,10 @@ try {
     Save-Json $prepared 'controller-before.json'
     Save-Json $receiverBefore 'receiver-before.json'
     Save-Thermal 'before'
+    if($Instrumented) {
+        $probe=Read-Mapper -Method 'latencyStart' -Extra @('--extra','durationMs:i:20000')
+        Save-Json $probe 'probe-start.json'
+    }
     $precisionWire=([bool]$Precision).ToString().ToLowerInvariant()
     $started=$true # A timed-out Binder reply can still leave an accepted laboratory request.
     Invoke-MapperAction 'labTouchTransitions' @('--extra',"displayId:i:$DisplayId",'--extra',"durationMs:i:$DurationMs",'--extra',"precision:b:$precisionWire")
@@ -206,6 +212,24 @@ try {
         scope='Receive-only InputLab validation; no physical origin or presentation latency inference.'}) 'receiver-validation.json'
 } catch {$failure=$_}
 finally {
+    if($null -ne $probe) {
+        try {
+            $stopped=Read-Mapper 'latencyStop'
+            Save-Json $stopped 'probe-stop.json'
+            $rows=New-Object System.Collections.Generic.List[object]
+            $page=$stopped
+            while($true) {
+                if($page.runId -ne $probe.runId -or $page.pid -ne $probe.pid -or $page.enabled) {
+                    throw 'Recorder identity changed or the recorder did not stop.'
+                }
+                foreach($row in $page.records){$rows.Add($row)}
+                if($null -eq $page.nextRecordsOffset){break}
+                $page=Read-Mapper -Method 'latencySnapshot' -Extra @('--extra',"offset:i:$([int]$page.nextRecordsOffset)",'--extra','limit:i:512')
+            }
+            if($rows.Count -ne $stopped.storedCount){throw 'Recorder export was incomplete'}
+            Save-Json @($rows.ToArray()) 'probe-records.json'
+        } catch {if($null -eq $failure){$failure=$_}}
+    }
     if($started -and $null -ne $failure) {
         try {
             $cleanupState=Read-Mapper -TimeoutMs 3000
