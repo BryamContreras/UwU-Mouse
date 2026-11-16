@@ -63,6 +63,7 @@ app.*.map.json
 !/docs/MIGRATION_0_3_4.md
 !/docs/ARCHITECTURE_EN.md
 !/docs/CI_EN.md
+!/docs/PRUEBA_RETORNO_CAMARA_2026-11-15.md
 /attachments/
 /.codex/
 /.vscode/
