@@ -240,6 +240,12 @@ la app las reenvía explícitamente mediante `forwardKey`, restringido a la capt
 activa y al destino autorizado. El backend conserva sus DOWN para emparejar UP y
 tratar la liberación. No existe un reenvío genérico libre hacia otras apps.
 
+En cursor, el reenvío de nuevas teclas ordinarias está apagado hasta activar
+Teclado explícitamente desde la burbuja. Ocultar el cursor, cambiar su propietario
+o perder el contexto apaga esa elección. Los UP de teclas ya reenviadas conservan
+su propietario, y los atajos de sesión se procesan antes del bloqueo de texto.
+La pausa del propio menú conserva la elección durante el mismo ciclo de cursor.
+
 Evdev no incorpora un display Android en cada muestra. `displayId` es el destino
 explícitamente admitido y propiedad de la sesión, no un dato deducido del nombre
 del mouse, de `eventN` o de sus coordenadas. Esto requiere nuevas pruebas físicas
@@ -351,8 +357,15 @@ La política depende del paquete del juego:
   el residuo de una pareja de entradas opuestas y la dependencia de su partición,
   conservando la curva local; los flicks grandes cambian respecto de Euler.
   El eje Y conserva su ganancia lineal. La región personalizada no interviene en
-  esta política. Se utiliza la curva visible sin estado premium; no se selecciona
-  la variante premium sin disponer de ese estado.
+  esta política. La opción `camera.enhancedFreeFireOptimization`, apagada por
+  defecto y efectiva sólo en Free Fire, selecciona otra estrategia horizontal
+  por muestra. Usa el punto medio propuesto, la amplitud del reporte y la densidad
+  lógica del contexto de aplicación. Se evalúa en `Double`, conserva fracciones
+  con suma compensada y aplica después la sensibilidad X. El factor fijo `28/45`
+  iguala aproximadamente la pendiente inicial de ambas estrategias; no calibra
+  grados/cm. Y conserva su escala lineal y los mismos límites y cierres confirmados.
+  Esta ecuación por reporte no impone reversibilidad táctil ni añade filtro temporal.
+  Los documentos anteriores sin la opción se leen con `false`.
 
 La sensibilidad X/Y sigue siendo independiente. `precisionAim` se aplica mientras
 el M1 físico reconocido está mantenido, antes de compensación y sensibilidad.

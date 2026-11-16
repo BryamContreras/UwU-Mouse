@@ -64,6 +64,9 @@ class ControllerBubble(
     private var onEdit: () -> Unit = {}
     private var onPlay: () -> Unit = {}
     private var onKeyboard: () -> Unit = {}
+    private var keyboardModeEnabled=false
+    private var keyboardModeAvailable=false
+    private var refreshKeyboardTile:(()->Unit)?=null
     private var onStop: () -> Unit = {}
     private var onCursorReturn: () -> Unit = {}
     private var onVisualSettingsChanged: () -> Unit = {}
@@ -112,10 +115,13 @@ class ControllerBubble(
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
              onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
              onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={},
-             displayResolution:DisplayResolutionSettingsPort?=null,onMenuInputFocusChanged:(Boolean)->Unit={}) {
+             displayResolution:DisplayResolutionSettingsPort?=null,onMenuInputFocusChanged:(Boolean)->Unit={},
+             keyboardModeEnabled:Boolean=false,keyboardModeAvailable:Boolean=false) {
         check(Looper.myLooper() == Looper.getMainLooper())
         this.label = label; this.profileName = profileName; this.onMenu = onMenu
         this.onEdit = onEdit; this.onPlay = onPlay; this.onKeyboard=onKeyboard; this.onStop = onStop
+        this.keyboardModeEnabled=keyboardModeEnabled;this.keyboardModeAvailable=keyboardModeAvailable
+        refreshKeyboardTile?.invoke()
         this.playing = playing; this.editEnabled = editEnabled; this.playEnabled = playEnabled
         this.interactionEnabled = interactionEnabled; this.cursorHint = cursorHint
         // Never defer a safety transition behind a visual exit animation.
@@ -481,17 +487,17 @@ class ControllerBubble(
         fun returnToKeyboard() {
             if(playEnabled) { closeMenu();onPlay() } else dismissMenu()
         }
-        val mode=if(playing) "Control" else "Teclado"
+        val mode="Teclado"
         val entries=listOf("Perfiles" to R.drawable.mm_profiles,"Mapear" to R.drawable.mm_map,
-            mode to if(playing) R.drawable.mm_controller else R.drawable.mm_keyboard,
+            mode to R.drawable.mm_keyboard,
             "Ajustes" to R.drawable.mm_settings,"Sistema" to R.drawable.mm_system,
             "Cerrar menú" to R.drawable.mm_close)
         for((name,icon) in entries) {
-            val enabled=when(name) { "Mapear"->editEnabled;mode->playing || playEnabled;else->true }
-            row.addView(tile(if(name==mode) "$name\nActivado" else name,icon) {
+            val enabled=when(name) { "Mapear"->editEnabled;mode->keyboardModeAvailable;else->true }
+            val entry=tile(if(name==mode) "$name\n${if(keyboardModeEnabled) "Activado" else "Desactivado"}" else name,icon) {
                 when(name) {
                     "Mapear" -> if(editEnabled) { closeMenu(); onEdit() }
-                    mode -> if(playing) onKeyboard() else returnToKeyboard()
+                    mode -> if(keyboardModeAvailable) onKeyboard()
                     "Perfiles" -> {
                         systemObserver?.close();systemObserver=null
                         val changed=menuDetailPage!=name;menuDetailPage=name;profilePanel()
@@ -511,8 +517,21 @@ class ControllerBubble(
                     }
                     else -> returnToKeyboard()
                 }
-            }.apply { isEnabled=enabled; alpha=if(enabled) 1f else .4f; contentDescription=if(name==mode) "Cambiar modo: $mode activado" else name },
-                LinearLayout.LayoutParams(0,dp(76),1f).apply { setMargins(dp(3),dp(4),dp(3),0) })
+            }.apply { isEnabled=enabled;alpha=if(enabled) 1f else .4f;contentDescription=name }
+            if(name==mode) {
+                val status=(entry as LinearLayout).getChildAt(2) as TextView
+                refreshKeyboardTile={
+                    val state=if(keyboardModeEnabled) "Activado" else "Desactivado"
+                    status.text=state
+                    status.setTextColor(if(keyboardModeEnabled) Color.rgb(17,49,99) else Color.rgb(65,73,89))
+                    status.alpha=if(keyboardModeEnabled) 1f else .65f
+                    entry.isEnabled=keyboardModeAvailable
+                    entry.alpha=if(keyboardModeAvailable) 1f else .4f
+                    entry.contentDescription="Modo teclado: $state. Activar o desactivar manualmente"
+                }
+                refreshKeyboardTile?.invoke()
+            }
+            row.addView(entry,LinearLayout.LayoutParams(0,dp(76),1f).apply { setMargins(dp(3),dp(4),dp(3),0) })
         }
         when(menuDetailPage) { "Perfiles"->profilePanel();"Ajustes"->appearancePanel();"Sistema"->systemPanel() }
         panel.addView(row); panel.addView(detail)
@@ -622,18 +641,10 @@ class ControllerBubble(
             else -> "Tamaño visible de la burbuja. Puedes arrastrarla para colocarla en otro borde."
         }
         panel.addView(SettingHelp.heading(overlayContext,caption,name,explanation))
-        panel.addView(SeekBar(overlayContext).apply {
-            this.min = min; this.max = max; progress = initial
-            contentDescription = name
-            EditorSeekBarStyle.apply(this)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) { saveStyle() }
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser) { change(progress); caption.text = "$name: ${format(progress)}" }
-                }
-            })
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(28)))
+        panel.addView(StepperSeekBar(overlayContext,name,min,max,initial,
+            onValueChanged={ value -> change(value);caption.text="$name: ${format(value)}" },
+            onValueCommitted=::saveStyle),
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
     }
     private fun saveStyle() {
         if (!settings.save(style)) {
@@ -759,7 +770,7 @@ class ControllerBubble(
     }
     fun closeMenu() {
         systemObserver?.close();systemObserver=null
-        pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles=null;menuStatus=null
+        pendingProfileKeyId=null;pendingProfileDeleteId=null;profileError=null;renderProfiles=null;menuStatus=null;refreshKeyboardTile=null
         clearMenuCursorHover()
         val view=menu
         val resolution=resolutionPanel

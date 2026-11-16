@@ -197,6 +197,10 @@ class EditorDraft(
         value=value.copy(camera=value.camera.copy(updateRateHz=hz))
     }
 
+    fun enhancedFreeFireOptimization(enabled:Boolean) {
+        value=value.copy(camera=value.camera.copy(enhancedFreeFireOptimization=enabled))
+    }
+
     /** Visual diameter only. Dragging clamps to the editor range; it never moves the touch. */
     fun markerSize(control: Control,diameterDp: Float) {
         require(diameterDp.isFinite()) { "Tamaño visual no válido" }

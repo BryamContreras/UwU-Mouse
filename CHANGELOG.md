@@ -2,6 +2,12 @@
 
 The complete historical notes in Spanish are preserved in [CHANGELOG.es.md](CHANGELOG.es.md).
 
+## 0.3.14+52 — unreleased
+
+- Add an opt-in “Optimización Mejorada FreeFire” camera setting to each profile. Its horizontal positional compensation uses application density and preserves fractional motion without temporal filtering. The existing camera path and precision aim retain their behavior.
+- Add −/+ controls to editor and bubble sliders for single-step changes, preserving bounds and save semantics.
+- Make physical keyboard text mode an explicit bubble choice. Showing the cursor leaves it off; hiding the cursor, stopping or changing context clears it.
+
 ## 0.3.13+51 — unreleased
 
 - Rename the camera controller, policy, helpers and diagnostics consistently for UwU Mouse. Preserve the camera calculations, event ordering and saved profile format.

@@ -72,6 +72,14 @@ object GameCoordinator {
     private var profileRows:List<ProfileMenuItem> = emptyList()
     @Volatile private var profileKeys:Map<Int,String> = emptyMap()
     private var profileMenuCursor=false
+    private var keyboardMenuPauseSerial=0L
+    private var keyboardMenuPauseTicket=0L
+    private var keyboardMenuPauseIdentity:SessionController.StatusIdentity?=null
+    private var keyboardMenuManualPauseEpoch=0L
+    /** Preserve only the menu's own release/rearm gap, never an unrelated hidden cursor. */
+    val keyboardCursorTransitionPending:Boolean get()=keyboardMenuManualPauseEpoch==SessionController.manualPauseEpoch &&
+        ((keyboardMenuPauseTicket!=0L && keyboardMenuPauseIdentity==SessionController.statusIdentity()) ||
+            (profileMenuCursor && startPending && pendingCursorStart))
     private var cursorUiTarget=LocalPointerTarget.NONE
     @Volatile var lastEditorClose:Map<String,Any?>?=null; private set
     private fun recordEditorClose(reason:String) {
@@ -488,6 +496,7 @@ object GameCoordinator {
         require(p.calibration.confirmed) { "Coloca los controles y guarda en el editor primero" }
         check(service!=null) { "Abre UwU Mouse para preparar la captura nativa" }
         GameCatalog.requireLaunchable(app,p.packageName)
+        service?.prepareKeyboardMode(p.id,p.packageName,displayId)
         val ticket=++operation; currentId=p.id; waiting=true; toolsRequested=true
         if(automaticReturnRequest) contextReturn.rebase(ContextReturnGate.Identity(ticket,p.id,p.packageName,displayId,requireNotNull(returnEpoch)))
         refreshProfileLibrary(p.packageName,displayId)
@@ -515,7 +524,9 @@ object GameCoordinator {
                 val window=requireNotNull(service?.boundsForPackage(p.packageName)) { "No se pudo confirmar el área de la ventana" }
                 val frame=GameArea(window.left.toFloat(),window.top.toFloat(),window.right.toFloat(),window.bottom.toFloat())
                 val runtimeProfile=RuntimeProfileGeometry.adapt(p,width,height,rotation,displayScope(displayId),frame)
-                val prepared=ProfileCompiler.prepare(runtimeProfile,width,height,rotation,displayScope(displayId),frame)
+                val compensationDensityDpi=app.resources.displayMetrics.density*160f
+                val prepared=ProfileCompiler.prepare(runtimeProfile,width,height,rotation,displayScope(displayId),frame,
+                    densityDpi=compensationDensityDpi)
                 geometryInvalidated=false
                 val area=runtimeProfile.calibration.area
                 require(area.left>=window.left && area.top>=window.top && area.right<=window.right && area.bottom<=window.bottom) { "El área calibrada ya no cabe en la ventana; recalibra el perfil" }
@@ -747,7 +758,8 @@ object GameCoordinator {
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
             onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)},
             onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()},
-            displayResolution=resolutionSettings,onMenuInputFocusChanged={ service?.refreshMenuPointerSources() })
+            displayResolution=resolutionSettings,onMenuInputFocusChanged={ service?.refreshMenuPointerSources() },
+            keyboardModeEnabled=service?.keyboardModeEnabled==true,keyboardModeAvailable=service?.keyboardModeAvailable==true)
     }
     /** Authorized own-UI diagnostics use exactly the same inline System panel. */
     fun openDisplayResolutionSettings(displayId:Int) {
@@ -802,17 +814,41 @@ object GameCoordinator {
         // injection fail. Pause before showing it, including camera-toggle work in flight.
         if(SessionController.contacts!=0 || (SessionController.active && !SessionController.cursorMode && service?.mouseCaptured==true)) return
         profileMenuCursor=SessionController.cursorMode
-        SessionController.pauseThen("Menú de controles; mapeo pausado") { safe ->
-            refreshControls()
-            if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu(initialPage) }
+        val keyboardPause=++keyboardMenuPauseSerial
+        keyboardMenuPauseTicket=if(profileMenuCursor) keyboardPause else 0L
+        keyboardMenuManualPauseEpoch=SessionController.manualPauseEpoch
+        keyboardMenuPauseIdentity=SessionController.statusIdentity()
+        try {
+            SessionController.pauseThen("Menú de controles; mapeo pausado") { safe ->
+                try {
+                    refreshControls()
+                    if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu(initialPage) }
+                } finally {
+                    if(keyboardMenuPauseTicket==keyboardPause) {
+                        keyboardMenuPauseTicket=0L;keyboardMenuPauseIdentity=null
+                    }
+                    service?.refreshMenuPointerSources()
+                }
+            }
+            // pauseThen advances generation synchronously and posts its publications
+            // to main. A later unrelated pause can suppress its callback entirely.
+            if(keyboardMenuPauseTicket==keyboardPause) keyboardMenuPauseIdentity=SessionController.statusIdentity()
+        } catch(failure:RuntimeException) {
+            if(keyboardMenuPauseTicket==keyboardPause) {
+                keyboardMenuPauseTicket=0L;keyboardMenuPauseIdentity=null
+            }
+            service?.refreshMenuPointerSources()
+            throw failure
         }
     }
     private fun keyboardMode() {
         clearContextReturn("manual_keyboard_mode")
-        SessionController.pauseThen("Modo teclado y rat\u00f3n") { safe ->
-            refreshControls()
-            if(safe && toolsRequested && SessionController.targetConfirmed) guardPresentation("menu") { bubble?.openMenu() }
-        }
+        if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed ||
+            SessionController.isTransitioning() || SessionController.releaseUnverified) return
+        // Opening the controls menu already completed its release barrier. Text mode
+        // is an explicit choice inside this cursor cycle, not another mapping pause.
+        service?.toggleKeyboardMode()
+        refreshControls()
     }
     fun pauseByUser() {
         clearContextReturn("manual_pause")

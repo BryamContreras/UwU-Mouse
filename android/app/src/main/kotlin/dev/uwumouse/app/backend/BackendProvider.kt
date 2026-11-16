@@ -152,7 +152,8 @@ class BackendProvider : ContentProvider() {
                             dev.uwumouse.app.runtime.NativeSessionHost.initialize(requireNotNull(context))
                             SessionController.testTouchTransitionsLab(requireNotNull(context),
                                 extras?.getInt("displayId",0) ?: 0,extras?.getInt("durationMs",4_000) ?: 4_000,
-                                extras?.getBoolean("precision",false) ?: false)
+                                extras?.getBoolean("precision",false) ?: false,
+                                extras?.getBoolean("enhanced",false) ?: false)
                         }
                         if(android.os.Looper.myLooper()==android.os.Looper.getMainLooper()) task.run()
                         else check(android.os.Handler(android.os.Looper.getMainLooper()).post(task))

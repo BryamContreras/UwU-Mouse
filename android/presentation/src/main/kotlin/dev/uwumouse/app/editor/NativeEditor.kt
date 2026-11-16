@@ -593,7 +593,7 @@ class NativeEditor(
         }
 
         private fun addGeometry() {
-            if(selected == EditorDraft.Control.CAMERA) { addCameraSuspend(); addCameraRegion(); addCameraFrequency() }
+            if(selected == EditorDraft.Control.CAMERA) { addCameraSuspend(); addEnhancedFreeFireOptimization(); addCameraRegion(); addCameraFrequency() }
             if(selected == EditorDraft.Control.JOYSTICK) slider("Radio", 2, 40, { (draft.value.joystick.radius * 100).toInt() }, { "$it%" }) {
                 val a = draft.value.calibration.area
                 draft.joystickRadius(it / 100f * min(a.width, a.height))
@@ -616,6 +616,30 @@ class NativeEditor(
 
         private fun customCameraRegion():Boolean=draft.value.camera.let {
             it.customRegion && !CameraSpec.isFreeFirePackage(draft.value.packageName)
+        }
+
+        private fun addEnhancedFreeFireOptimization() {
+            if(!CameraSpec.isFreeFirePackage(draft.value.packageName)) return
+            var refreshing=false
+            val optimization=Switch(context).apply {
+                ToggleStyle.apply(this)
+                text="Optimización Mejorada FreeFire";textSize=13f;setTextColor(Color.WHITE)
+                optionIcon(this,R.drawable.mm_camera)
+                isChecked=draft.value.camera.enhancedFreeFireOptimization
+                setOnCheckedChangeListener { view,checked ->
+                    if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE && selected==EditorDraft.Control.CAMERA) {
+                        draft.enhancedFreeFireOptimization(checked)
+                        refresh()
+                    }
+                }
+            }
+            refreshers += {
+                refreshing=true
+                optimization.isChecked=draft.value.camera.enhancedFreeFireOptimization
+                refreshing=false
+            }
+            body.addView(SettingHelp.heading(context,optimization,"Optimización Mejorada FreeFire",
+                "Usa una compensación horizontal alternativa para la cámara de Free Fire. Guarda el perfil para aplicarla."))
         }
 
         private fun addCameraRegion() {
@@ -886,23 +910,22 @@ class NativeEditor(
             val heading=TextView(context).apply { textSize=12f; setTextColor(Color.WHITE); setPadding(0,dp(8),0,0) }
             body.addView(SettingHelp.heading(context,heading,"Frecuencia de captura",
                 "Tope de movimientos entregados: 100 Hz ≈ 10 ms; 125 ≈ 8 ms; 250 ≈ 4 ms; 500 ≈ 2 ms; 1000 ≈ 1 ms. Conserva las muestras; clics y teclas inmediatos. Libre no impone un límite de software ni acelera un mouse lento."))
-            val frequency=SeekBar(context).apply {
-                min=0; max=rates.lastIndex; progress=rates.indexOf(draft.value.camera.updateRateHz).coerceAtLeast(0)
+            val frequency=StepperSeekBar(context,"Frecuencia de captura del mouse",0,rates.lastIndex,
+                rates.indexOf(draft.value.camera.updateRateHz).coerceAtLeast(0),onValueChanged={ index ->
+                    if(scroller.visibility==View.VISIBLE && selected==EditorDraft.Control.CAMERA) {
+                        draft.cameraUpdateRate(rates[index]);refresh()
+                    }
+                })
+            frequency.seekBar.apply {
                 contentDescription="Frecuencia de captura del mouse"
-                EditorSeekBarStyle.apply(this)
                 tickMark=GradientDrawable().apply { shape=GradientDrawable.OVAL; setSize(dp(3),dp(3)); setColor(Color.rgb(91,125,170)) }
                 splitTrack=false
             }
-            frequency.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
-                override fun onStartTrackingTouch(seekBar:SeekBar?)=Unit
-                override fun onStopTrackingTouch(seekBar:SeekBar?)=Unit
-                override fun onProgressChanged(seekBar:SeekBar?,progress:Int,fromUser:Boolean) {
-                    if(!fromUser || !frequency.isAttachedToWindow || scroller.visibility!=View.VISIBLE || selected!=EditorDraft.Control.CAMERA) return
-                    draft.cameraUpdateRate(rates[progress]); refresh()
-                }
-            })
-            body.addView(frequency,LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT,dp(36)))
-            val stops=LinearLayout(context).apply { orientation=LinearLayout.HORIZONTAL }
+            body.addView(frequency,LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT,dp(44)))
+            val stops=LinearLayout(context).apply {
+                orientation=LinearLayout.HORIZONTAL
+                setPadding(dp(40),0,dp(40),0)
+            }
             val captions=rates.mapIndexed { index,rate ->
                 TextView(context).apply {
                     text=if(rate==0) "Libre" else rate.toString(); textSize=10f; gravity=Gravity.CENTER; setPadding(0,0,0,dp(6))
@@ -921,8 +944,8 @@ class NativeEditor(
                 val rate=draft.value.camera.updateRateHz
                 val index=rates.indexOf(rate).coerceAtLeast(0)
                 heading.text="Captura · ${if(rate==0) "Libre" else "$rate Hz"}${if(rate !in choices) " · guardado" else ""}"
-                if(frequency.progress!=index) frequency.progress=index
-                frequency.stateDescription=if(rate==0) "Libre" else "$rate Hz"
+                frequency.setValue(index)
+                frequency.seekBar.stateDescription=if(rate==0) "Libre" else "$rate Hz"
                 captions.forEachIndexed { position,caption ->
                     caption.setTextColor(if(position==index) Color.rgb(183,220,255) else Color.rgb(144,168,204))
                     caption.typeface=if(position==index) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
@@ -1322,17 +1345,10 @@ class NativeEditor(
         }
         private fun slider(name: String, minimum: Int, maximum: Int, read: () -> Int, format: (Int) -> String, signed:Boolean=false, change: (Int) -> Unit) {
             val text = TextView(context).apply { setTextColor(Color.WHITE); textSize = 12f }
-            val slider = SeekBar(context).apply {
-                min=minimum; max=maximum; progress=read().coerceIn(minimum,maximum)
-                if(signed) layoutDirection=View.LAYOUT_DIRECTION_LTR
-                EditorSeekBarStyle.apply(this)
-            }
-            slider.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { if (fromUser) { change(progress); refresh() } }
-            })
-            refreshers += { val value = read().coerceIn(minimum, maximum); text.text = "$name: ${format(value)}"; if (slider.progress != value) slider.progress = value }
+            val slider=StepperSeekBar(context,name,minimum,maximum,read().coerceIn(minimum,maximum),
+                onValueChanged={ change(it);refresh() })
+            if(signed) slider.seekBar.layoutDirection=View.LAYOUT_DIRECTION_LTR
+            refreshers += { val value=read().coerceIn(minimum,maximum);text.text="$name: ${format(value)}";slider.setValue(value) }
             val explanation=when(name) {
                 "Radio" -> "Recorrido del joystick desde su centro. Un radio mayor desplaza más el control al mantener una dirección."
                 "Ancho","Alto" -> "Tamaño del área de la cámara por región. El movimiento se mantiene dentro de sus bordes."
@@ -1342,7 +1358,7 @@ class NativeEditor(
                 else -> "Margen de este borde en el área del juego. Los controles usan el espacio que queda dentro."
             }
             body.addView(SettingHelp.heading(context,text,name,explanation))
-            body.addView(slider, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(34)))
+            body.addView(slider, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(44)))
         }
         private fun dp(value: Int) = (value * density + .5f).toInt()
         private fun keyName(code: Int) = editorKeyLabel(code)

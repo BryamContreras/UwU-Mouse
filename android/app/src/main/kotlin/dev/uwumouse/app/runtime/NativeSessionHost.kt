@@ -43,6 +43,33 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var captureAttemptEpoch=0L
     @Volatile private var captureFailure=""
     private val optionalKeyboardCapture=OptionalKeyboardCapturePolicy()
+    private val cursorKeyboardMode=CursorKeyboardModePolicy()
+    val keyboardModeEnabled:Boolean get()=cursorKeyboardMode.enabled && keyboardCaptureReady() && !keyboardCursorCycleEnded()
+    val keyboardModeAvailable:Boolean get()=keyboardCaptureReady() && appliedMouseCapture &&
+        !keyboardCursorCycleEnded() && (SessionController.cursorMode || wantsMenuPointer())
+    fun prepareKeyboardMode(profileId:String,packageName:String,displayId:Int) {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        cursorKeyboardMode.selectOwner(profileId,packageName,displayId)
+    }
+    /** Explicit bubble action only; no pause/restart, capture change or implicit opt-in. */
+    fun toggleKeyboardMode():Boolean {
+        check(Looper.myLooper()==Looper.getMainLooper())
+        updateKeyboardModeContext()
+        val request=cursorKeyboardMode.requestToggle() ?: return false
+        return cursorKeyboardMode.apply(request)
+    }
+    private fun keyboardCursorCycleEnded()=SessionController.mode==SessionMode.STOPPED ||
+        !SessionController.targetConfirmed || SessionController.needsRecoveryContext || GameCoordinator.editorVisible ||
+        (SessionController.active && !SessionController.cursorMode) ||
+        (!SessionController.cursorMode && !wantsMenuPointer() && !GameCoordinator.keyboardCursorTransitionPending)
+    // Every admitted startCapture call below requests keyboard=true. A confirmed
+    // combined lease is stronger than the cached keyboard-only capability failure.
+    private fun keyboardCaptureReady()=nativeCaptureId!=0L && !startingNativeCapture &&
+        !captureReleaseWait.pending && captureFailure.isEmpty()
+    private fun updateKeyboardModeContext() {
+        cursorKeyboardMode.observe(appliedMouseCapture && (SessionController.cursorMode || wantsMenuPointer()),
+            keyboardCursorCycleEnded(),keyboardCaptureReady())
+    }
     private val captureReleaseWait=CaptureReleaseWait()
     private var captureReleaseBackend:android.os.IBinder?=null
     val nativeMouseCaptureReady:Boolean get()=appliedMouseCapture && nativeCaptureId!=0L
@@ -479,6 +506,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         }
     }
     fun captureMouse(enabled: Boolean,epoch:Long=-1) {
+        updateKeyboardModeContext()
         // Finish any queue-only native admission before changing its physical baseline.
         motionDispatch.publish(null)
         // A new session can reuse still-applied sources while a previous key UP is deferred.
@@ -851,6 +879,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         EditorWindowBounds(requireNotNull(it.packageName),displayId,bounds,Rect(bounds),it.focused,frame.layer)
     }
     private fun forceMouseOff(reason: String) {
+        cursorKeyboardMode.observe(false,endCycle=true,captureReady=false)
         clearCaptureReleaseWait()
         motionDispatch.publish(null)
         motionDispatch.clearKeyOwners()
@@ -1011,6 +1040,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             "captureProvider" to "native-evdev", "captureId" to nativeCaptureId,"captureError" to nativeCaptureError,
             "captureWaitingForPhysicalRelease" to captureReleaseWait.pending,
             "optionalKeyboardCaptureUnavailable" to optionalKeyboardCapture.unavailable,
+            "cursorKeyboardMode" to cursorKeyboardMode.snapshot(),
             "captureErrorCode" to captureFailure,
             "motionTransport" to mapOf("nativeRateSupported" to nativeRateSupported,"appliedMouseRateHz" to appliedMouseRateHz,
                 "batches" to receivedMotionBatches,"samples" to receivedBatchedSamples,"pendingCallbacks" to motionDispatch.pendingCallbacks,
@@ -1197,6 +1227,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             resolutionSettingsPresentationAllowed)
     }
     fun onKeyEvent(event: KeyEvent, fromNative:Boolean=false): Boolean {
+        updateKeyboardModeContext()
         val latencyReceivedNanos = if (InputLatencyProbe.enabled) System.nanoTime() else 0L
         if (latencyReceivedNanos != 0L) InputLatencyProbe.recordReceipt(
             if(fromNative) "native_key" else "key", event.eventTime * 1_000_000L, latencyReceivedNanos,
@@ -1251,6 +1282,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                     consumedKeys.add(identity);GameCoordinator.resumeFromCameraKey();return true
                 }
             }
+            if(physical && cursorKeyboardMode.blocksNewOrdinaryKeys()) {
+                if(event.action==KeyEvent.ACTION_DOWN) consumedKeys.add(identity)
+                return true
+            }
             if(GameCoordinator.sessionOpen && SessionController.targetConfirmed && !GameCoordinator.editorVisible &&
                 physical && event.action==KeyEvent.ACTION_DOWN) nativeKeys.add(identity)
             traceControl(event, handled = false, owned = false);return false
@@ -1258,6 +1293,12 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if (!SessionController.targetConfirmed) { SessionController.pause("Destino no confirmado"); forceMouseOff("focus_lost"); return false }
         if(!physical) return false
         val bound = SessionController.consumesKey(event.keyCode)
+        if(!bound && cursorKeyboardMode.blocksNewOrdinaryKeys()) {
+            // Existing forwarded DOWN owners were handled above, so their UP still
+            // reaches Android even if text mode was disabled while a key was held.
+            if(event.action==KeyEvent.ACTION_DOWN) consumedKeys.add(identity)
+            return true
+        }
         if (bound && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
             consumedKeys.add(identity)
             traceControl(event, handled = true, owned = true)
@@ -1268,6 +1309,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     }
     private class CursorGeometryUnavailable(message:String,cause:RuntimeException?=null):IllegalStateException(message,cause)
     private fun updateCursorPresentation() {
+        updateKeyboardModeContext()
         motionDispatch.publish(null)
         val menuPointer=wantsMenuPointer()
         if(appliedMouseCapture && (menuPointer || SessionController.cursorMode) && SessionController.targetConfirmed) {
@@ -1402,7 +1444,10 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         if(wantsMenuPointer() && wheel!=0f) GameCoordinator.menuPointerScroll(cursorX,cursorY,wheel)
     }
     /** Main-thread presentation barrier for a mapped cursor toggle's one-shot touch. */
-    fun hideCursorForTransition() { clearCursorInteraction() }
+    fun hideCursorForTransition() {
+        cursorKeyboardMode.observe(false,endCycle=true,captureReady=keyboardCaptureReady())
+        clearCursorInteraction()
+    }
     private fun handleCursorMotion(event:MotionEvent, latencyReceiptToken:Long) {
         cursorSamples++
         if(!cursorOverlay.moveTo(cursorX,cursorY,latencyReceiptToken)) return

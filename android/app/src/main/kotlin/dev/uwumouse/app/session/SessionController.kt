@@ -1404,7 +1404,8 @@ object SessionController {
     @Volatile private var labTouchTransitions:Map<String,Any?> = emptyMap()
 
     /** Bounded synthetic motor/injection trial. Never selects a game or reads/writes saved profiles. */
-    fun testTouchTransitionsLab(context:Context,displayId:Int=0,durationMs:Int=4_000,precision:Boolean=false) {
+    fun testTouchTransitionsLab(context:Context,displayId:Int=0,durationMs:Int=4_000,precision:Boolean=false,
+                                enhanced:Boolean=false) {
         check(Looper.myLooper()==Looper.getMainLooper()) { "Laboratory setup requires main" }
         val source=TouchTransitionsLabSource(durationMs)
         check(labTouchTransitions["running"]!=true) { "Espera a que termine el laboratorio anterior" }
@@ -1417,13 +1418,16 @@ object SessionController {
             it.copy(calibration=it.calibration.copy(confirmed=true,
                 area=GameArea(bounds.left.toFloat(),bounds.top.toFloat(),bounds.right.toFloat(),bounds.bottom.toFloat())),
                 camera=it.camera.copy(enabled=true,mode=CameraSpec.SMOOTH,suspendKey=0,
-                    sensitivityX=.7f,sensitivityY=.7f,updateRateHz=0,precisionAim=precision),
+                    sensitivityX=.7f,sensitivityY=.7f,updateRateHz=0,precisionAim=precision,
+                    enhancedFreeFireOptimization=enhanced),
                 action=ActionSpec(.87f,.80f,triggerKind="mouse",code=1,behavior=ActionSpec.TAP),
                 shortcuts=SessionShortcuts(138,139,0))
         }
-        val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation)
+        val prepared=ProfileCompiler.prepare(profile,display.width,display.height,display.rotation,
+            densityDpi=context.applicationContext.resources.displayMetrics.density*160f)
         armProfile(prepared.copy(bindings=prepared.bindings.copy(
-            uwuCameraPolicy=requireNotNull(prepared.bindings.uwuCameraPolicy).copy(freeFire=true))),displayId=displayId)
+            uwuCameraPolicy=requireNotNull(prepared.bindings.uwuCameraPolicy).copy(freeFire=true,
+                enhancedFreeFireOptimization=enhanced))),displayId=displayId)
         activeProfileId=null
         val run=generation
         val requestedAt=SystemClock.uptimeMillis()
@@ -1431,6 +1435,7 @@ object SessionController {
         val processFdBefore=runCatching { java.io.File("/proc/self/fd").list()?.size }.getOrNull()
         val description=mapOf<String,Any?>("sourceOrigin" to "synthetic-app","physicalInput" to false,
             "packageName" to TARGET,"displayId" to displayId,"requestedDurationMs" to durationMs,"precision" to precision,
+            "enhancedFreeFireOptimization" to enhanced,"compensationDensityDpi" to prepared.bindings.uwuCameraPolicy?.densityDpi,
             "sourceBatchHz" to 250,"samplesPerBatch" to 4,"sampleSpacingMs" to 1,"m1PhaseMs" to 50,"directionPhaseMs" to 125,
             "sourceScope" to "Four synthetic timestamps per app-produced batch; not USB capture or physical polling latency",
             "probeSourceScope" to "Mapper probe stages during this trial use synthetic-app timestamps even if their legacy names mention mouse/native input",
@@ -2011,7 +2016,11 @@ object SessionController {
             },"cameraOverlap" to runtimeProfile?.bindings?.overlapCameraHandoff,
             "cameraDistinctIds" to runtimeProfile?.bindings?.distinctCameraContacts,
             "cameraMode" to runtimeProfile?.profile?.camera?.mode,"continuousCameraSession" to originalContinuousCamera,
-            "uwuCameraKind" to runtimeProfile?.bindings?.uwuCameraPolicy?.let { if(it.freeFire) "freeFireStandard" else "mainView" },
+            "uwuCameraKind" to runtimeProfile?.bindings?.uwuCameraPolicy?.let {
+                when { !it.freeFire -> "mainView"; it.enhancedFreeFireOptimization -> "freeFireEnhanced"; else -> "freeFireStandard" }
+            },
+            "enhancedFreeFireOptimization" to runtimeProfile?.bindings?.uwuCameraPolicy?.enhancedFreeFireOptimization,
+            "cameraCompensationDensityDpi" to runtimeProfile?.bindings?.uwuCameraPolicy?.densityDpi,
             "cameraRate" to cameraPacer?.diagnostics(),"cameraDeliveryWaitMs" to percentiles(cameraDeliveryWait),
             "precisionAim" to precisionAimFilter.snapshot(),
             "actionRuntime" to actionState,
