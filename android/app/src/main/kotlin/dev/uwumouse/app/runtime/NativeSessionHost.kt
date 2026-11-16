@@ -44,12 +44,15 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     @Volatile private var captureFailure=""
     private val optionalKeyboardCapture=OptionalKeyboardCapturePolicy()
     private val cursorKeyboardMode=CursorKeyboardModePolicy()
+    private var keyboardContinuationManualPauseEpoch=-1L
     val keyboardModeEnabled:Boolean get()=cursorKeyboardMode.enabled && keyboardCaptureReady() && !keyboardCursorCycleEnded()
     val keyboardModeAvailable:Boolean get()=keyboardCaptureReady() && appliedMouseCapture &&
         !keyboardCursorCycleEnded() && (SessionController.cursorMode || wantsMenuPointer())
-    fun prepareKeyboardMode(profileId:String,packageName:String,displayId:Int) {
+    fun prepareKeyboardMode(profileId:String,packageName:String,displayId:Int,continueCursorCycle:Boolean=false) {
         check(Looper.myLooper()==Looper.getMainLooper())
+        updateKeyboardModeContext()
         cursorKeyboardMode.selectOwner(profileId,packageName,displayId)
+        if(continueCursorCycle) authorizeKeyboardCaptureReplacement()
     }
     /** Explicit bubble action only; no pause/restart, capture change or implicit opt-in. */
     fun toggleKeyboardMode():Boolean {
@@ -61,12 +64,20 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     private fun keyboardCursorCycleEnded()=SessionController.mode==SessionMode.STOPPED ||
         !SessionController.targetConfirmed || SessionController.needsRecoveryContext || GameCoordinator.editorVisible ||
         (SessionController.active && !SessionController.cursorMode) ||
-        (!SessionController.cursorMode && !wantsMenuPointer() && !GameCoordinator.keyboardCursorTransitionPending)
+        (cursorKeyboardMode.continuationPending() && keyboardContinuationManualPauseEpoch!=SessionController.manualPauseEpoch) ||
+        (!SessionController.cursorMode && !wantsMenuPointer() && !GameCoordinator.keyboardCursorTransitionPending &&
+            !(cursorKeyboardMode.continuationPending() && SessionController.isTransitioning()))
     // Every admitted startCapture call below requests keyboard=true. A confirmed
     // combined lease is stronger than the cached keyboard-only capability failure.
     private fun keyboardCaptureReady()=nativeCaptureId!=0L && !startingNativeCapture &&
         !captureReleaseWait.pending && captureFailure.isEmpty()
+    private fun authorizeKeyboardCaptureReplacement() {
+        keyboardContinuationManualPauseEpoch=SessionController.manualPauseEpoch
+        cursorKeyboardMode.authorizeCaptureReplacement()
+    }
     private fun updateKeyboardModeContext() {
+        if(!keyboardCursorCycleEnded() && GameCoordinator.keyboardCursorTransitionPending && keyboardCaptureReady())
+            authorizeKeyboardCaptureReplacement()
         cursorKeyboardMode.observe(appliedMouseCapture && (SessionController.cursorMode || wantsMenuPointer()),
             keyboardCursorCycleEnded(),keyboardCaptureReady())
     }
@@ -233,6 +244,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
             nativeCaptureId=0L
             motionDispatch.publish(null)
             captureFailure=reason
+            cursorKeyboardMode.captureUnavailable()
             main.post {
                 if(attempt!=captureAttemptEpoch || nativeCaptureId!=0L) return@post
                 SessionController.pause("Captura nativa detenida: ${CaptureFailureMessages.describe(reason)}");forceMouseOff("native_capture_lost")
@@ -537,6 +549,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         main.removeCallbacks(applySources)
         if(!captureAcquisitionAllowed()) return
         if (effectiveMouseCapture() == appliedMouseCapture && (nativeCaptureId!=0L)==wantsKeyboardCapture() && desiredMouseRateHz()==appliedMouseRateHz) {
+            if(!GameCoordinator.keyboardCursorTransitionPending && (SessionController.cursorMode || wantsMenuPointer()))
+                cursorKeyboardMode.finishUnchangedCapture()
             main.removeCallbacks(sourceTailTimeout); sourceTailPending = false
             return
         }
@@ -573,6 +587,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 if(runCatching { backend?.setCaptureMouseRate(nativeCaptureId,rate)==true }.getOrDefault(false)) appliedMouseRateHz=rate
                 else { captureFailure="native_rate_configuration_failed";SessionController.pause(nativeCaptureError);forceMouseOff("native_rate_failed") }
             }
+            if(!GameCoordinator.keyboardCursorTransitionPending && (SessionController.cursorMode || wantsMenuPointer()))
+                cursorKeyboardMode.finishUnchangedCapture()
             return
         }
         // A physical DOWN can arrive after the source change was posted. Keep
@@ -585,6 +601,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         motionDispatch.publish(null)
         motionDispatch.resetButtonBaseline()
         val previous=nativeCaptureId
+        if(previous!=0L) cursorKeyboardMode.beginCaptureReplacement()
         nativeCaptureId=0L
         if(previous!=0L) runCatching { BackendRegistry.injector?.stopCapture(previous) }
         if(wantsKeyboardCapture()) {
@@ -606,6 +623,7 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
                 check(startupLoss==null) { startupLoss ?: "Captura perdida durante el inicio" }
                 captureFailure="";clearCaptureReleaseWait()
             } catch(failure:Exception) {
+                cursorKeyboardMode.captureUnavailable()
                 if(mouseRequested && failure.message==CaptureReleaseWait.HELD_INPUT) {
                     // EVIOCGKEY verified that Android still owns a held physical input.
                     // Leave all devices with Android and retry acquisition only, without

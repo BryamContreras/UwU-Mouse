@@ -1,10 +1,11 @@
 # Cambios de UwU Mouse
 
-## 0.3.14+52 — en validación
+## 0.3.14+53 — en validación
 
 - Se añade «Optimización Mejorada FreeFire» a los ajustes de cámara del perfil, desactivada por defecto. Aplica una compensación horizontal por posición y densidad, con acumulación de fracciones y sin filtros temporales; el modo anterior y Mira precisa conservan su comportamiento.
 - Las barras de ajustes del editor y la burbuja incorporan botones −/+ para avanzar un paso, respetando sus límites y la confirmación de cambios.
 - Mostrar el cursor ya no activa la escritura con el teclado físico. «Teclado» se activa manualmente desde la burbuja y se desactiva al ocultar el cursor, detener la sesión o cambiar de contexto.
+- La elección manual del teclado se conserva al reanudar el mismo cursor desde el menú, incluso durante el reemplazo de su captura. Una pérdida real de captura o una entrada física retenida cancela esa elección.
 
 ## 0.3.13+51 — en validación
 

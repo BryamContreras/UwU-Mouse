@@ -103,6 +103,91 @@ class CursorKeyboardModePolicyTest {
         assertTrue(policy.toggle());assertTrue(policy.enabled)
     }
 
+    @Test fun selectedProfileMenuRearmKeepsManualChoiceThroughPostedSourceReplacementAfterEngineArmCompletes() {
+        val policy=CursorKeyboardModePolicy()
+        policy.selectOwner("profile-a","example.game",9)
+        policy.observe(true);assertTrue(policy.toggle()) // The menu's explicit Teclado action.
+        val staleOff=requireNotNull(policy.requestToggle())
+        policy.authorizeCaptureReplacement() // Menu continuation is still pending here.
+        assertTrue(policy.continuationPending())
+        policy.observe(false) // Close menu, pause mapping, then arm the selected profile.
+        policy.selectOwner("profile-a","example.game",9)
+        // startPending can already be false before the posted source update retires its lease.
+        policy.beginCaptureReplacement()
+        repeat(3) { policy.observe(true,captureReady=false) }
+        assertFalse(policy.enabled);assertFalse(policy.available)
+        assertFalse(policy.blocksNewOrdinaryKeys());assertNull(policy.requestToggle())
+        assertEquals(true,policy.snapshot()["pendingManualChoice"])
+        policy.observe(true,captureReady=true)
+        assertTrue(policy.enabled);assertTrue(policy.available)
+        assertFalse(policy.blocksNewOrdinaryKeys());assertFalse(policy.apply(staleOff))
+        assertEquals(false,policy.snapshot()["captureReplacementPending"])
+        assertFalse(policy.continuationPending())
+    }
+
+    @Test fun keyboardOnlyIntermediateLeaseDoesNotRestoreTypingOrOverwriteTheChoiceOnMouseReacquisition() {
+        val policy=CursorKeyboardModePolicy()
+        policy.selectOwner("profile-a","example.game",9)
+        policy.observe(true);assertTrue(policy.toggle())
+        policy.authorizeCaptureReplacement();policy.beginCaptureReplacement()
+        policy.observe(false,captureReady=false)
+        policy.observe(false,captureReady=true) // Keyboard is grabbed, mouse/cursor is not ready.
+        assertFalse(policy.enabled);assertFalse(policy.available);assertTrue(policy.continuationPending())
+        assertEquals(true,policy.snapshot()["pendingManualChoice"])
+        policy.finishUnchangedCapture() // Does not consume an outstanding mouse-lease continuation.
+        policy.beginCaptureReplacement() // Replace keyboard-only with the confirmed combined lease.
+        policy.observe(false,captureReady=false)
+        policy.observe(false,captureReady=true)
+        assertFalse(policy.enabled);assertEquals(true,policy.snapshot()["pendingManualChoice"])
+        policy.observe(true,captureReady=true)
+        assertTrue(policy.enabled);assertTrue(policy.available);assertFalse(policy.continuationPending())
+    }
+
+    @Test fun confirmedReplacementPreservesAnOffChoiceAndNeverOptsIntoTyping() {
+        val policy=CursorKeyboardModePolicy()
+        policy.observe(true);policy.authorizeCaptureReplacement();policy.beginCaptureReplacement()
+        policy.observe(true,captureReady=false);policy.observe(true,captureReady=true)
+        assertFalse(policy.enabled);assertTrue(policy.blocksNewOrdinaryKeys())
+    }
+
+    @Test fun captureLossOrFailedHeldInputAcquisitionDiscardsEvenAnAuthorizedMenuReplacement() {
+        for(lossAfterRetirement in listOf(false,true)) {
+            val policy=CursorKeyboardModePolicy()
+            policy.observe(true);assertTrue(policy.toggle());policy.authorizeCaptureReplacement()
+            if(lossAfterRetirement) policy.beginCaptureReplacement()
+            policy.captureUnavailable() // Native loss callback, HELD_INPUT or another startCapture failure.
+            policy.observe(true,captureReady=false)
+            assertFalse(policy.enabled);assertFalse(policy.available);assertFalse(policy.blocksNewOrdinaryKeys())
+            policy.observe(true,captureReady=true)
+            assertFalse(policy.enabled);assertTrue(policy.blocksNewOrdinaryKeys())
+            assertEquals(false,policy.snapshot()["captureReplacementPending"])
+            assertFalse(policy.continuationPending())
+        }
+    }
+
+    @Test fun hideOrOwnerChangeDuringSourceReplacementCannotRestoreThePreviousManualChoice() {
+        for(changeOwner in listOf(false,true)) {
+            val policy=CursorKeyboardModePolicy()
+            policy.selectOwner("profile-a","example.game",9)
+            policy.observe(true);assertTrue(policy.toggle())
+            policy.authorizeCaptureReplacement();policy.beginCaptureReplacement()
+            policy.observe(false,captureReady=false)
+            if(changeOwner) policy.selectOwner("profile-b","example.game",9)
+            else policy.observe(false,endCycle=true,captureReady=false)
+            policy.observe(true,captureReady=true)
+            assertFalse(policy.enabled);assertTrue(policy.blocksNewOrdinaryKeys())
+        }
+    }
+
+    @Test fun unchangedSourceCompletionCannotAuthorizeAnUnrelatedLaterCaptureGap() {
+        val policy=CursorKeyboardModePolicy()
+        policy.observe(true);assertTrue(policy.toggle());policy.authorizeCaptureReplacement()
+        policy.finishUnchangedCapture()
+        policy.beginCaptureReplacement();policy.observe(true,captureReady=false)
+        policy.observe(true,captureReady=true)
+        assertFalse(policy.enabled);assertTrue(policy.blocksNewOrdinaryKeys())
+    }
+
     @Test fun anotherProfilePackageOrDisplayCannotInheritManualChoiceOrPendingIntent() {
         for((profile,pkg,display) in listOf(Triple("profile-b","example.game",9),
             Triple("profile-a","another.game",9),Triple("profile-a","example.game",13))) {

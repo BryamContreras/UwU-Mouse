@@ -496,7 +496,7 @@ object GameCoordinator {
         require(p.calibration.confirmed) { "Coloca los controles y guarda en el editor primero" }
         check(service!=null) { "Abre UwU Mouse para preparar la captura nativa" }
         GameCatalog.requireLaunchable(app,p.packageName)
-        service?.prepareKeyboardMode(p.id,p.packageName,displayId)
+        service?.prepareKeyboardMode(p.id,p.packageName,displayId,continueCursorCycle=cursor && profileMenuCursor)
         val ticket=++operation; currentId=p.id; waiting=true; toolsRequested=true
         if(automaticReturnRequest) contextReturn.rebase(ContextReturnGate.Identity(ticket,p.id,p.packageName,displayId,requireNotNull(returnEpoch)))
         refreshProfileLibrary(p.packageName,displayId)

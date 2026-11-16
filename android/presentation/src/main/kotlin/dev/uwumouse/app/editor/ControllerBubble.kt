@@ -485,7 +485,12 @@ class ControllerBubble(
         }
         menuDetailPage=initialPage?.takeIf { it in setOf("Perfiles","Ajustes","Sistema") }
         fun returnToKeyboard() {
-            if(playEnabled) { closeMenu();onPlay() } else dismissMenu()
+            if(playEnabled) {
+                // The coordinator authorizes its cursor rearm before closeMenu refreshes sources.
+                val previous=menu
+                onPlay()
+                if(menu===previous) closeMenu()
+            } else dismissMenu()
         }
         val mode="Teclado"
         val entries=listOf("Perfiles" to R.drawable.mm_profiles,"Mapear" to R.drawable.mm_map,
@@ -657,14 +662,21 @@ class ControllerBubble(
     private fun dismissMenu() {
         val view=menu ?: return
         if(menuClosing) return
-        if(!ValueAnimator.areAnimatorsEnabled()) { closeMenu();onCursorReturn();return }
+        if(!ValueAnimator.areAnimatorsEnabled()) {
+            onCursorReturn()
+            if(menu===view) closeMenu()
+            return
+        }
         menuClosing=true
         clearMenuCursorHover()
         view.importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         view.animate().cancel()
         view.animate().alpha(0f).setDuration(160).withEndAction {
             // hide()/closeMenu() can cancel the exit immediately at any time.
-            if(menu===view && menuClosing) { closeMenu();onCursorReturn() }
+            if(menu===view && menuClosing) {
+                onCursorReturn()
+                if(menu===view) closeMenu()
+            }
         }.start()
     }
     fun containsCursorPoint(x:Float,y:Float):Boolean {

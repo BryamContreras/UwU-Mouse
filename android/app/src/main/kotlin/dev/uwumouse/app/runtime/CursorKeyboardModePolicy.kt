@@ -12,9 +12,38 @@ internal class CursorKeyboardModePolicy {
     private var revision=0L
     private var cycleOpen=false
     private var captureReady=false
+    private var captureReplacementAuthorized=false
+    private var pendingManualChoice:Boolean?=null
     private var owner:Owner?=null
     @Volatile var available=false; private set
     @Volatile var enabled=false; private set
+
+    /** The menu may finish arming its engine before the posted source replacement runs. */
+    @Synchronized fun authorizeCaptureReplacement() {
+        if(cycleOpen && captureReady) captureReplacementAuthorized=true
+    }
+
+    /** Called immediately before deliberately retiring an existing native lease. */
+    @Synchronized fun beginCaptureReplacement() {
+        val retain=captureReplacementAuthorized && cycleOpen && captureReady
+        if(!retain) return
+        if(pendingManualChoice==null) pendingManualChoice=enabled
+        revision++
+        captureReady=false;available=false;enabled=false
+    }
+
+    /** A no-op source update has completed the menu rearm without replacing a lease. */
+    @Synchronized fun finishUnchangedCapture() {
+        if(pendingManualChoice==null) captureReplacementAuthorized=false
+    }
+
+    @Synchronized fun continuationPending():Boolean=captureReplacementAuthorized || pendingManualChoice!=null
+
+    /** Real loss, failed acquisition and Android-owned held input must never restore a choice. */
+    @Synchronized fun captureUnavailable() {
+        captureReplacementAuthorized=false;pendingManualChoice=null
+        observe(false,captureReady=false)
+    }
 
     /** A same-profile menu rearm may continue; another profile/display never inherits text mode. */
     @Synchronized fun selectOwner(profileId:String,packageName:String,displayId:Int) {
@@ -29,16 +58,21 @@ internal class CursorKeyboardModePolicy {
         this.captureReady=captureReady
         if(endCycle) {
             if(cycleOpen || available || enabled) revision++
+            captureReplacementAuthorized=false;pendingManualChoice=null
             cycleOpen=false;available=false;enabled=false
             return
         }
         if(!captureReady) {
             if(available || enabled) revision++
+            if(pendingManualChoice==null) captureReplacementAuthorized=false
             available=false;enabled=false
             return
         }
         if(cursorAvailable && !cycleOpen) {
             revision++;cycleOpen=true;enabled=false
+        }
+        if(cursorAvailable) pendingManualChoice?.let {
+            enabled=it;pendingManualChoice=null;captureReplacementAuthorized=false;revision++
         }
         if(available!=cursorAvailable) revision++
         available=cursorAvailable
@@ -60,6 +94,9 @@ internal class CursorKeyboardModePolicy {
 
     @Synchronized fun snapshot():Map<String,Any> = mapOf(
         "available" to available,"enabled" to enabled,"captureReady" to captureReady,
+        "captureReplacementAuthorized" to captureReplacementAuthorized,
+        "captureReplacementPending" to (pendingManualChoice!=null),
+        "pendingManualChoice" to (pendingManualChoice ?: false),
         "cursorCycleOpen" to cycleOpen,"revision" to revision,
         "profileId" to (owner?.profileId ?: ""),"packageName" to (owner?.packageName ?: ""),
         "displayId" to (owner?.displayId ?: -1))
