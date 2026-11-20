@@ -395,6 +395,24 @@ class DispatcherTouchStateParserTest {
         assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(observed.replace("\n", "\r\n")))
     }
 
+    @Test fun acceptsObservedEmptyPhysicalTouchscreenAndHybridMouseOnDex() {
+        val desktop = "    2 :     deviceId=20, source=TOUCHSCREEN | MOUSE\n      Windows: <none>"
+        val phone = "    0 :     deviceId=7, source=TOUCHSCREEN\n      Windows: <none>"
+        val activeMouse = hoverWindow().replace("mHoveringPointerIdsByDevice=41:", "mHoveringPointerIdsByDevice=20:")
+            .replace("pointerIds=${"0".repeat(32)}", "pointerIds=${"0".repeat(31)}1")
+        for (entries in listOf("$desktop\n$phone", "$phone\n$desktop")) {
+            val dump = "Input Dispatcher State:\n$header\n$entries\n  Display: 2\n"
+            assertTrue(DispatcherTouchStateParser.isDefinitelyUntouched(dump))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.removeSuffix("  Display: 2\n")))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace(phone,
+                phone.replace("Windows: <none>", "Windows:\n${hoverWindow()}"))))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace(phone,
+                "$phone\n${hoverWindow()}")))
+            assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(dump.replace(desktop,
+                desktop.replace("Windows: <none>", "Windows:\n$activeMouse"))))
+        }
+    }
+
     @Test fun virtualTouchscreenNeverAcceptsWindowRowsEvenWithZeroDownPointerBits() {
         val invalid = listOf(
             emptyVirtualTouchSection().replace("      Windows: <none>", "      Windows:\n${hoverWindow()}"),
@@ -408,11 +426,12 @@ class DispatcherTouchStateParserTest {
         invalid.forEach { assertFalse(DispatcherTouchStateParser.isDefinitelyUntouched(it)) }
     }
 
-    @Test fun virtualTouchscreenDoesNotBroadenAcceptedDeviceIdsSourcesOrFormatting() {
+    @Test fun touchscreenRejectsUnrecognizedDeviceIdsSourcesAndFormatting() {
         val invalid = listOf(
             "deviceId=-2, source=TOUCHSCREEN",
             "deviceId=0, source=TOUCHSCREEN",
-            "deviceId=41, source=TOUCHSCREEN",
+            "deviceId=07, source=TOUCHSCREEN",
+            "deviceId=2147483648, source=TOUCHSCREEN",
             "deviceId=-1, source=MOUSE",
             "deviceId=-1, source=TOUCHSCREEN | MOUSE",
             "deviceId=-1, source=UNKNOWN",

@@ -18,9 +18,10 @@ object DispatcherTouchStateParser {
     private const val MAX_CURSOR_DEVICE_STATES = 1024
     private const val UINT = "(0|[1-9][0-9]{0,8})"
     private val display = Regex("^    (0|[1-9][0-9]{0,8}) :     deviceId=(0|[1-9][0-9]{0,8}), source=(MOUSE|TOUCHSCREEN \\| MOUSE)$")
-    // A completed injected gesture may leave this virtual-device entry after evdev
-    // capture removes mouse hover. Only an explicitly empty window list is accepted.
-    private val virtualTouchDisplay = Regex("^    (0|[1-9][0-9]{0,8}) :     deviceId=(-1), source=(TOUCHSCREEN)$")
+    // Android 14 prints device metadata separately from the window list used by
+    // TouchState::isDown(). DeX can retain either a virtual or a physical touchscreen
+    // entry after its last window disappears. Require the explicit empty list.
+    private val touchscreenDisplay = Regex("^    (0|[1-9][0-9]{0,8}) :     deviceId=(-1|[1-9][0-9]{0,8}), source=(TOUCHSCREEN)$")
     private val followingDisplay = Regex("^  Display: (0|[1-9][0-9]{0,8})$")
     // Audited DispatcherTouchState::dump + TouchState::dump in android16-release and
     // android17-release. Removed displays can remain as explicitly empty cursor entries.
@@ -175,7 +176,7 @@ object DispatcherTouchStateParser {
                     completed = true
                     continue
                 }
-                val nextDisplay = display.matchEntire(line) ?: virtualTouchDisplay.matchEntire(line)
+                val nextDisplay = display.matchEntire(line) ?: touchscreenDisplay.matchEntire(line)
                 if (nextDisplay != null) {
                     if (deviceId != null && !displayComplete()) return false
                     val id = nextDisplay.groupValues[1].toIntOrNull() ?: return false
@@ -190,7 +191,7 @@ object DispatcherTouchStateParser {
                 if (expectingWindows) {
                     when (line) {
                         "      Windows: <none>" -> emptyWindows = true
-                        "      Windows:" -> if (deviceId == -1) return false
+                        "      Windows:" -> if (source == "TOUCHSCREEN") return false
                         else -> return false
                     }
                     expectingWindows = false

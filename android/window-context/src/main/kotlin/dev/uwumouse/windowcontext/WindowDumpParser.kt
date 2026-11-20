@@ -22,7 +22,33 @@ data class ParsedWindowSnapshot(
     val focusedDisplayId: Int = -1,
     val windows: List<WindowMetadata> = emptyList(),
     val reason: String = "unavailable",
-)
+) {
+    internal fun admitsTargetWindow(packageName: String, displayId: Int, ownPackage: String,
+                                    ownUid: Int, resolveTargetUid: () -> Int?): Boolean {
+        if (!valid || focusedDisplayId != displayId ||
+            (focusedPackage != packageName && focusedPackage != ownPackage)) return false
+        val targetUid = resolveTargetUid() ?: return false
+
+        var target: WindowMetadata? = null
+        var largestArea = Long.MIN_VALUE
+        for (window in windows) {
+            if (window.displayId != displayId || window.type != 1 ||
+                window.packageName != packageName || window.ownerUid != targetUid) continue
+            val area = (window.right - window.left).toLong() * (window.bottom - window.top)
+            if (area > largestArea) {
+                target = window
+                largestArea = area
+            }
+        }
+        val targetWindow = target ?: return false
+        return windows.none { window ->
+            window.displayId == displayId && window.layer > targetWindow.layer &&
+                window.ownerUid != ownUid && window.ownerUid != targetUid &&
+                window.left <= targetWindow.left && window.top <= targetWindow.top &&
+                window.right >= targetWindow.right && window.bottom >= targetWindow.bottom
+        }
+    }
+}
 
 /**
  * WMS text is not a public API. Android 14–17 retain the consumed metadata fields;

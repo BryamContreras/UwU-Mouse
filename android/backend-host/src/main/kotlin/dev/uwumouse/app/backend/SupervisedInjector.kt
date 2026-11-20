@@ -376,20 +376,10 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         return windowContexts.snapshot()
     }
     private fun nativeContextAllows(packageName:String,displayId:Int):Boolean {
-        val snapshot=windowContexts.snapshot()
-        if(!snapshot.getBoolean("valid") || snapshot.getInt("focusedDisplayId",-1)!=displayId) return false
-        val focus=snapshot.getString("focusedPackage")
-        if(focus!=packageName && focus!=identity.applicationId) return false
-        @Suppress("DEPRECATION")
-        val windows=snapshot.getParcelableArrayList<Bundle>("windows").orEmpty()
-        val expectedUid=runCatching { context.packageManager.getPackageUid(packageName,0) }.getOrNull() ?: return false
-        val target=windows.filter { it.getInt("displayId",-1)==displayId && it.getInt("type")==1 &&
-            it.getString("packageName")==packageName && it.getInt("ownerUid",-1)==expectedUid }
-            .maxByOrNull { (it.getInt("right")-it.getInt("left")).toLong()*(it.getInt("bottom")-it.getInt("top")) } ?: return false
-        if(windows.any { it.getInt("displayId",-1)==displayId && it.getInt("layer")>target.getInt("layer") &&
-            it.getInt("ownerUid",-1)!=appUid && it.getInt("ownerUid",-1)!=expectedUid &&
-            it.getInt("left")<=target.getInt("left") && it.getInt("top")<=target.getInt("top") &&
-            it.getInt("right")>=target.getInt("right") && it.getInt("bottom")>=target.getInt("bottom") }) return false
+        val authorizedWindow=windowContexts.admitsTargetWindow(packageName,displayId,identity.applicationId,appUid) {
+            runCatching { context.packageManager.getPackageUid(packageName,0) }.getOrNull()
+        }
+        if(!authorizedWindow) return false
         return privileged { runCatching {
             val task=requireNotNull(focusMethod.invoke(taskManager))
             focusPackage(task)==packageName && focusDisplay(task)==displayId
@@ -1048,21 +1038,10 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
         }
     }
     /** Cached WMS provenance complements the short-lived independent task-focus query. */
-    private fun cameraResetMetadataAllows(original:RecoverySnapshot):Boolean {
-        val snapshot=windowContexts.snapshot()
-        if(!snapshot.getBoolean("valid") || snapshot.getInt("focusedDisplayId",-1)!=original.displayId) return false
-        val focused=snapshot.getString("focusedPackage")
-        if(focused!=targetPackage && focused!=identity.applicationId) return false
-        @Suppress("DEPRECATION")
-        val windows=snapshot.getParcelableArrayList<Bundle>("windows").orEmpty()
-        val target=windows.filter { it.getInt("displayId",-1)==original.displayId && it.getInt("type")==1 &&
-            it.getString("packageName")==targetPackage && it.getInt("ownerUid",-1)==original.targetUid }
-            .maxByOrNull { (it.getInt("right")-it.getInt("left")).toLong()*(it.getInt("bottom")-it.getInt("top")) } ?: return false
-        return windows.none { it.getInt("displayId",-1)==original.displayId && it.getInt("layer")>target.getInt("layer") &&
-            it.getInt("ownerUid",-1)!=appUid && it.getInt("ownerUid",-1)!=original.targetUid &&
-            it.getInt("left")<=target.getInt("left") && it.getInt("top")<=target.getInt("top") &&
-            it.getInt("right")>=target.getInt("right") && it.getInt("bottom")>=target.getInt("bottom") }
-    }
+    private fun cameraResetMetadataAllows(original:RecoverySnapshot):Boolean =
+        windowContexts.admitsTargetWindow(targetPackage,original.displayId,identity.applicationId,appUid) {
+            original.targetUid
+        }
     @Synchronized override fun release(sessionId:Long):Boolean {
         authorize()
         if(sessionId!=journal.snapshot().sessionId) return false
@@ -1340,6 +1319,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBundle("nativeCapture",nativeCapture?.status())
             putBoolean("keyReleaseUnverified",keyReleaseUnverified)
             putInt("forwardedKeys",forwardedKeys.size)
+            putString("windowDumpTransport",windowContexts.activeDumpTransport)
             putString("targetPackage",targetPackage)
             putString("coordinatePolicy",coordinatePolicy.name)
             putBoolean("continuousCameraSupported",true)

@@ -41,8 +41,10 @@ asignados. El contador de ratón filtra exclusivamente
 Cada transición táctil escribe `UwuInputLab`: secuencia, acción, índice, IDs,
 coordenadas, downTime, eventTime, receiptUptime, fuente y dispositivo. Los movimientos
 se retienen en memoria circular (256 muestras), sin disco ni log por movimiento.
-Los contadores y muestras representan callbacks recibidos. No desglosan el historial
-incluido en `MotionEvent`, y no permiten inferir Hz físicos del periférico.
+Los contadores y muestras representan callbacks recibidos. Cada `ACTION_MOVE`
+indica su `historySize`, y el bloque `moveHistory` resume los callbacks con
+historial y el total de posiciones históricas. Estos datos no permiten inferir Hz
+físicos del periférico.
 Mientras la Activity está reanudada, solicita un snapshot cada 500 ms, incluso sin
 eventos nuevos. El botón **Guardar resumen** y `onPause` también solicitan uno.
 La escritura asíncrona mantiene solo una operación activa y una pendiente,
@@ -64,6 +66,21 @@ La pintura, las copias y los logs de transición de este observador añaden cost
 instrumentación. No usar sus cifras como benchmark de juego sin comparar esa carga.
 El observador proporciona evidencia de recepción; su implementación y sus pruebas
 JVM no acreditan por sí solas el recorrido físico de la nueva captura nativa.
+
+## Trayectoria de los movimientos
+
+Al iniciar una Activity nueva con `--ez moveHistoryProbe true`, se guardan hasta
+512 posiciones históricas asociadas con los últimos 256 callbacks. Cada posición
+conserva `sequence`, `historyIndex`, timestamps y coordenadas por ID. Para
+reconstruir una trayectoria, se lee el historial por `historyIndex` antes de la
+posición actual del callback con la misma `sequence`. Los intervalos entre
+callbacks se calculan con sus tiempos de recepción. Las posiciones históricas de
+un callback se reciben juntas.
+
+Mientras hay dedos activos, el snapshot pasivo difiere la lista de posiciones y
+publica sus contadores. El snapshot tras la liberación incluye la lista. Los
+contadores indican posiciones omitidas por el límite o por haber salido su
+callback del búfer. El registro de posiciones está desactivado por defecto.
 
 ## Medición opcional de dibujo
 

@@ -48,6 +48,7 @@ class InputLabActivity : Activity() {
             this, observationId, activityId,
             intent.getBooleanExtra("latencyProbe", false),
             intent.getIntExtra("latencyProbeSeconds", 30).coerceIn(1, 60),
+            intent.getBooleanExtra("moveHistoryProbe", false),
         )
         setContentView(observer)
         window.insetsController?.apply {
@@ -113,6 +114,34 @@ class InputLabActivity : Activity() {
 
 private data class Contact(val id: Int, val x: Float, val y: Float, val pressure: Float)
 
+private fun List<Contact>.toJsonArray() = JSONArray().apply {
+    for (contact in this@toJsonArray) {
+        put(JSONObject().apply {
+            put("id", contact.id)
+            put("x", contact.x)
+            put("y", contact.y)
+            put("pressure", contact.pressure)
+        })
+    }
+}
+
+private data class HistoricalMove(
+    val sequence: Long,
+    val historyIndex: Int,
+    val eventTimeNanos: Long,
+    val receiptTime: Long,
+    val contacts: List<Contact>,
+) {
+    fun json(): JSONObject = JSONObject().apply {
+        put("sequence", sequence)
+        put("historyIndex", historyIndex)
+        put("eventTimeUptimeMs", eventTimeNanos / 1_000_000L)
+        put("eventTimeMonotonicNanos", eventTimeNanos)
+        put("receiptUptimeMs", receiptTime)
+        put("contacts", contacts.toJsonArray())
+    }
+}
+
 private data class Sample(
     val sequence: Long,
     val action: Int,
@@ -123,6 +152,7 @@ private data class Sample(
     val source: Int,
     val deviceId: Int,
     val contacts: List<Contact>,
+    val historySize: Int,
 ) {
     fun json(): JSONObject = JSONObject().apply {
         put("sequence", sequence)
@@ -136,16 +166,8 @@ private data class Sample(
         put("eventToReceiptMs", receiptTime - eventTime)
         put("source", source)
         put("deviceId", deviceId)
-        put("contacts", JSONArray().apply {
-            contacts.forEach { contact ->
-                put(JSONObject().apply {
-                    put("id", contact.id)
-                    put("x", contact.x)
-                    put("y", contact.y)
-                    put("pressure", contact.pressure)
-                })
-            }
-        })
+        put("contacts", contacts.toJsonArray())
+        put("historySize", historySize)
     }
 
     fun logLine(): String =
@@ -275,12 +297,14 @@ private class ObserverView(
     private val activityId: String,
     latencyProbeEnabled: Boolean,
     latencyProbeSeconds: Int,
+    private val moveHistoryProbeEnabled: Boolean,
 ) : View(context) {
     private val latencyProbe = ReceiverLatencyProbe(latencyProbeEnabled, latencyProbeSeconds)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val active = linkedMapOf<Int, Contact>()
     private val sequenceValidator = TouchSequenceValidator()
     private val samples = ArrayDeque<Sample>(MAX_SAMPLES)
+    private val moveHistory = ArrayDeque<HistoricalMove>()
     private val transitions = ArrayDeque<Sample>(MAX_TRANSITIONS)
     private val lifecycle = ArrayDeque<LifecycleEntry>(MAX_LIFECYCLE_ENTRIES)
     private val snapshotHandler = Handler(Looper.getMainLooper())
@@ -316,6 +340,8 @@ private class ObserverView(
     private var wheelEvents = 0L
     private var mouseButtonEvents = 0L
     private var movementSamples = 0L
+    private var callbacksWithHistory = 0L
+    private var totalHistoricalSamples = 0L
     private var touchTransitions = 0L
     private var lastEvent = "Esperando contactos"
     private var lastKey = "Sin eventos de teclado"
@@ -368,12 +394,21 @@ private class ObserverView(
         val sample = Sample(
             ++sequence, event.action, event.actionIndex, event.downTime, event.eventTime,
             receipt, event.source, event.deviceId, contacts,
+            if (event.actionMasked == MotionEvent.ACTION_MOVE) event.historySize else 0,
         )
-        if (samples.size == MAX_SAMPLES) samples.removeFirst()
+        if (samples.size == MAX_SAMPLES) {
+            val removed = samples.removeFirst()
+            while (moveHistory.peekFirst()?.sequence == removed.sequence) moveHistory.removeFirst()
+        }
         samples.addLast(sample)
         validateAndApply(event.actionMasked, event.actionIndex, event.downTime, contacts)
         if (event.actionMasked == MotionEvent.ACTION_MOVE) {
             movementSamples++
+            if (sample.historySize > 0) {
+                callbacksWithHistory++
+                totalHistoricalSamples += sample.historySize
+                if (moveHistoryProbeEnabled) recordMoveHistory(event, sample)
+            }
         } else {
             touchTransitions++
             if (transitions.size == MAX_TRANSITIONS) transitions.removeFirst()
@@ -391,6 +426,19 @@ private class ObserverView(
         }
         postInvalidateOnAnimation()
         return true
+    }
+
+    private fun recordMoveHistory(event: MotionEvent, callback: Sample) {
+        val first = (callback.historySize - MAX_HISTORY_SAMPLES).coerceAtLeast(0)
+        for (historyIndex in first until callback.historySize) {
+            val contacts = callback.contacts.mapIndexed { index, current ->
+                Contact(current.id, event.getHistoricalX(index, historyIndex),
+                    event.getHistoricalY(index, historyIndex), event.getHistoricalPressure(index, historyIndex))
+            }
+            if (moveHistory.size == MAX_HISTORY_SAMPLES) moveHistory.removeFirst()
+            moveHistory.addLast(HistoricalMove(callback.sequence, historyIndex,
+                event.getHistoricalEventTimeNanos(historyIndex), callback.receiptTime, contacts))
+        }
     }
 
     override fun performClick(): Boolean {
@@ -548,6 +596,21 @@ private class ObserverView(
             put("touchCountUnit", "callbacks; historical MotionEvent samples are not counted separately")
             put("touchTransitions", touchTransitions)
             put("movementSamples", movementSamples)
+            // Defer serializing additional positions during a held gesture. The
+            // passive snapshot after release still publishes the retained path.
+            val historyIncluded = moveHistoryProbeEnabled && (reason != "passive" || active.isEmpty())
+            put("moveHistory", JSONObject().apply {
+                put("enabled", moveHistoryProbeEnabled)
+                put("positionsIncluded", historyIncluded)
+                put("totalHistoricalSamples", totalHistoricalSamples)
+                put("callbacksWithHistory", callbacksWithHistory)
+                put("retainedHistoricalSamples", moveHistory.size)
+                put("omittedHistoricalSamples", totalHistoricalSamples - moveHistory.size)
+                put("sampleLimit", MAX_HISTORY_SAMPLES)
+                put("samples", JSONArray().apply {
+                    if (historyIncluded) moveHistory.forEach { put(it.json()) }
+                })
+            })
             put("maxContacts", maxContacts)
             put("partialReleases", partialReleases)
             put("pendingContactIds", JSONArray(active.keys.toList()))
@@ -683,6 +746,7 @@ private class ObserverView(
 
     companion object {
         const val MAX_SAMPLES = 256
+        const val MAX_HISTORY_SAMPLES = 512
         const val MAX_TRANSITIONS = 512
         const val MAX_LIFECYCLE_ENTRIES = 64
         const val LIVE_SNAPSHOT_INTERVAL_MS = 500L
