@@ -142,6 +142,26 @@ class WindowDumpParserTest {
         assertEquals(1, result.windows.single().layer)
     }
 
+    @Test fun visibleWindowSelectionPreservesForeignCoverageAndFocus() {
+        fun cover(index: Int) = window(index, "feed", display = 2, name = "dev.example.cover",
+            type = "SYSTEM_DIALOG").replace("mOwnerUid=10123", "mOwnerUid=10124")
+        val focus = displays(0 to null, 2 to "123abc")
+        val full = parse(windows(
+            window(0, "aaa", visible = false), cover(1), window(2, display = 2), topDisplay = 2,
+        ), focus)
+        val filtered = parse(windows(cover(0), window(1, display = 2), topDisplay = 2), focus)
+
+        assertTrue(full.valid)
+        assertTrue(filtered.valid)
+        assertEquals(full.focusedPackage, filtered.focusedPackage)
+        assertEquals(full.focusedDisplayId, filtered.focusedDisplayId)
+        assertEquals(full.windows.map { it.id }, filtered.windows.map { it.id })
+        for (snapshot in listOf(full, filtered)) {
+            assertFalse(snapshot.admitsTargetWindow("dev.example.game", 2, "dev.uwu", 10125) { 10123 })
+        }
+        assertFalse(parse(windows(cover(0), topDisplay = 2), focus).valid)
+    }
+
     @Test fun everyVisibilityFieldIsRequiredEvenForAHiddenWindow() {
         for (field in listOf("mHasSurface", "isOnScreen", "isVisible")) {
             val bad = window(0, "aaa", visible = false).replace(Regex("\\b$field=false"), "unknownField=false")

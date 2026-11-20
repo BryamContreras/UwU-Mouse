@@ -99,9 +99,12 @@ object WindowDumpParser {
         "NOTIFICATION_SHADE" to 2040, "STATUS_BAR_ADDITIONAL" to 2041,
     )
 
+    internal fun hasWindowsHeader(text: String): Boolean =
+        text.trimStart('\uFEFF', ' ', '\t', '\r', '\n').startsWith("WINDOW MANAGER WINDOWS")
+
     fun parse(windowsText: String, displaysText: String): ParsedWindowSnapshot {
         if (windowsText.length.toLong() + displaysText.length > MAX_CHARS) return invalid("dump_too_large")
-        if (!windowsText.trimStart('\uFEFF', ' ', '\t', '\r', '\n').startsWith("WINDOW MANAGER WINDOWS") ||
+        if (!hasWindowsHeader(windowsText) ||
             !displaysText.trimStart('\uFEFF', ' ', '\t', '\r', '\n').startsWith("WINDOW MANAGER DISPLAY CONTENTS"))
             return invalid("unknown_dump_header")
         val ending = footer.findAll(windowsText).toList().singleOrNull()

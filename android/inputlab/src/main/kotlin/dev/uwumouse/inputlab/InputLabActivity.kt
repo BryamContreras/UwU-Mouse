@@ -342,6 +342,16 @@ private class ObserverView(
     private var movementSamples = 0L
     private var callbacksWithHistory = 0L
     private var totalHistoricalSamples = 0L
+    private var moveGapGestureDownTime = -1L
+    private var lastMoveReceiptNanos = 0L
+    private var moveGapCount = 0L
+    private var moveGapsOver16_7Ms = 0L
+    private var moveGapsOver33_3Ms = 0L
+    private var moveGapsOver50Ms = 0L
+    private var moveGapsOver83_3Ms = 0L
+    private var maxMoveGapNanos = 0L
+    private var maxMoveGapStartReceiptNanos = 0L
+    private var maxMoveGapEndReceiptNanos = 0L
     private var touchTransitions = 0L
     private var lastEvent = "Esperando contactos"
     private var lastKey = "Sin eventos de teclado"
@@ -381,12 +391,13 @@ private class ObserverView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val receiptNanos = latencyProbe.receiptNanos()
+        val receiptNanos = if (moveHistoryProbeEnabled) System.nanoTime() else latencyProbe.receiptNanos()
         val receipt = SystemClock.uptimeMillis()
         val mouse = event.isFromSource(InputDevice.SOURCE_MOUSE) || event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE)
         // Mouse clicks also enter this touch observer; time them once as mouse, not again as touch.
         if (mouse) observeMouse(event, receiptNanos)
         else latencyProbe.received(event, receiptNanos, "touch", sequence + 1L)
+        if (moveHistoryProbeEnabled && !mouse) recordMoveCallbackGap(event, receiptNanos)
         // Copy values during callback. Never retain a recyclable MotionEvent.
         val contacts = (0 until event.pointerCount).map { index ->
             Contact(event.getPointerId(index), event.getX(index), event.getY(index), event.getPressure(index))
@@ -426,6 +437,36 @@ private class ObserverView(
         }
         postInvalidateOnAnimation()
         return true
+    }
+
+    private fun recordMoveCallbackGap(event: MotionEvent, receiptNanos: Long) {
+        if (!resumed || !windowFocused) return
+        if (event.actionMasked != MotionEvent.ACTION_MOVE) {
+            lastMoveReceiptNanos = 0L
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> moveGapGestureDownTime = event.downTime
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> moveGapGestureDownTime = -1L
+            }
+            return
+        }
+        if (event.downTime != moveGapGestureDownTime) {
+            lastMoveReceiptNanos = 0L
+            return
+        }
+        val previous = lastMoveReceiptNanos
+        lastMoveReceiptNanos = receiptNanos
+        if (previous == 0L) return
+        val gap = receiptNanos - previous
+        moveGapCount++
+        if (gap > 16_700_000L) moveGapsOver16_7Ms++
+        if (gap > 33_300_000L) moveGapsOver33_3Ms++
+        if (gap > 50_000_000L) moveGapsOver50Ms++
+        if (gap > 83_300_000L) moveGapsOver83_3Ms++
+        if (gap > maxMoveGapNanos) {
+            maxMoveGapNanos = gap
+            maxMoveGapStartReceiptNanos = previous
+            maxMoveGapEndReceiptNanos = receiptNanos
+        }
     }
 
     private fun recordMoveHistory(event: MotionEvent, callback: Sample) {
@@ -532,6 +573,8 @@ private class ObserverView(
 
     fun pauseObservation() {
         resumed = false
+        moveGapGestureDownTime = -1L
+        lastMoveReceiptNanos = 0L
         recordLifecycle("paused")
         snapshotHandler.removeCallbacks(liveSnapshot)
         requestSnapshot("pause")
@@ -539,6 +582,10 @@ private class ObserverView(
 
     fun recordWindowFocus(hasFocus: Boolean) {
         windowFocused = hasFocus
+        if (!hasFocus) {
+            moveGapGestureDownTime = -1L
+            lastMoveReceiptNanos = 0L
+        }
         recordLifecycle("window_focus:$hasFocus")
         if (!resumed) requestSnapshot("window_focus")
     }
@@ -607,6 +654,18 @@ private class ObserverView(
                 put("retainedHistoricalSamples", moveHistory.size)
                 put("omittedHistoricalSamples", totalHistoricalSamples - moveHistory.size)
                 put("sampleLimit", MAX_HISTORY_SAMPLES)
+                if (moveHistoryProbeEnabled) {
+                    put("callbackGaps", JSONObject().apply {
+                        put("count", moveGapCount)
+                        put("over16_7ms", moveGapsOver16_7Ms)
+                        put("over33_3ms", moveGapsOver33_3Ms)
+                        put("over50ms", moveGapsOver50Ms)
+                        put("over83_3ms", moveGapsOver83_3Ms)
+                        put("maxGapNanos", maxMoveGapNanos)
+                        put("maxGapStartReceiptNanos", maxMoveGapStartReceiptNanos)
+                        put("maxGapEndReceiptNanos", maxMoveGapEndReceiptNanos)
+                    })
+                }
                 put("samples", JSONArray().apply {
                     if (historyIncluded) moveHistory.forEach { put(it.json()) }
                 })

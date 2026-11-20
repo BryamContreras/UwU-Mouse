@@ -1320,6 +1320,7 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
             putBoolean("keyReleaseUnverified",keyReleaseUnverified)
             putInt("forwardedKeys",forwardedKeys.size)
             putString("windowDumpTransport",windowContexts.activeDumpTransport)
+            putString("windowDumpSelection",windowContexts.activeDumpSelection)
             putString("targetPackage",targetPackage)
             putString("coordinatePolicy",coordinatePolicy.name)
             putBoolean("continuousCameraSupported",true)

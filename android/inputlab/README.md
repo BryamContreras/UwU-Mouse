@@ -77,6 +77,10 @@ posición actual del callback con la misma `sequence`. Los intervalos entre
 callbacks se calculan con sus tiempos de recepción. Las posiciones históricas de
 un callback se reciben juntas.
 
+`moveHistory.callbackGaps` cuenta los intervalos entre callbacks de movimiento
+del mismo gesto en toda la observación, incluso si se descartan sus posiciones
+del búfer. También guarda el intervalo máximo y sus tiempos de recepción.
+
 Mientras hay dedos activos, el snapshot pasivo difiere la lista de posiciones y
 publica sus contadores. El snapshot tras la liberación incluye la lista. Los
 contadores indican posiciones omitidas por el límite o por haber salido su

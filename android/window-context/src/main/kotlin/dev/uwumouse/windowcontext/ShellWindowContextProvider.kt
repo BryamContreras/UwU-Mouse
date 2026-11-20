@@ -27,12 +27,17 @@ class ShellWindowContextProvider(
     private val maxAgeMs: Long = 750,
     private val onInvalid: (() -> Unit)? = null,
 ) : WindowContextProvider {
-    private data class Cache(val capturedAt: Long, val parsed: ParsedWindowSnapshot)
+    private data class Cache(
+        val capturedAt: Long,
+        val parsed: ParsedWindowSnapshot,
+        val selection: String = "unverified",
+    )
     private val closed = AtomicBoolean(false)
     private val lastDemandNanos = AtomicLong(0L)
     @Volatile private var linkageFailed = false
     private val dumper = BoundedWindowDumper()
     val activeDumpTransport: String get() = dumper.transport
+    val activeDumpSelection: String get() = cached.selection
     private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { task ->
         Thread(task, "UwUWindowContext").apply { isDaemon = true }
     }
@@ -59,30 +64,43 @@ class ShellWindowContextProvider(
         }
         val started = SystemClock.uptimeMillis()
         val previous = cached.parsed.valid
-        val parsed = try {
+        val next = try {
             val deadline = System.nanoTime() + DUMP_TIMEOUT_MS * 1_000_000
-            val windows = dumper.dump(arrayOf("windows"), deadline, MAX_BYTES)
-            val displays = if (windows != null) dumper.dump(arrayOf("displays"), deadline, MAX_BYTES - windows.bytes) else null
-            when {
-                windows == null -> ParsedWindowSnapshot(false, reason = "dump_windows_unavailable")
-                displays == null -> ParsedWindowSnapshot(false, reason = "dump_displays_unavailable")
-                else -> WindowDumpParser.parse(windows.text, displays.text)
+            // WMS uses its own visibility predicate here, including visible system windows.
+            // Keep the same parser and independent display focus proof in both paths.
+            val visible = readWindowSnapshot("visible", deadline)
+            if (visible.valid) {
+                Cache(started, visible, "visible")
+            } else {
+                val full = readWindowSnapshot("windows", deadline)
+                Cache(started, full, if (full.valid) "windows" else "unverified")
             }
         } catch (_: LinkageError) {
             // Class initialization errors otherwise terminate a ScheduledFuture silently.
             // A broken class cannot be initialized again in this process: stop further IO.
             linkageFailed = true
-            ParsedWindowSnapshot(false, reason = "window_runtime_linkage_error")
+            Cache(started, ParsedWindowSnapshot(false, reason = "window_runtime_linkage_error"))
         } catch (_: Exception) {
             // Exception messages can contain private window metadata. Retain only fixed codes.
-            ParsedWindowSnapshot(false, reason = "dump_failed")
+            Cache(started, ParsedWindowSnapshot(false, reason = "dump_failed"))
         }
         if (closed.get()) return
-        if (parsed.reason == "unknown_dump_header" || parsed.reason == "windows_missing_or_duplicate_footer") {
+        if (next.parsed.reason == "unknown_dump_header" || next.parsed.reason == "windows_missing_or_duplicate_footer") {
             dumper.usePipe()
         }
-        cached = Cache(started, parsed)
-        if (previous && !parsed.valid) runCatching { onInvalid?.invoke() }
+        cached = next
+        if (previous && !next.parsed.valid) runCatching { onInvalid?.invoke() }
+    }
+
+    private fun readWindowSnapshot(selection: String, deadline: Long): ParsedWindowSnapshot {
+        val windows = dumper.dump(arrayOf(selection), deadline, MAX_BYTES)
+            ?: return ParsedWindowSnapshot(false, reason = "dump_windows_unavailable")
+        if (!WindowDumpParser.hasWindowsHeader(windows.text)) {
+            return ParsedWindowSnapshot(false, reason = "unknown_dump_header")
+        }
+        val displays = dumper.dump(arrayOf("displays"), deadline, MAX_BYTES - windows.bytes)
+            ?: return ParsedWindowSnapshot(false, reason = "dump_displays_unavailable")
+        return WindowDumpParser.parse(windows.text, displays.text)
     }
 
     private fun renewDemand() {

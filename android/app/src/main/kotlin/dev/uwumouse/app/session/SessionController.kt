@@ -2040,6 +2040,7 @@ object SessionController {
                 "scope" to "Last 2048 physical UwU camera sample ages at worker admission, including expired samples; excludes injection and presentation"),
             "backendTimingSessionId" to backend?.getLong("timingSessionId"),
             "backendWindowDumpTransport" to backend?.getString("windowDumpTransport"),
+            "backendWindowDumpSelection" to backend?.getString("windowDumpSelection"),
             "backendFocusMs" to backend?.getDoubleArray("focusMs")?.toList(),
             "backendPipeMs" to backend?.getDoubleArray("pipeMs")?.toList(),
             "backendFocusCount" to backend?.getLong("focusTimingCount"),"backendPipeCount" to backend?.getLong("pipeTimingCount"),
