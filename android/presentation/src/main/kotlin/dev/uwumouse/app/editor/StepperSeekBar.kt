@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.InsetDrawable
+import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
 import android.widget.Button
@@ -24,14 +24,15 @@ internal class StepperSeekBar(
     private val values=SliderValueController(minimum,maximum,initial,onValueChanged,onValueCommitted)
     private val stepWidth=dp(40)
     private val rowHeight=dp(44)
-    private val stepDiameter=dp(36)
+    private val stepDiameter=dp(26)
     val seekBar=SeekBar(context).apply {
         min=minimum;max=maximum;progress=values.value
         contentDescription=name
         EditorSeekBarStyle.apply(this)
+        setPaddingRelative(dp(8),paddingTop,dp(8),paddingBottom)
     }
-    private val decrease=stepButton("−","Disminuir ${name.replaceFirstChar { it.lowercase() }}")
-    private val increase=stepButton("+","Aumentar ${name.replaceFirstChar { it.lowercase() }}")
+    private val decrease=stepButton("−","Disminuir ${name.replaceFirstChar { it.lowercase() }}",beforeTrack=true)
+    private val increase=stepButton("+","Aumentar ${name.replaceFirstChar { it.lowercase() }}",beforeTrack=false)
     private var initialized=false
 
     init {
@@ -73,8 +74,8 @@ internal class StepperSeekBar(
         increase.alpha=if(increase.isEnabled) 1f else .45f
     }
 
-    private fun stepButton(symbol:String,description:String)=Button(context).apply {
-        text=symbol;textSize=21f;isAllCaps=false;gravity=Gravity.CENTER;includeFontPadding=false
+    private fun stepButton(symbol:String,description:String,beforeTrack:Boolean)=Button(context).apply {
+        text=symbol;textSize=16f;isAllCaps=false;gravity=Gravity.CENTER;includeFontPadding=false
         minWidth=0;minimumWidth=0;minHeight=0;minimumHeight=0
         contentDescription=description;stateListAnimator=null
         setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled),intArrayOf()),
@@ -87,12 +88,14 @@ internal class StepperSeekBar(
             addState(intArrayOf(android.R.attr.state_pressed),surface(Color.rgb(47,89,149),Color.rgb(139,189,255)))
             addState(intArrayOf(),surface(Color.rgb(29,53,86),Color.rgb(91,132,188)))
         }
-        // Keep the same touch bounds and center a round surface inside them.
-        val horizontalInset=stepWidth-stepDiameter
-        val verticalInset=rowHeight-stepDiameter
-        background=InsetDrawable(states,horizontalInset/2,verticalInset/2,
-            horizontalInset-horizontalInset/2,verticalInset-verticalInset/2)
-        setPadding(0,0,0,0)
+        // Keep the hit area and align the circle and its glyph to the track-facing edge.
+        background=LayerDrawable(arrayOf(states)).apply {
+            setLayerSize(0,stepDiameter,stepDiameter)
+            setLayerGravity(0,Gravity.CENTER_VERTICAL or if(beforeTrack) Gravity.END else Gravity.START)
+        }
+        val outerInset=stepWidth-stepDiameter
+        if(beforeTrack) setPaddingRelative(outerInset,0,0,0)
+        else setPaddingRelative(0,0,outerInset,0)
     }
 
     private fun dp(value:Int)=(value*resources.displayMetrics.density+.5f).toInt()

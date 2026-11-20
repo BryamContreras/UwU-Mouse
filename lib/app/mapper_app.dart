@@ -21,7 +21,7 @@ class UwUMouseApp extends StatefulWidget {
 }
 
 class _UwUMouseAppState extends State<UwUMouseApp> {
-  static const _desktopScale = 1.15;
+  static const _desktopScale = 1.25;
   static const _minimumContentWidth = 320.0;
   bool _externalDisplay = false;
 

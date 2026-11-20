@@ -1065,7 +1065,7 @@ void main() {
       displayId = 2;
       await tester.pump(const Duration(seconds: 1));
       await tester.pumpAndSettle();
-      expect(viewportWidth(), closeTo(800 / 1.15, .001));
+      expect(viewportWidth(), closeTo(800 / 1.25, .001));
       await tester.tap(settings);
       await tester.pumpAndSettle();
       expect(find.text('Conexión'), findsOneWidget);

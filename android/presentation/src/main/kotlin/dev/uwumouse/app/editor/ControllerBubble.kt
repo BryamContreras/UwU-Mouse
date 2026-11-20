@@ -35,6 +35,7 @@ class ControllerBubble(
 ) {
     private val windows = overlayContext.getSystemService(WindowManager::class.java)
     private val uiContext = DesktopPresentation.contextForControls(overlayContext)
+    private val independentDisplay = DesktopPresentation.onIndependentDisplay(overlayContext)
     private val screenSize = Point()
     private val statusVisual=StatusVisualRenderer(visual,StatusVisualPort.BUBBLE,
         runCatching { overlayContext.display?.displayId }.getOrNull() ?: 0)
@@ -174,8 +175,9 @@ class ControllerBubble(
                     if (abs(dx) + abs(dy) > dp(5)) dragged = true
                     if (dragged) {
                         closeMenu()
-                        val size = screen(); val p = requireNotNull(bubbleParams); val side = dp(style.sizeDp)
-                        val position=BubblePlacement.drag(originalX+dx.roundToInt(),originalY+dy.roundToInt(),size.x,size.y,side)
+                        val size = screen(); val p = requireNotNull(bubbleParams)
+                        val position=BubblePlacement.drag(originalX+dx.roundToInt(),originalY+dy.roundToInt(),
+                            size.x,size.y,p.width,clipAtEdge=!independentDisplay)
                         if(p.x!=position.x || p.y!=position.y) {
                             p.x=position.x;p.y=position.y
                             updateBubbleVisual(view,p)
@@ -186,8 +188,8 @@ class ControllerBubble(
                 }
                 MotionEvent.ACTION_UP -> {
                     if (dragged) {
-                        val size = screen(); val p = requireNotNull(bubbleParams); val side = dp(style.sizeDp)
-                        style=BubblePlacement.settle(style,p.x,p.y,size.x,size.y,side,dp(10))
+                        val size = screen(); val p = requireNotNull(bubbleParams)
+                        style=BubblePlacement.settle(style,p.x,p.y,size.x,size.y,p.width,dp(10))
                         saveStyle();applyBubble()
                     } else view.performClick()
                     true
@@ -197,7 +199,8 @@ class ControllerBubble(
             }
         }
         val params = params("UwUMouse · Burbuja")
-        val side=dp(style.sizeDp);val size=screen();val position=BubblePlacement.position(style,size.x,size.y,side)
+        val size=screen();val side=bubbleSide(size)
+        val position=BubblePlacement.position(style,size.x,size.y,side,clipAtEdge=!independentDisplay)
         params.width=side;params.height=side;params.x=position.x;params.y=position.y
         params.flags=bubbleFlags()
         params.alpha=if(params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE!=0)
@@ -218,8 +221,8 @@ class ControllerBubble(
 
     private fun applyBubble() {
         val view = bubble ?: return
-        val p = requireNotNull(bubbleParams); val side = dp(style.sizeDp); val size = screen()
-        val position=BubblePlacement.position(style,size.x,size.y,side)
+        val p = requireNotNull(bubbleParams); val size = screen(); val side = bubbleSide(size)
+        val position=BubblePlacement.position(style,size.x,size.y,side,clipAtEdge=!independentDisplay)
         // F8 releases camera input using the existing source/UP transition, without per-sample UI work.
         val flags=bubbleFlags()
         val oldWidth=p.width;val oldHeight=p.height;val oldX=p.x;val oldY=p.y;val oldFlags=p.flags;val oldAlpha=p.alpha
@@ -917,4 +920,8 @@ class ControllerBubble(
         setFitInsetsTypes(0)
     }
     private fun dp(value: Int) = (value * uiContext.resources.displayMetrics.density + .5f).toInt()
+    private fun bubbleSide(size: Point): Int {
+        val scale = if (independentDisplay) DesktopPresentation.BUBBLE_SCALE else 1f
+        return BubblePlacement.sideInPixels(style.sizeDp, overlayContext.resources.displayMetrics.density * scale, size.x, size.y)
+    }
 }

@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.Point
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.os.Handler
 import android.os.IBinder
@@ -55,8 +56,8 @@ internal class TrustedStatusVisuals(private val context:Context,private val allo
         if(!display.isValid) return false
         val size=Point()
         @Suppress("DEPRECATION") display.getRealSize(size)
-        // The controller bubble deliberately docks half outside the display edge.
-        // Limit clipping so at least half of each dimension remains on screen.
+        // Phone docking can leave half of the bubble outside the display.
+        // Bound that clipping for all callers.
         return width<=size.x && height<=size.y && x>=-width/2 && y>=-height/2 &&
             x.toLong()+width/2<=size.x && y.toLong()+height/2<=size.y
     }
@@ -141,7 +142,16 @@ internal class TrustedStatusVisuals(private val context:Context,private val allo
     }
     private class BitmapView(context:Context,private var bitmap:Bitmap):View(context) {
         private val paint=Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        private val destination=Rect()
         fun setImage(value:Bitmap) { bitmap=value;invalidate() }
-        override fun onDraw(canvas:Canvas) { canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR);canvas.drawBitmap(bitmap,0f,0f,paint) }
+        override fun onSizeChanged(w:Int,h:Int,oldw:Int,oldh:Int) {
+            super.onSizeChanged(w,h,oldw,oldh)
+            destination.set(0,0,w,h)
+        }
+        override fun onDraw(canvas:Canvas) {
+            canvas.drawColor(Color.TRANSPARENT,PorterDuff.Mode.CLEAR)
+            // The app supplies physical pixels for this window and its matching hit area.
+            canvas.drawBitmap(bitmap,null,destination,paint)
+        }
     }
 }
