@@ -30,6 +30,7 @@ abstract interface class MapperGateway {
   Future<LocalProfile> createProfile(String packageName, String name);
   Future<LocalProfile> selectProfile(String id);
   Future<LocalProfile> renameProfile(String id, String name);
+  Future<LocalProfile> duplicateProfile(String id);
   Future<void> deleteProfile(String id);
   Future<bool> exportProfileFile(String id);
   Future<bool> importProfileFile();

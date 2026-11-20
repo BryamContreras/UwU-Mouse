@@ -61,13 +61,52 @@ class ProfileImportTest {
         assertEquals(before,storage.document);assertEquals(writes,storage.writes);assertEquals(current,repository.selected())
     }
 
-    @Test fun existingAndIncomingDuplicateIdsRejectTheWholeImportBeforeAnyWrite() {
+    @Test fun duplicateIdsWithinIncomingDocumentRejectTheWholeImportBeforeAnyWrite() {
         val current=profile("current");val storage=Storage();val repository=ProfileRepository(storage)
         repository.save(current);val before=storage.document;val writes=storage.writes;val a=profile("a")
-        reject { repository.importDocument(ProfileDocument(listOf(a,current),a.id)) }
         reject { repository.importDocument(ProfileDocument(listOf(a,a),a.id)) }
         assertEquals(before,storage.document);assertEquals(writes,storage.writes)
         assertEquals(listOf(current),repository.list())
+    }
+
+    @Test fun repeatedBackupPreservesOriginalsAndSelectsTheRemappedRowOnlyWhenRequested() {
+        val storage=Storage();val repository=ProfileRepository(storage)
+        val original=backup().let { it.copy(selectedProfileId=it.profiles[1].id) }
+        val first=repository.importDocument(original,selectImported=true)
+        val second=repository.importDocument(original)
+        val third=repository.importDocument(original,selectImported=true)
+
+        assertEquals(original.profiles,first.importedProfiles)
+        assertEquals(original.selectedProfileId,second.selectedProfileId)
+        assertEquals(third.importedProfiles[1].id,third.selectedProfileId)
+        assertEquals(3,storage.writes)
+        val all=first.importedProfiles+second.importedProfiles+third.importedProfiles
+        assertEquals(6,all.map { it.id }.toSet().size)
+        assertEquals(6,all.map { it.name }.toSet().size)
+        for ((index, source) in original.profiles.withIndex()) {
+            for (copy in listOf(second.importedProfiles[index],third.importedProfiles[index])) {
+                assertEquals(source.copy(id=copy.id,name=copy.name,switchKey=0),copy)
+            }
+        }
+        val reopened=ProfileRepository(storage)
+        assertEquals(all,reopened.list())
+        assertEquals(third.importedProfiles[1],reopened.selected())
+    }
+
+    @Test fun mixedImportRemapsOnlyCollisionsAndWritesSelectionAndCopiesTogether() {
+        val original=backup().profiles[0]
+        val fresh=profile("new")
+        val storage=Storage();val repository=ProfileRepository(storage)
+        repository.save(original)
+        val document=ProfileDocument(listOf(original,fresh),fresh.id)
+        val result=repository.importDocument(document,selectImported=true)
+        assertEquals(2,storage.writes)
+        assertEquals(fresh,result.importedProfiles[1]);assertEquals(fresh.id,result.selectedProfileId)
+        assertEquals(original,repository.get(original.id))
+        val copied=result.importedProfiles[0]
+        assertNotEquals(original.id,copied.id)
+        assertEquals(original.copy(id=copied.id,name=copied.name),copied)
+        assertEquals(fresh,ProfileRepository(storage).selected())
     }
 
     @Test fun conflictsWithCurrentMappingsRejectEveryIncomingProfileAndPreserveSelection() {
@@ -111,11 +150,14 @@ class ProfileImportTest {
 
     @Test fun failedAtomicStorageWriteLeavesMemoryDiskAndSelectionUnchanged() {
         val current=profile("current");val storage=Storage();val repository=ProfileRepository(storage)
-        repository.save(current);val before=storage.document;val writes=storage.writes;storage.failWrite=true
+        repository.save(current)
+        repository.importDocument(backup())
+        val original=repository.list()
+        val before=storage.document;val writes=storage.writes;storage.failWrite=true
         try { repository.importDocument(backup(),selectImported=true);fail("Expected write failure") } catch(_:IOException) { }
         assertEquals(before,storage.document);assertEquals(writes,storage.writes)
-        assertEquals(listOf(current),repository.list());assertEquals(current,repository.selected())
-        assertEquals(listOf(current),ProfileRepository(storage).list())
+        assertEquals(original,repository.list());assertEquals(current,repository.selected())
+        assertEquals(original,ProfileRepository(storage).list())
     }
 
     @Test fun importTransportRejectsMalformedOversizeUtf8AndTrailingJsonWithoutMutation() {

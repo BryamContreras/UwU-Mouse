@@ -1043,6 +1043,48 @@ void main() {
   }
 
   testWidgets(
+    'desktop display scales visible controls and keeps their taps aligned',
+    (tester) async {
+      tester.view.physicalSize = const Size(800, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      var displayId = 0;
+      mockActivation(<String>[], () => status(uiDisplayId: displayId));
+
+      await tester.pumpWidget(const UwUMouseApp());
+      await tester.pumpAndSettle();
+      final settings = find.descendant(
+        of: find.byType(NavigationBar),
+        matching: find.text('Ajustes'),
+      );
+      double viewportWidth() =>
+          MediaQuery.sizeOf(tester.element(settings)).width;
+      expect(viewportWidth(), 800);
+
+      displayId = 2;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(viewportWidth(), closeTo(800 / 1.15, .001));
+      await tester.tap(settings);
+      await tester.pumpAndSettle();
+      expect(find.text('Conexión'), findsOneWidget);
+
+      tester.view.physicalSize = const Size(320, 600);
+      await tester.pumpAndSettle();
+      expect(viewportWidth(), 320);
+      tester.view.physicalSize = const Size(800, 600);
+      displayId = 0;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(viewportWidth(), 800);
+      expect(find.text('Conexión'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
     'DeX launch requests windows permission and refreshes after Android settings',
     (tester) async {
       tester.view.physicalSize = const Size(320, 740);

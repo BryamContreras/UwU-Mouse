@@ -259,6 +259,13 @@ object GameCoordinator {
         store().update(previous.copy(switchKey=keyCode))
         refreshProfileLibrary(previous.packageName);refreshControls()
     }
+    fun duplicateBubbleProfile(id:String) {
+        requireBubbleProfileChange()
+        check(SessionController.contacts==0) { "Espera a que terminen los contactos" }
+        check(profileRows.any { it.id==id }) { "El perfil no pertenece a este juego" }
+        val duplicate=store().duplicate(id)
+        refreshProfileLibrary(duplicate.packageName);refreshControls()
+    }
     fun deleteBubbleProfile(id:String) {
         requireBubbleProfileChange()
         check(SessionController.contacts==0) { "Espera a que terminen los contactos" }
@@ -399,6 +406,12 @@ object GameCoordinator {
         val p=requireNotNull(store().get(id)).copy(name=name.trim()); store().save(p)
         currentId=id;refreshProfileLibrary(p.packageName)
         return wire(ProfileCodec.toJson(p))
+    }
+    fun duplicate(id:String):Any? {
+        requireProfileChangeAllowed()
+        val copy=store().duplicate(id)
+        refreshProfileLibrary()
+        return wire(ProfileCodec.toJson(copy))
     }
     fun delete(id:String) {
         requireProfileChangeAllowed()
@@ -755,6 +768,7 @@ object GameCoordinator {
             },onVisualSettingsChanged={refreshControls()},profileItems=bubbleProfiles(),
             onCreateProfile={createBubbleProfile(it)},onActivateProfile={activateBubbleProfile(it)},
             onProfileKey={profileId,keyCode -> setBubbleProfileKey(profileId,keyCode)},onDeleteProfile={deleteBubbleProfile(it)},
+            onDuplicateProfile={duplicateBubbleProfile(it)},
             onExportProfile={openProfileFilePicker(it)},onImportProfile={openProfileFilePicker()},
             displayResolution=resolutionSettings,onMenuInputFocusChanged={ service?.refreshMenuPointerSources() },
             keyboardModeEnabled=service?.keyboardModeEnabled==true,keyboardModeAvailable=service?.keyboardModeAvailable==true)

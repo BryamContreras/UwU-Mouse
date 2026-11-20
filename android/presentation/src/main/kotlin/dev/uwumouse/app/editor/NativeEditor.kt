@@ -87,7 +87,8 @@ class NativeEditor(
         val hint = suggestedArea(profile.packageName, size.x, size.y, display.displayId)
         val draft = EditorDraft(profile, size.x, size.y, display.rotation, hint.area,
             displayScope=if(display.displayId==0) "phone" else "external",windowFrame=hint.windowFrame)
-        val view = EditorRoot(overlayContext, draft, presentationHost.cursorPosition(),presentationHost.cursorSizeDp(),presentationHost.cursorStyle(), {
+        val view = EditorRoot(overlayContext, DesktopPresentation.contextForControls(overlayContext), draft,
+            presentationHost.cursorPosition(),presentationHost.cursorSizeDp(),presentationHost.cursorStyle(), {
             onSave(it)
             close()
         }, {
@@ -162,6 +163,7 @@ class NativeEditor(
     }
 
     private class EditorRoot(
+        private val windowContext: Context,
         context: Context,
         private val draft: EditorDraft,
         initialPointer:PointF?,
@@ -197,7 +199,7 @@ class NativeEditor(
             cursorEdge.color=if(cursorStyle=="dark") Color.WHITE else Color.rgb(25,52,102)
             getLocationOnScreen(cursorOrigin)
             canvas.save();canvas.translate(cursorScreenX-cursorOrigin[0],cursorScreenY-cursorOrigin[1])
-            val scale=resources.displayMetrics.density*cursorSizeDp/20f
+            val scale=windowContext.resources.displayMetrics.density*cursorSizeDp/20f
             canvas.scale(scale,scale);canvas.drawPath(cursorPath,cursorFill);canvas.drawPath(cursorPath,cursorEdge);canvas.restore()
         }
         private val density = resources.displayMetrics.density
@@ -223,7 +225,7 @@ class NativeEditor(
         private val hint = TextView(context)
         private val instruction = TextView(context)
         private val error = TextView(context)
-        private val canvas = ControlsCanvas(context, draft, { selected }, { select(it) }, { refreshDrag() },
+        private val canvas = ControlsCanvas(windowContext, draft, { selected }, { select(it) }, { refreshDrag() },
             { beginBinding(it) }, { pendingPlacement }, { control,x,y -> place(control,x,y) }, { control -> properties(control) }, { cameraRegionVisible },
             { pendingMacroPoint }, { index,x,y -> placeMacroPoint(index,x,y) }, { macroPointsVisible || pendingMacroPoint!=null }, { removeSelected(it) })
         private val body = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
@@ -606,11 +608,23 @@ class NativeEditor(
                 val a = draft.value.calibration.area
                 draft.cameraSize(a.width * draft.value.camera.width, a.height * it / 100f)
             }
-            if(selected == EditorDraft.Control.CAMERA) slider("Sensibilidad X", 1, 200, { (draft.value.camera.sensitivityX * 20).toInt() }, { String.format(Locale.ROOT, "%.2f", it / 20f) }) {
-                draft.replace(draft.value.copy(camera = draft.value.camera.copy(sensitivityX = it / 20f)))
+            if(selected == EditorDraft.Control.CAMERA) {
+                cameraSensitivity("Sensibilidad X", CameraSpec::sensitivityX) { camera, gain ->
+                    camera.copy(sensitivityX = gain)
+                }
+                cameraSensitivity("Sensibilidad Y", CameraSpec::sensitivityY) { camera, gain ->
+                    camera.copy(sensitivityY = gain)
+                }
             }
-            if(selected == EditorDraft.Control.CAMERA) slider("Sensibilidad Y", 1, 200, { (draft.value.camera.sensitivityY * 20).toInt() }, { String.format(Locale.ROOT, "%.2f", it / 20f) }) {
-                draft.replace(draft.value.copy(camera = draft.value.camera.copy(sensitivityY = it / 20f)))
+        }
+
+        private fun cameraSensitivity(name: String, read: (CameraSpec) -> Float, change: (CameraSpec, Float) -> CameraSpec) {
+            val maximum = CameraSensitivityScale.maximum(read(draft.value.camera))
+            slider(name, CameraSensitivityScale.MINIMUM, maximum,
+                { CameraSensitivityScale.position(read(draft.value.camera)) },
+                { String.format(Locale.ROOT, "%.2f", read(draft.value.camera)) }) { position ->
+                val profile = draft.value
+                draft.replace(profile.copy(camera = change(profile.camera, CameraSensitivityScale.gain(position))))
             }
         }
 

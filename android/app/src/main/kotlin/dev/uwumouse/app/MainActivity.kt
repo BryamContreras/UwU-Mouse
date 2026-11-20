@@ -106,6 +106,7 @@ class MainActivity : FlutterActivity() {
                     "createProfile" -> result.success(GameCoordinator.create(requireNotNull(call.argument<String>("packageName")),requireNotNull(call.argument<String>("name")),display?.displayId ?: 0))
                     "selectProfile" -> result.success(GameCoordinator.select(requireNotNull(call.argument<String>("id"))))
                     "renameProfile" -> result.success(GameCoordinator.rename(requireNotNull(call.argument<String>("id")),requireNotNull(call.argument<String>("name"))))
+                    "duplicateProfile" -> result.success(GameCoordinator.duplicate(requireNotNull(call.argument<String>("id"))))
                     "deleteProfile" -> { GameCoordinator.delete(requireNotNull(call.argument<String>("id"))); result.success(null) }
                     "exportProfileFile", "importProfileFile" -> {
                         check(profileFileResult==null) { "Termina la selección de archivo anterior" }

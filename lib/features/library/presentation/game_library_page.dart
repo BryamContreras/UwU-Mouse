@@ -15,8 +15,13 @@ import 'widgets/app_picker.dart';
 import 'widgets/profile_name_dialog.dart';
 
 class GameLibraryPage extends StatefulWidget {
-  const GameLibraryPage({super.key, required this.gateway});
+  const GameLibraryPage({
+    super.key,
+    required this.gateway,
+    this.onDisplayChanged,
+  });
   final MapperGateway gateway;
+  final ValueChanged<int>? onDisplayChanged;
 
   @override
   State<GameLibraryPage> createState() => _GameLibraryPageState();
@@ -106,6 +111,9 @@ class _GameLibraryPageState extends State<GameLibraryPage>
         .status()
         .then((next) {
           if (mounted && epoch == _statusEpoch) {
+            if (_status?.uiDisplayId != next.uiDisplayId) {
+              widget.onDisplayChanged?.call(next.uiDisplayId);
+            }
             setState(() {
               _status = next;
               if (mayConfirmClosure && !next.hasSession) {
@@ -331,6 +339,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   Future<void> _exportProfileFile(LocalProfile profile) => _run(() async {
     await _api.exportProfileFile(profile.id);
   });
+
+  Future<void> _duplicateProfile(LocalProfile profile) => _run(() async {
+    await _api.duplicateProfile(profile.id);
+  }, profiles: true);
 
   Future<void> _renameProfile(LocalProfile profile) async {
     final name = await _nameDialog('Nombre del perfil', profile.name);
@@ -588,27 +600,30 @@ class _GameLibraryPageState extends State<GameLibraryPage>
               profiles.firstOrNull;
           return SizedBox(
             height: MediaQuery.sizeOf(context).height * .8,
-            child: ListView(
+            child: SingleChildScrollView(
               padding: const EdgeInsets.all(20),
-              children: [
-                _sheetHeading(
-                  Icons.sports_esports_rounded,
-                  _labelFor(_selectedPackage ?? profile.packageName),
-                  selected?.name ?? 'Perfiles',
-                ),
-                const SizedBox(height: 16),
-                _controls(
-                  selected,
-                  _safe && !_busy && _status?.captureReady == true,
-                ),
-                const Divider(height: 32),
-                _profilePicker(
-                  selected,
-                  onChanged: () {
-                    if (sheetContext.mounted) updateSheet(() {});
-                  },
-                ),
-              ],
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _sheetHeading(
+                    Icons.sports_esports_rounded,
+                    _labelFor(_selectedPackage ?? profile.packageName),
+                    selected?.name ?? 'Perfiles',
+                  ),
+                  const SizedBox(height: 16),
+                  _controls(
+                    selected,
+                    _safe && !_busy && _status?.captureReady == true,
+                  ),
+                  const Divider(height: 32),
+                  _profilePicker(
+                    selected,
+                    onChanged: () {
+                      if (sheetContext.mounted) updateSheet(() {});
+                    },
+                  ),
+                ],
+              ),
             ),
           );
         },
@@ -1280,6 +1295,14 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                       : () => updateAfter(_renameProfile(chosen)),
                   icon: const UwuIcon(Icons.edit_outlined, size: 22),
                   label: const Text('Renombrar'),
+                ),
+              if (chosen != null)
+                TextButton.icon(
+                  onPressed: _working
+                      ? null
+                      : () => updateAfter(_duplicateProfile(chosen)),
+                  icon: const UwuIcon(Icons.content_copy_rounded, size: 22),
+                  label: const Text('Duplicar'),
                 ),
               if (chosen != null)
                 TextButton.icon(

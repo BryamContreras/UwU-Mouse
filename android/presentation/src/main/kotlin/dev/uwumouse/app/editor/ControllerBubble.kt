@@ -34,6 +34,7 @@ class ControllerBubble(
     visual:StatusVisualPort?=null,
 ) {
     private val windows = overlayContext.getSystemService(WindowManager::class.java)
+    private val uiContext = DesktopPresentation.contextForControls(overlayContext)
     private val screenSize = Point()
     private val statusVisual=StatusVisualRenderer(visual,StatusVisualPort.BUBBLE,
         runCatching { overlayContext.display?.displayId }.getOrNull() ?: 0)
@@ -80,6 +81,7 @@ class ControllerBubble(
     private var onActivateProfile:(String)->Unit = {}
     private var onProfileKey:(String,Int)->Unit = { _,_ -> }
     private var onDeleteProfile:(String)->Unit = {}
+    private var onDuplicateProfile:(String)->Unit = {}
     private var onExportProfile:(String)->Unit = {}
     private var onImportProfile:()->Unit = {}
     private var pendingProfileKeyId:String?=null
@@ -114,7 +116,8 @@ class ControllerBubble(
              pointerIntercepted:Boolean=false,onCursorReturn:()->Unit={},onVisualSettingsChanged:()->Unit={},
              profileItems:List<ProfileMenuItem> = emptyList(),onCreateProfile:(String)->Unit={},
              onActivateProfile:(String)->Unit={},onProfileKey:(String,Int)->Unit={_,_->},
-             onDeleteProfile:(String)->Unit={},onExportProfile:(String)->Unit={},onImportProfile:()->Unit={},
+             onDeleteProfile:(String)->Unit={},onDuplicateProfile:(String)->Unit={},
+             onExportProfile:(String)->Unit={},onImportProfile:()->Unit={},
              displayResolution:DisplayResolutionSettingsPort?=null,onMenuInputFocusChanged:(Boolean)->Unit={},
              keyboardModeEnabled:Boolean=false,keyboardModeAvailable:Boolean=false) {
         check(Looper.myLooper() == Looper.getMainLooper())
@@ -136,7 +139,7 @@ class ControllerBubble(
         this.profileItems=profileItems;this.onCreateProfile=onCreateProfile
         this.onExportProfile=onExportProfile;this.onImportProfile=onImportProfile
         this.onActivateProfile=onActivateProfile;this.onProfileKey=onProfileKey
-        this.onDeleteProfile=onDeleteProfile
+        this.onDeleteProfile=onDeleteProfile;this.onDuplicateProfile=onDuplicateProfile
         this.displayResolution=displayResolution;this.onMenuInputFocusChanged=onMenuInputFocusChanged
         menuStatus?.let { if(it.text.toString()!=label) it.text=label }
         if (bubble == null) createBubble()
@@ -145,7 +148,7 @@ class ControllerBubble(
 
     @SuppressLint("ClickableViewAccessibility")
     private fun createBubble() {
-        val view = object:ImageView(overlayContext) {
+        val view = object:ImageView(uiContext) {
             override fun onResolvePointerIcon(event:MotionEvent,pointerIndex:Int):PointerIcon? =
                 if(pointerIntercepted) PointerIcon.getSystemIcon(context,PointerIcon.TYPE_NULL)
                 else super.onResolvePointerIcon(event,pointerIndex)
@@ -254,17 +257,17 @@ class ControllerBubble(
         check(Looper.myLooper() == Looper.getMainLooper())
         if (bubble == null) return
         closeMenu()
-        val panel = LinearLayout(overlayContext).apply {
+        val panel = LinearLayout(uiContext).apply {
             orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(8), dp(12), dp(8))
             background = gradient(Color.argb(244,19,38,70),Color.argb(244,8,17,34),14,Color.rgb(53,80,121))
         }
-        val header=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+        val header=LinearLayout(uiContext).apply { orientation=LinearLayout.HORIZONTAL }
         val status=text(label,11f).apply { gravity=Gravity.CENTER; typeface=android.graphics.Typeface.DEFAULT_BOLD }
         menuStatus=status
         header.addView(status,LinearLayout.LayoutParams(0,dp(40),1f))
         panel.addView(header)
-        val row=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
-        val detail=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(10),dp(4),dp(4)) }
+        val row=LinearLayout(uiContext).apply { orientation=LinearLayout.HORIZONTAL }
+        val detail=LinearLayout(uiContext).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(4),dp(10),dp(4),dp(4)) }
         fun appearancePanel() {
             closeResolutionPanel()
             pendingProfileKeyId=null;pendingProfileDeleteId=null;renderProfiles=null;profileError=null
@@ -279,15 +282,15 @@ class ControllerBubble(
                 BubbleSettings.MAX_CURSOR_SIZE_DP.roundToInt(),style.cursorSizeDp.roundToInt(),{ "$it dp" }) {
                 style=style.copy(cursorSizeDp=it.toFloat());onVisualSettingsChanged()
             }
-            val show=Switch(overlayContext).apply {
+            val show=Switch(uiContext).apply {
                 text="Mostrar controles";textSize=12f;setTextColor(Color.WHITE)
                 ToggleStyle.apply(this)
                 leadingIcon(this,R.drawable.mm_controller)
                 isChecked=style.showControls;contentDescription="Mostrar controles en pantalla"
             }
-            detail.addView(SettingHelp.heading(overlayContext,show,"Mostrar controles",
+            detail.addView(SettingHelp.heading(uiContext,show,"Mostrar controles",
                 "Muestra los marcadores del perfil sobre el juego. Puedes ajustar su transparencia debajo."))
-            val opacity=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL }
+            val opacity=LinearLayout(uiContext).apply { orientation=LinearLayout.VERTICAL }
             detail.addView(opacity)
             slider(opacity,"Opacidad de controles",10,100,(style.controlsOpacity*100).roundToInt(),{ "$it%" }) {
                 style=style.copy(controlsOpacity=it/100f);onVisualSettingsChanged()
@@ -312,7 +315,7 @@ class ControllerBubble(
                 if(deleting!=null) {
                     detail.addView(text("¿Eliminar ${deleting.name}?",12f).apply { typeface=android.graphics.Typeface.DEFAULT_BOLD })
                     detail.addView(text("Se borrará su mapeo.",11f))
-                    val confirmation=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+                    val confirmation=LinearLayout(uiContext).apply { orientation=LinearLayout.HORIZONTAL }
                     fun confirmationButton(name:String,danger:Boolean,action:(View)->Unit)=text(name,12f).apply {
                         gravity=Gravity.CENTER;isClickable=true;contentDescription=name
                         typeface=android.graphics.Typeface.DEFAULT_BOLD
@@ -335,7 +338,7 @@ class ControllerBubble(
                 }
                 pendingProfileDeleteId=null
                 for(item in profileItems) {
-                    val row=LinearLayout(overlayContext).apply {
+                    val row=LinearLayout(uiContext).apply {
                         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER_VERTICAL
                         setPadding(dp(7),dp(3),dp(5),dp(3))
                         background=gradient(if(item.selected) Color.rgb(41,103,187) else Color.rgb(24,57,107),Color.rgb(14,35,73),8)
@@ -362,7 +365,7 @@ class ControllerBubble(
                         }
                     }
                     row.addView(key,LinearLayout.LayoutParams(dp(76),dp(32)).apply { marginStart=dp(6) })
-                    row.addView(ImageButton(overlayContext).apply {
+                    row.addView(ImageButton(uiContext).apply {
                         setImageResource(R.drawable.mm_broom);imageTintList=null
                         scaleType=ImageView.ScaleType.FIT_CENTER;setPadding(dp(6),dp(6),dp(6),dp(6))
                         minimumWidth=0;minimumHeight=0;background=gradient(Color.rgb(35,69,119),Color.rgb(19,41,80),7)
@@ -375,15 +378,24 @@ class ControllerBubble(
                             render()
                         }
                     },LinearLayout.LayoutParams(dp(28),dp(28)).apply { marginStart=dp(5) })
-                    row.addView(text("Eliminar",10f).apply {
-                        gravity=Gravity.CENTER;isClickable=true
-                        setTextColor(Color.rgb(255,190,204));typeface=android.graphics.Typeface.DEFAULT_BOLD
-                        background=gradient(Color.rgb(93,48,79),Color.rgb(61,34,62),7)
-                        contentDescription="Eliminar perfil ${item.name}"
-                        setOnClickListener {
-                            pendingProfileKeyId=null;pendingProfileDeleteId=item.id;profileError=null;render()
-                        }
-                    },LinearLayout.LayoutParams(dp(52),dp(30)).apply { marginStart=dp(5) })
+                    fun profileIcon(icon:Int,description:String,top:Int,bottom:Int,action:()->Unit) {
+                        row.addView(ImageButton(uiContext).apply {
+                            setImageResource(icon);imageTintList=null
+                            scaleType=ImageView.ScaleType.FIT_CENTER;setPadding(dp(5),dp(5),dp(5),dp(5))
+                            minimumWidth=0;minimumHeight=0;background=gradient(top,bottom,7)
+                            contentDescription=description;tooltipText=description
+                            setOnClickListener { action() }
+                        },LinearLayout.LayoutParams(dp(32),dp(32)).apply { marginStart=dp(5) })
+                    }
+                    profileIcon(R.drawable.mm_profile_duplicate,"Duplicar perfil ${item.name}",Color.rgb(38,74,133),Color.rgb(22,46,91)) {
+                        pendingProfileKeyId=null
+                        try { onDuplicateProfile(item.id);profileError=null }
+                        catch(e:Exception) { profileError=e.message ?: "No se pudo duplicar" }
+                        render()
+                    }
+                    profileIcon(R.drawable.mm_profile_delete,"Eliminar perfil ${item.name}",Color.rgb(93,48,79),Color.rgb(61,34,62)) {
+                        pendingProfileKeyId=null;pendingProfileDeleteId=item.id;profileError=null;render()
+                    }
                     row.addView(text("Exportar",11f).apply {
                         gravity=Gravity.CENTER;isClickable=true;contentDescription="Exportar perfil ${item.name}"
                         background=gradient(Color.rgb(38,74,133),Color.rgb(22,46,91),7)
@@ -393,7 +405,7 @@ class ControllerBubble(
                 }
                 profileError?.let { message -> detail.addView(text(message,11f).apply { setTextColor(Color.rgb(255,179,190)) }) }
                 if(pendingProfileKeyId!=null) detail.addView(text("Pulsa una tecla · Esc cancela",10f))
-                val profileActions=LinearLayout(overlayContext).apply { orientation=LinearLayout.HORIZONTAL }
+                val profileActions=LinearLayout(uiContext).apply { orientation=LinearLayout.HORIZONTAL }
                 profileActions.addView(centeredIconAction("Nuevo perfil","Crear perfil",R.drawable.mm_setting_add,
                     Color.rgb(52,127,222),Color.rgb(27,76,157),bold=true) {
                         pendingProfileKeyId=null
@@ -419,14 +431,14 @@ class ControllerBubble(
             systemObserver?.close();systemObserver=null
             detail.removeAllViews()
             val controller=DoNotDisturbController(service)
-            val monitor=Switch(overlayContext).apply {
+            val monitor=Switch(uiContext).apply {
                 text="Monitor de estado";textSize=12f;setTextColor(Color.WHITE)
                 contentDescription="Mostrar monitor de estado";ToggleStyle.apply(this)
                 leadingIcon(this,R.drawable.mm_setting_monitor)
                 isChecked=style.monitorEnabled
             }
             detail.addView(monitor,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))
-            val monitorOpacity=LinearLayout(overlayContext).apply { orientation=LinearLayout.VERTICAL }
+            val monitorOpacity=LinearLayout(uiContext).apply { orientation=LinearLayout.VERTICAL }
             slider(monitorOpacity,"Opacidad del monitor",10,100,(style.monitorOpacity*100).roundToInt(),{ "$it%" }) {
                 style=style.copy(monitorOpacity=it/100f);onVisualSettingsChanged()
             }
@@ -440,7 +452,7 @@ class ControllerBubble(
                     centerMenu()
                 }
             }
-            val toggle=Switch(overlayContext).apply {
+            val toggle=Switch(uiContext).apply {
                 text="No molestar";textSize=12f;setTextColor(Color.WHITE)
                 contentDescription="No molestar";ToggleStyle.apply(this)
                 leadingIcon(this,R.drawable.mm_setting_dnd)
@@ -454,7 +466,7 @@ class ControllerBubble(
             detail.addView(explanation)
             detail.addView(access,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin=dp(4) })
             displayResolution?.let { port ->
-                val resolution=DisplayResolutionSettingsPanel(overlayContext,port,
+                val resolution=DisplayResolutionSettingsPanel(uiContext,port,
                     { setMenuTextInputActive(it) },{ centerMenu() })
                 resolutionPanel=resolution
                 detail.addView(resolution,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
@@ -540,7 +552,7 @@ class ControllerBubble(
         }
         when(menuDetailPage) { "Perfiles"->profilePanel();"Ajustes"->appearancePanel();"Sistema"->systemPanel() }
         panel.addView(row); panel.addView(detail)
-        val scroll = object:ScrollView(overlayContext) {
+        val scroll = object:ScrollView(uiContext) {
             override fun dispatchTouchEvent(event:MotionEvent):Boolean {
                 if(menuClosing) return true
                 val handled=super.dispatchTouchEvent(event)
@@ -645,8 +657,8 @@ class ControllerBubble(
             "Tamaño del cursor" -> "Altura visible de nuestro cursor. La punta sigue indicando el lugar del clic aunque cambies su tamaño."
             else -> "Tamaño visible de la burbuja. Puedes arrastrarla para colocarla en otro borde."
         }
-        panel.addView(SettingHelp.heading(overlayContext,caption,name,explanation))
-        panel.addView(StepperSeekBar(overlayContext,name,min,max,initial,
+        panel.addView(SettingHelp.heading(uiContext,caption,name,explanation))
+        panel.addView(StepperSeekBar(uiContext,name,min,max,initial,
             onValueChanged={ value -> change(value);caption.text="$name: ${format(value)}" },
             onValueCommitted=::saveStyle),
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,dp(44)))
@@ -849,7 +861,7 @@ class ControllerBubble(
     private fun gradient(top:Int,bottom:Int,radius:Int,stroke:Int?=null) = GradientDrawable(
         GradientDrawable.Orientation.TL_BR,intArrayOf(top,bottom),
     ).apply { cornerRadius=dp(radius).toFloat(); if(stroke!=null) setStroke(dp(1),stroke) }
-    private fun text(value: String, size: Float) = TextView(overlayContext).apply { text = value; textSize = size; setTextColor(Color.rgb(224,239,255)); setPadding(0, dp(2), 0, dp(2)) }
+    private fun text(value: String, size: Float) = TextView(uiContext).apply { text = value; textSize = size; setTextColor(Color.rgb(224,239,255)); setPadding(0, dp(2), 0, dp(2)) }
     /** Icons on switches and captions stay at the start; they share the text's touch target. */
     private fun leadingIcon(target:TextView,resource:Int,size:Int=20,gap:Int=8) {
         val icon=overlayContext.getDrawable(resource)?.mutate() ?: return
@@ -859,11 +871,11 @@ class ControllerBubble(
     }
     /** Center the icon and label together while exposing a single clickable accessibility node. */
     private fun centeredIconAction(label:String,description:String,icon:Int,top:Int,bottom:Int,
-                                   bold:Boolean=false,action:(View)->Unit):LinearLayout = LinearLayout(overlayContext).apply {
+                                   bold:Boolean=false,action:(View)->Unit):LinearLayout = LinearLayout(uiContext).apply {
         orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER;isClickable=true
         minimumHeight=dp(38);contentDescription=description
         background=gradient(top,bottom,8)
-        addView(ImageView(overlayContext).apply {
+        addView(ImageView(uiContext).apply {
             setImageResource(icon);imageTintList=null;scaleType=ImageView.ScaleType.FIT_CENTER
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
         },LinearLayout.LayoutParams(dp(18),dp(18)).apply { marginEnd=dp(6) })
@@ -873,11 +885,11 @@ class ControllerBubble(
         },LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT))
         setOnClickListener(action)
     }
-    private fun tile(name:String,icon:Int,action:()->Unit):View = LinearLayout(overlayContext).apply {
+    private fun tile(name:String,icon:Int,action:()->Unit):View = LinearLayout(uiContext).apply {
         orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER; isClickable=true; contentDescription=name
         val active=name.contains('\n')
         background=gradient(Color.rgb(31,53,88),Color.rgb(18,34,61),10)
-        addView(ImageView(overlayContext).apply { setImageResource(icon); imageTintList=null; scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(32),dp(32)))
+        addView(ImageView(uiContext).apply { setImageResource(icon); imageTintList=null; scaleType=ImageView.ScaleType.FIT_CENTER; importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO },LinearLayout.LayoutParams(dp(32),dp(32)))
         addView(text(name.substringBefore('\n'),10.5f).apply {
             gravity=Gravity.CENTER; typeface=android.graphics.Typeface.DEFAULT_BOLD
             setTextColor(Color.WHITE); importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -904,5 +916,5 @@ class ControllerBubble(
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         setFitInsetsTypes(0)
     }
-    private fun dp(value: Int) = (value * overlayContext.resources.displayMetrics.density + .5f).toInt()
+    private fun dp(value: Int) = (value * uiContext.resources.displayMetrics.density + .5f).toInt()
 }

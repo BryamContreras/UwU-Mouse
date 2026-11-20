@@ -29,6 +29,7 @@ import kotlin.math.roundToInt
 class PerformanceMonitorBubble(private val service:Context,private val overlayContext:Context=service,visual:StatusVisualPort?=null,
                                private val onPositionChanged:(Float,Float)->Unit={_,_->}) {
     private val windows=overlayContext.getSystemService(WindowManager::class.java)
+    private val uiContext = DesktopPresentation.contextForControls(overlayContext)
     private val screenSize=Point()
     private val statusVisual=StatusVisualRenderer(visual,StatusVisualPort.MONITOR,
         runCatching { overlayContext.display?.displayId }.getOrNull() ?: 0)
@@ -61,17 +62,17 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
         val existing=view
         if(existing!=null) { setMovable(movable);return }
         this.movable=movable
-        val battery=TextView(overlayContext).apply {
+        val battery=TextView(uiContext).apply {
             textSize=11f;setTextColor(Color.WHITE);typeface=Typeface.DEFAULT_BOLD
             gravity=Gravity.CENTER_VERTICAL;text="--%";includeFontPadding=false
             setShadowLayer(dp(2).toFloat(),0f,dp(1).toFloat(),Color.argb(220,0,0,0))
         }
-        val fps=TextView(overlayContext).apply {
+        val fps=TextView(uiContext).apply {
             textSize=11f;setTextColor(Color.rgb(224,239,255));typeface=Typeface.DEFAULT_BOLD
             gravity=Gravity.CENTER_VERTICAL;text="-- FPS";includeFontPadding=false
             setShadowLayer(dp(2).toFloat(),0f,dp(1).toFloat(),Color.argb(220,0,0,0))
         }
-        val root=LinearLayout(overlayContext).apply {
+        val root=LinearLayout(uiContext).apply {
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER
             setPadding(dp(4),dp(2),dp(4),dp(2))
             alpha=opacity
@@ -81,7 +82,7 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
             }
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
-        val batteryIcon=ImageView(overlayContext).apply {
+        val batteryIcon=ImageView(uiContext).apply {
             setImageResource(R.drawable.mm_battery);scaleType=ImageView.ScaleType.FIT_CENTER
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -251,7 +252,7 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
     private fun flags(movable:Boolean)=WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
         if(movable) 0 else WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-    private fun dp(value:Int)=(value*overlayContext.resources.displayMetrics.density+.5f).toInt()
+    private fun dp(value:Int)=(value*uiContext.resources.displayMetrics.density+.5f).toInt()
     private fun screen():Point=screenSize.also {
         @Suppress("DEPRECATION")
         requireNotNull(if(overlayContext===service) service.getSystemService(DisplayManager::class.java).getDisplay(0)

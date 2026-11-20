@@ -103,6 +103,10 @@ class MethodChannelMapperGateway implements MapperGateway {
       _profile('renameProfile', {'id': id, 'name': name});
 
   @override
+  Future<LocalProfile> duplicateProfile(String id) =>
+      _profile('duplicateProfile', {'id': id});
+
+  @override
   Future<void> deleteProfile(String id) =>
       _channel.invokeMethod<void>('deleteProfile', {'id': id});
 

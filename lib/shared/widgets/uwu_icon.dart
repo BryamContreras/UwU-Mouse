@@ -80,6 +80,7 @@ enum _Glyph {
   exportFile,
   refresh,
   edit,
+  duplicate,
   delete,
   check,
   profile,
@@ -104,6 +105,7 @@ final _identifiers = <IconData, _Glyph>{
   Icons.close: _Glyph.close,
   Icons.close_rounded: _Glyph.close,
   Icons.check_rounded: _Glyph.check,
+  Icons.content_copy_rounded: _Glyph.duplicate,
   Icons.delete_outline: _Glyph.delete,
   Icons.edit_outlined: _Glyph.edit,
   Icons.error_outline_rounded: _Glyph.warning,
@@ -171,6 +173,20 @@ final Map<_Glyph, List<_Shape>> _art = {
         ..close()
         ..moveTo(14.8, 6.2)
         ..lineTo(17.8, 9.2),
+    ),
+  ],
+  _Glyph.duplicate: [
+    _Shape(
+      Path()
+        ..moveTo(8, 5)
+        ..quadraticBezierTo(8, 3, 10, 3)
+        ..lineTo(19, 3)
+        ..quadraticBezierTo(21, 3, 21, 5)
+        ..lineTo(21, 16),
+      accent: true,
+    ),
+    _Shape(
+      Path()..addRRect(RRect.fromLTRBR(3, 7, 17, 21, const Radius.circular(2))),
     ),
   ],
   _Glyph.delete: [

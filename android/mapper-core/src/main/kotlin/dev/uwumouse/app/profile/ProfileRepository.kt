@@ -1,5 +1,7 @@
 package dev.uwumouse.app.profile
 
+import java.util.UUID
+
 /** Storage is invoked only by explicit repository operations, never by the prepared engine. */
 interface ProfileStorage {
     fun read(): String?
@@ -38,18 +40,50 @@ class ProfileRepository(private val storage: ProfileStorage) {
         commit(next, selectedId)
     }
 
-    /** Merge a validated backup in one commit; existing IDs and mappings can never be replaced. */
+    @Synchronized fun duplicate(id: String): GameProfile {
+        load()
+        val original = requireNotNull(profiles[id]) { "Perfil no encontrado" }
+        // Profile activation keys must be unique within the same game and display scope.
+        val duplicate = original.copy(
+            id = newProfileId(profiles.keys),
+            name = availableCopyName(original, profiles.values),
+            switchKey = 0,
+            additionalActions = original.additionalActions.toList(),
+            macros = original.macros.map { it.copy(steps = it.steps.toList()) },
+        )
+        val next = LinkedHashMap(profiles)
+        next[duplicate.id] = duplicate
+        commit(next, selectedId)
+        return duplicate
+    }
+
+    /** Merge a complete backup in one commit, giving each colliding profile an independent ID. */
     @Synchronized fun importDocument(document: ProfileDocument, selectImported: Boolean = false): ProfileImportResult {
         require(document.profiles.isNotEmpty()) { "El documento no contiene perfiles" }
         ProfileCodec.encodeDocument(document) // Validate the complete incoming document before changing anything.
         if (selectImported) require(document.selectedProfileId != null) { "La importación necesita un perfil seleccionado" }
         load()
-        require(document.profiles.none { it.id in profiles }) { "Un perfil importado ya existe; no se reemplazó ninguno" }
         val next = LinkedHashMap(profiles)
-        document.profiles.forEach { next[it.id] = it }
-        val selection = if (selectImported) document.selectedProfileId else selectedId
+        val occupiedIds = profiles.keys.toMutableSet().apply { document.profiles.forEach { add(it.id) } }
+        val remappedIds = mutableMapOf<String, String>()
+        val imported = document.profiles.map { incoming ->
+            val profile = if (incoming.id in profiles) {
+                val newId = newProfileId(occupiedIds)
+                occupiedIds.add(newId)
+                remappedIds[incoming.id] = newId
+                incoming.copy(
+                    id = newId,
+                    name = availableCopyName(incoming, next.values + document.profiles),
+                    switchKey = if (activationKeyConflicts(incoming, profiles.values)) 0 else incoming.switchKey,
+                )
+            } else incoming
+            next[profile.id] = profile
+            profile
+        }
+        val selection = if (selectImported) requireNotNull(document.selectedProfileId).let { remappedIds[it] ?: it }
+            else selectedId
         commit(next, selection) // Also validates combined limits and same-game shortcut conflicts before writing.
-        return ProfileImportResult(document.profiles.toList(), selection, next.size)
+        return ProfileImportResult(imported, selection, next.size)
     }
 
     /** Deletion and an optional same-game selection replacement share one atomic document. */
@@ -71,6 +105,27 @@ class ProfileRepository(private val storage: ProfileStorage) {
         require(id == null || id in profiles) { "Perfil seleccionado inexistente" }
         if (id != selectedId) commit(profiles, id)
     }
+
+    private fun newProfileId(occupied: Set<String>): String = generateSequence { UUID.randomUUID().toString() }
+        .first { it !in occupied }
+
+    private fun availableCopyName(original: GameProfile, existing: Collection<GameProfile>): String {
+        val names = existing.filter { it.packageName == original.packageName }.map { it.name.lowercase() }.toSet()
+        val base = original.name.trim()
+        return generateSequence(1) { it + 1 }.map { number ->
+            val suffix = if (number == 1) " (copia)" else " (copia $number)"
+            val truncated = base.take(GameProfile.MAX_NAME_LENGTH - suffix.length)
+                .trimEnd { it.isWhitespace() || it.isHighSurrogate() }
+            "$truncated$suffix"
+        }.first { it.lowercase() !in names }
+    }
+
+    private fun activationKeyConflicts(incoming: GameProfile, existing: Collection<GameProfile>): Boolean =
+        incoming.switchKey != 0 && existing.any { profile ->
+            profile.packageName == incoming.packageName &&
+                profile.calibration.displayScope == incoming.calibration.displayScope &&
+                (profile.switchKey == incoming.switchKey || incoming.switchKey in ProfileSwitchKeys.mappedKeys(profile))
+        }
 
     private fun load() {
         if (loaded) return

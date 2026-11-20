@@ -8,6 +8,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ProfileRepositoryTest {
+    @Test fun duplicateKeepsCalibrationAndMappingsWithoutChangingSelectionOrActivationKey() {
+        val source=profile().let { it.copy(name="Perfil 😸".repeat(8),switchKey=36,
+            calibration=it.calibration.copy(confirmed=true,displayScope="external",windowFrame=it.calibration.area),
+            camera=it.camera.copy(sensitivityX=.375f,sensitivityY=1.25f),
+            additionalActions=listOf(ActionSpec(.8f,.5f,"mouse",2)),
+            macros=listOf(MacroSpec("macro","Secuencia",.5f,.6f,code=39,steps=listOf(MacroStep(.3f,.4f,5))))) }
+        val selected=profile("selected").copy(name="Otro perfil")
+        val storage=Storage();val store=ProfileRepository(storage)
+        store.save(source);store.save(selected)
+        val first=store.duplicate(source.id);val second=store.duplicate(source.id)
+        assertEquals(3,listOf(source.id,first.id,second.id).toSet().size)
+        assertEquals(3,listOf(source.name,first.name,second.name).toSet().size)
+        for (copy in listOf(first,second)) {
+            assertTrue(copy.name.length<=GameProfile.MAX_NAME_LENGTH)
+            assertEquals(source.copy(id=copy.id,name=copy.name,switchKey=0),copy)
+        }
+        val reopened=ProfileRepository(storage)
+        assertEquals(selected,reopened.selected())
+        assertEquals(listOf(source,selected,first,second),reopened.list())
+    }
+
     @Test fun captureRatesRoundTripWithoutRewritingLegacyOrNewSavedValuesOnRead() {
         for(rate in listOf(0,60,90,100,120,125,144,240,250,500,1000)) {
             val original=profile().let { it.copy(camera=it.camera.copy(updateRateHz=rate)) }

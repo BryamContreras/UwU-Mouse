@@ -32,7 +32,7 @@ void main() {
     expect(gateway.style, 'cyan');
     await tester.pumpWidget(const SizedBox.shrink());
   });
-  testWidgets('profiles expose import beside new profile and export', (
+  testWidgets('profiles expose import, export, and independent duplication', (
     tester,
   ) async {
     final gateway = _MemoryGateway();
@@ -62,6 +62,21 @@ void main() {
     await tester.tap(find.text('Exportar'));
     await tester.pumpAndSettle();
     expect(gateway.exports, ['profile-1']);
+    await tester.ensureVisible(find.text('Duplicar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Duplicar'));
+    await tester.pumpAndSettle();
+    expect(gateway.duplicates, ['profile-1']);
+    final profiles = find.byType(DropdownButtonFormField<String>);
+    await tester.ensureVisible(profiles);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<DropdownButtonFormField<String>>(profiles).initialValue,
+      'profile-1',
+    );
+    await tester.tap(profiles);
+    await tester.pumpAndSettle();
+    expect(find.text('Entrenamiento (copia)'), findsOneWidget);
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -141,6 +156,8 @@ class _MemoryGateway implements MapperGateway {
   final startedProfiles = <String>[];
   final commands = <NativeCommand>[];
   final exports = <String>[];
+  final duplicates = <String>[];
+  final _profileCopies = <LocalProfile>[];
   int imports = 0;
   String style = 'classic';
 
@@ -190,6 +207,7 @@ class _MemoryGateway implements MapperGateway {
   @override
   Future<List<LocalProfile>> listProfiles() async => [
     LocalProfile.fromWire(profileWire()),
+    ..._profileCopies,
   ];
 
   @override
@@ -199,6 +217,18 @@ class _MemoryGateway implements MapperGateway {
   @override
   Future<LocalProfile> selectProfile(String id) async =>
       LocalProfile.fromWire(profileWire());
+
+  @override
+  Future<LocalProfile> duplicateProfile(String id) async {
+    duplicates.add(id);
+    final copy = LocalProfile.fromWire({
+      ...profileWire(),
+      'id': 'copy-${_profileCopies.length + 1}',
+      'name': 'Entrenamiento (copia)',
+    });
+    _profileCopies.add(copy);
+    return copy;
+  }
 
   @override
   Future<void> startProfile(String id) async => startedProfiles.add(id);

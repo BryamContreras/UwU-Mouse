@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.InsetDrawable
 import android.graphics.drawable.StateListDrawable
 import android.view.Gravity
 import android.widget.Button
@@ -21,6 +22,9 @@ internal class StepperSeekBar(
     onValueCommitted:()->Unit={},
 ):LinearLayout(context) {
     private val values=SliderValueController(minimum,maximum,initial,onValueChanged,onValueCommitted)
+    private val stepWidth=dp(40)
+    private val rowHeight=dp(44)
+    private val stepDiameter=dp(36)
     val seekBar=SeekBar(context).apply {
         min=minimum;max=maximum;progress=values.value
         contentDescription=name
@@ -33,9 +37,9 @@ internal class StepperSeekBar(
     init {
         orientation=HORIZONTAL
         gravity=Gravity.CENTER_VERTICAL
-        addView(decrease,LayoutParams(dp(40),dp(44)))
-        addView(seekBar,LayoutParams(0,dp(44),1f))
-        addView(increase,LayoutParams(dp(40),dp(44)))
+        addView(decrease,LayoutParams(stepWidth,rowHeight))
+        addView(seekBar,LayoutParams(0,rowHeight,1f))
+        addView(increase,LayoutParams(stepWidth,rowHeight))
         decrease.setOnClickListener { if(isAttachedToWindow && isEnabled) { values.step(-1);refreshControls() } }
         increase.setOnClickListener { if(isAttachedToWindow && isEnabled) { values.step(1);refreshControls() } }
         seekBar.setOnSeekBarChangeListener(object:SeekBar.OnSeekBarChangeListener {
@@ -71,18 +75,24 @@ internal class StepperSeekBar(
 
     private fun stepButton(symbol:String,description:String)=Button(context).apply {
         text=symbol;textSize=21f;isAllCaps=false;gravity=Gravity.CENTER;includeFontPadding=false
-        minWidth=0;minimumWidth=0;minHeight=0;minimumHeight=0;setPadding(0,0,0,0)
+        minWidth=0;minimumWidth=0;minHeight=0;minimumHeight=0
         contentDescription=description;stateListAnimator=null
         setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled),intArrayOf()),
             intArrayOf(Color.rgb(139,157,183),Color.rgb(234,244,255))))
         fun surface(fill:Int,stroke:Int)=GradientDrawable().apply {
-            cornerRadius=dp(9).toFloat();setColor(fill);setStroke(dp(1),stroke)
+            shape=GradientDrawable.OVAL;setColor(fill);setStroke(dp(1),stroke)
         }
-        background=StateListDrawable().apply {
+        val states=StateListDrawable().apply {
             addState(intArrayOf(-android.R.attr.state_enabled),surface(Color.rgb(25,35,51),Color.rgb(58,72,94)))
             addState(intArrayOf(android.R.attr.state_pressed),surface(Color.rgb(47,89,149),Color.rgb(139,189,255)))
             addState(intArrayOf(),surface(Color.rgb(29,53,86),Color.rgb(91,132,188)))
         }
+        // Keep the same touch bounds and center a round surface inside them.
+        val horizontalInset=stepWidth-stepDiameter
+        val verticalInset=rowHeight-stepDiameter
+        background=InsetDrawable(states,horizontalInset/2,verticalInset/2,
+            horizontalInset-horizontalInset/2,verticalInset-verticalInset/2)
+        setPadding(0,0,0,0)
     }
 
     private fun dp(value:Int)=(value*resources.displayMetrics.density+.5f).toInt()

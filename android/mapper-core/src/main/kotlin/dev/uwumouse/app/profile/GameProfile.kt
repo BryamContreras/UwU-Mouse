@@ -24,6 +24,7 @@ data class GameProfile(
 
     companion object {
         const val SCHEMA_VERSION = 9
+        const val MAX_NAME_LENGTH = 80
         const val MAX_ACTIONS = 24 // Configured bindings; the live injector still has ten contacts.
         const val MAX_MACROS = 24
         const val MAX_MACRO_STEPS = 16
@@ -171,7 +172,8 @@ object ProfileValidator {
         fun check(ok: Boolean, message: String) { if (!ok) errors.add(message) }
         check(profile.schemaVersion == GameProfile.SCHEMA_VERSION, "Versión de perfil no compatible")
         check(idPattern.matches(profile.id), "Identificador de perfil no válido")
-        check(profile.name.isNotBlank() && profile.name.length <= 80 && profile.name.none { it.isISOControl() }, "Nombre de perfil no válido")
+        check(profile.name.isNotBlank() && profile.name.length <= GameProfile.MAX_NAME_LENGTH &&
+            profile.name.none { it.isISOControl() }, "Nombre de perfil no válido")
         check(profile.packageName.length <= 255 && packagePattern.matches(profile.packageName), "Paquete de destino no válido")
         check(profile.switchKey == 0 || keyValid(profile.switchKey), "Tecla de perfil no válida")
         val c = profile.calibration
