@@ -38,12 +38,13 @@ internal class FreeFireCompensation(
         val next=input+adjusted
         val bounded=next.coerceIn(minimumInput,maximumInput)
         correction=if(next==bounded) (next-input)-adjusted else 0.0
+        val normalizedStep=(bounded-input)/reference
         input=bounded
-        normalizedPosition=inverse(input/reference,normalizedPosition)
+        normalizedPosition=inverse(input/reference,normalizedPosition,normalizedStep)
         return (anchor+normalizedPosition*reference).coerceIn(-coordinateLimit,coordinateLimit)
     }
 
-    private fun inverse(signedInput:Double,previous:Double):Double {
+    private fun inverse(signedInput:Double,previous:Double,normalizedStep:Double):Double {
         if(signedInput==0.0) return 0.0
         val sign=if(signedInput<0.0) -1.0 else 1.0
         val target=abs(signedInput)
@@ -51,8 +52,12 @@ internal class FreeFireCompensation(
         // even for an extreme finite report, and Newton cannot leave it.
         var low=target/25.0
         var high=min(target*2.0,(target+MAXIMUM_ATAN_TERM)/25.0)
-        val oldPosition=previous*sign
-        var position=if(oldPosition>=low && oldPosition<=high) oldPosition else high
+        // The previous solution and the local gain give Newton a closer starting
+        // point for small reports. The same bracket handles larger steps.
+        val previousSquare=previous*previous
+        val previousGain=(2.0+.224*previousSquare)/(1.0+5.6*previousSquare)
+        val prediction=(previous+normalizedStep*previousGain)*sign
+        var position=if(prediction>=low && prediction<=high) prediction else high
         val tolerance=1e-10/reference+target*2e-15
         repeat(12) {
             val residual=integral(position)-target

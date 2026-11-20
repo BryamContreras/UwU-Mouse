@@ -32,7 +32,7 @@ data class PreparedFireCadence(val triggerKind: String = "mouse", val code: Int 
 
 object ProfileCompiler {
     fun prepare(profile: GameProfile, currentWidth: Int, currentHeight: Int, rotation: Int,
-                displayScope: String = "phone", windowFrame: GameArea? = null, densityDpi:Float=160f): PreparedProfile {
+                displayScope: String = "phone", windowFrame: GameArea? = null): PreparedProfile {
         ProfileValidator.requireValid(profile)
         val c = profile.calibration
         require(c.confirmed) { "Abre el editor y confirma el área de juego antes de iniciar" }
@@ -63,8 +63,7 @@ object ProfileCompiler {
                 AimBounds(area.left+insetX,area.top+insetY,
                     Math.nextDown(area.right-insetX),Math.nextDown(area.bottom-insetY))
             }
-            UwUCameraPolicy(freeFire,bounds,maxOf(area.width,area.height),
-                enhancedFreeFireOptimization=freeFire && camera.enhancedFreeFireOptimization,densityDpi=densityDpi)
+            UwUCameraPolicy(freeFire,bounds,maxOf(area.width,area.height))
         } else null
         val geometry = MappingGeometry(currentWidth.toFloat(), currentHeight.toFloat(),
             joystickX = area.displayX(j.x), joystickY = area.displayY(j.y),

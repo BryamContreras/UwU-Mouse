@@ -593,7 +593,7 @@ class NativeEditor(
         }
 
         private fun addGeometry() {
-            if(selected == EditorDraft.Control.CAMERA) { addCameraSuspend(); addEnhancedFreeFireOptimization(); addCameraRegion(); addCameraFrequency() }
+            if(selected == EditorDraft.Control.CAMERA) { addCameraSuspend(); addCameraRegion(); addCameraFrequency() }
             if(selected == EditorDraft.Control.JOYSTICK) slider("Radio", 2, 40, { (draft.value.joystick.radius * 100).toInt() }, { "$it%" }) {
                 val a = draft.value.calibration.area
                 draft.joystickRadius(it / 100f * min(a.width, a.height))
@@ -616,30 +616,6 @@ class NativeEditor(
 
         private fun customCameraRegion():Boolean=draft.value.camera.let {
             it.customRegion && !CameraSpec.isFreeFirePackage(draft.value.packageName)
-        }
-
-        private fun addEnhancedFreeFireOptimization() {
-            if(!CameraSpec.isFreeFirePackage(draft.value.packageName)) return
-            var refreshing=false
-            val optimization=Switch(context).apply {
-                ToggleStyle.apply(this)
-                text="Optimización Mejorada FreeFire";textSize=13f;setTextColor(Color.WHITE)
-                optionIcon(this,R.drawable.mm_camera)
-                isChecked=draft.value.camera.enhancedFreeFireOptimization
-                setOnCheckedChangeListener { view,checked ->
-                    if(!refreshing && view.isAttachedToWindow && scroller.visibility==View.VISIBLE && selected==EditorDraft.Control.CAMERA) {
-                        draft.enhancedFreeFireOptimization(checked)
-                        refresh()
-                    }
-                }
-            }
-            refreshers += {
-                refreshing=true
-                optimization.isChecked=draft.value.camera.enhancedFreeFireOptimization
-                refreshing=false
-            }
-            body.addView(SettingHelp.heading(context,optimization,"Optimización Mejorada FreeFire",
-                "Usa una compensación horizontal alternativa para la cámara de Free Fire. Guarda el perfil para aplicarla."))
         }
 
         private fun addCameraRegion() {

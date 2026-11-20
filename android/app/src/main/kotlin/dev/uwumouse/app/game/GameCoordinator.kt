@@ -524,9 +524,7 @@ object GameCoordinator {
                 val window=requireNotNull(service?.boundsForPackage(p.packageName)) { "No se pudo confirmar el área de la ventana" }
                 val frame=GameArea(window.left.toFloat(),window.top.toFloat(),window.right.toFloat(),window.bottom.toFloat())
                 val runtimeProfile=RuntimeProfileGeometry.adapt(p,width,height,rotation,displayScope(displayId),frame)
-                val compensationDensityDpi=app.resources.displayMetrics.density*160f
-                val prepared=ProfileCompiler.prepare(runtimeProfile,width,height,rotation,displayScope(displayId),frame,
-                    densityDpi=compensationDensityDpi)
+                val prepared=ProfileCompiler.prepare(runtimeProfile,width,height,rotation,displayScope(displayId),frame)
                 geometryInvalidated=false
                 val area=runtimeProfile.calibration.area
                 require(area.left>=window.left && area.top>=window.top && area.right<=window.right && area.bottom<=window.bottom) { "El área calibrada ya no cabe en la ventana; recalibra el perfil" }

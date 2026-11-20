@@ -3,11 +3,9 @@ package dev.uwumouse.app.engine
 import kotlin.math.abs
 
 /** The UwU Mouse camera policy for calibrated game regions. */
-data class UwUCameraPolicy(val freeFire:Boolean,val bounds:AimBounds,val referenceWidth:Float,
-    val enhancedFreeFireOptimization:Boolean=false,val densityDpi:Float=160f) {
+data class UwUCameraPolicy(val freeFire:Boolean,val bounds:AimBounds,val referenceWidth:Float) {
     init {
         require(referenceWidth.isFinite() && referenceWidth>0f)
-        require(densityDpi.isFinite() && densityDpi>0f)
     }
 }
 
@@ -30,10 +28,7 @@ class UwUCameraController(
     // Keep fractional motion even when Android's final Float coordinate cannot represent it yet.
     private var cameraX=anchorX.toDouble()
     private var cameraY=anchorY.toDouble()
-    private val enhancedCompensation=if(policy.freeFire && policy.enhancedFreeFireOptimization)
-        EnhancedFreeFireCompensation(anchorX.toDouble(),policy.densityDpi.toDouble(),FREE_FIRE_COORDINATE_LIMIT,
-            geometry.sensitivityX.toDouble()*ORIGIN_GAIN_NORMALIZATION) else null
-    private val horizontalCompensation=if(policy.freeFire && enhancedCompensation==null) FreeFireCompensation(
+    private val horizontalCompensation=if(policy.freeFire) FreeFireCompensation(
         anchorX.toDouble(),policy.referenceWidth.toDouble(),FREE_FIRE_COORDINATE_LIMIT) else null
     private var lastActivityAt:Long?=null
     private var nextAllowedStartAt=0L
@@ -56,14 +51,12 @@ class UwUCameraController(
         active=false
         cameraX=anchorX.toDouble();cameraY=anchorY.toDouble()
         horizontalCompensation?.reset()
-        enhancedCompensation?.reset()
         lastActivityAt=null;nextAllowedStartAt=0L;pendingStartAt=null;nextIdleCheckAt=null
     }
 
     fun motion(rawDx:Float,rawDy:Float):Boolean {
         if(!rawDx.isFinite() || !rawDy.isFinite()) return false
-        val dx=if(enhancedCompensation!=null) rawDx.toDouble()*if(geometry.invertX) -1 else 1
-            else rawDx.toDouble()*geometry.sensitivityX*if(geometry.invertX) -1 else 1
+        val dx=rawDx.toDouble()*geometry.sensitivityX*if(geometry.invertX) -1 else 1
         val dy=rawDy.toDouble()*geometry.sensitivityY*if(geometry.invertY) -1 else 1
         return displayMotion(dx,dy)
     }
@@ -77,11 +70,7 @@ class UwUCameraController(
         // Free Fire never retires/restarts on a timer. Its source samples need no
         // idle timestamp; TouchComposer timestamps the actual delivered frames.
         val now=if(policy.freeFire) 0L else clockMillis()
-        // A nonzero report still belongs to the enhanced accumulator when its attenuated
-        // displacement is smaller than a Float payload step, including at the limit.
-        val negligible=if(enhancedCompensation!=null) dx==0.0 && abs(dy)<MOTION_EPSILON
-            else abs(dx)<MOTION_EPSILON && abs(dy)<MOTION_EPSILON
-        if(negligible) {
+        if(abs(dx)<MOTION_EPSILON && abs(dy)<MOTION_EPSILON) {
             lastActivityAt=now
             return true
         }
@@ -98,7 +87,7 @@ class UwUCameraController(
             if(!policy.freeFire) return true
         }
         if(policy.freeFire &&
-            ((enhancedCompensation?.wouldClip(dx) ?: horizontalCompensation!!.wouldClip(dx)) || abs(cameraY+dy)>FREE_FIRE_COORDINATE_LIMIT) &&
+            (horizontalCompensation!!.wouldClip(dx) || abs(cameraY+dy)>FREE_FIRE_COORDINATE_LIMIT) &&
             (cameraX!=anchorX.toDouble() || cameraY!=anchorY.toDouble())) {
             // Retire only camera at its last position, then begin at the safe anchor.
             // A MOVE back to the anchor would rotate the game; an acknowledged UP/DOWN
@@ -107,7 +96,7 @@ class UwUCameraController(
             if(!beginCamera(now)) return false
             restarts++
         }
-        val nextX=enhancedCompensation?.advance(dx) ?: horizontalCompensation?.advance(dx) ?: cameraX+dx
+        val nextX=horizontalCompensation?.advance(dx) ?: cameraX+dx
         val nextY=cameraY+dy
         if(policy.freeFire) {
             cameraX=nextX.coerceIn(-FREE_FIRE_COORDINATE_LIMIT,FREE_FIRE_COORDINATE_LIMIT)
@@ -141,7 +130,6 @@ class UwUCameraController(
         if(!composer.begin(MappingEngine.CAMERA_OWNER,x,y,preferredId=TouchCoordinatePolicy.CAMERA_ID)) return false
         cameraX=x.toDouble();cameraY=y.toDouble()
         horizontalCompensation?.reset()
-        enhancedCompensation?.reset()
         // Preserve the activation's idle-check phase without waking while no finger exists.
         advanceIdleCheckPast(now)
         return true
@@ -194,8 +182,5 @@ class UwUCameraController(
         private const val IDLE_RELEASE_MILLIS=700L
         private const val IDLE_CHECK_MILLIS=350L
         private const val FREE_FIRE_COORDINATE_LIMIT=666_666.0
-        // At the origin the positional equation tends to45/14. Multiplying by28/45
-        // retains the existing local horizontal gain of2; Y is never normalized.
-        private const val ORIGIN_GAIN_NORMALIZATION=28.0/45.0
     }
 }

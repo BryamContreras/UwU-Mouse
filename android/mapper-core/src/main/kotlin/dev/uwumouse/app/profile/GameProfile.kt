@@ -91,8 +91,6 @@ data class CameraSpec(
     val suspendMouseButton: Int = 0,
     /** Smooth otherwise uses the calibrated game area with a 50-pixel inset. */
     val customRegion: Boolean = false,
-    /** Optional density-aware horizontal strategy, effective only for Free Fire. */
-    val enhancedFreeFireOptimization: Boolean = false,
 ) {
     companion object {
         const val BOUNDED = "bounded"

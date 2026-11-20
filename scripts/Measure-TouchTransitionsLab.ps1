@@ -3,7 +3,6 @@ param(
     [Parameter(Mandatory=$true)][ValidateRange(0,2147483647)][int]$DisplayId,
     [ValidateRange(100,10000)][int]$DurationMs=4000,
     [switch]$Precision,
-    [switch]$EnhancedFreeFireOptimization,
     [switch]$Instrumented,
     [string]$Destination
 )
@@ -100,7 +99,6 @@ $manifest=[ordered]@{
     schemaVersion=1; sourceOrigin='synthetic-app'; syntheticInputConfirmed=$true; physicalInput=$false; physicalInputConfirmed=$false
     workload='lab-touch-transitions'; serial=$targetSerial; applicationId=$applicationId; receiverApplicationId=$receiverId
     displayId=$DisplayId; requestedDurationMs=$DurationMs; precision=[bool]$Precision
-    enhancedFreeFireOptimization=[bool]$EnhancedFreeFireOptimization
     requestedClickRateHz=10; sourceBatchHz=250; samplesPerBatch=4; sampleSpacingMs=1; directionPhaseMs=125
     receiverReset='Only InputLab is force-stopped/reopened, on the explicitly selected display; no application data is cleared.'
     profiles='RAM-only diagnostic profile; saved profiles are exported before and after.'
@@ -180,9 +178,8 @@ try {
         Save-Json $probe 'probe-start.json'
     }
     $precisionWire=([bool]$Precision).ToString().ToLowerInvariant()
-    $enhancedWire=([bool]$EnhancedFreeFireOptimization).ToString().ToLowerInvariant()
     $started=$true # A timed-out Binder reply can still leave an accepted laboratory request.
-    Invoke-MapperAction 'labTouchTransitions' @('--extra',"displayId:i:$DisplayId",'--extra',"durationMs:i:$DurationMs",'--extra',"precision:b:$precisionWire",'--extra',"enhanced:b:$enhancedWire")
+    Invoke-MapperAction 'labTouchTransitions' @('--extra',"displayId:i:$DisplayId",'--extra',"durationMs:i:$DurationMs",'--extra',"precision:b:$precisionWire")
     $timer=[Diagnostics.Stopwatch]::StartNew()
     do {
         $remaining=15000-[int]$timer.ElapsedMilliseconds

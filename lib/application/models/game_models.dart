@@ -58,10 +58,6 @@ class LocalProfile {
       precisionAim = _integer(wire, 'schemaVersion') >= 5
           ? _boolean(_map(wire, 'camera'), 'precisionAim')
           : false,
-      enhancedFreeFireOptimization =
-          _map(wire, 'camera').containsKey('enhancedFreeFireOptimization')
-          ? _boolean(_map(wire, 'camera'), 'enhancedFreeFireOptimization')
-          : false,
       cameraCustomRegion =
           _integer(wire, 'schemaVersion') >= 9 &&
               _map(wire, 'camera').containsKey('customRegion')
@@ -161,7 +157,6 @@ class LocalProfile {
   final int schemaVersion, screenWidth, screenHeight, switchKey;
   final bool calibrated,
       precisionAim,
-      enhancedFreeFireOptimization,
       cameraCustomRegion,
       joystickEnabled,
       cameraEnabled,

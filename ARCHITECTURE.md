@@ -357,15 +357,8 @@ La política depende del paquete del juego:
   el residuo de una pareja de entradas opuestas y la dependencia de su partición,
   conservando la curva local; los flicks grandes cambian respecto de Euler.
   El eje Y conserva su ganancia lineal. La región personalizada no interviene en
-  esta política. La opción `camera.enhancedFreeFireOptimization`, apagada por
-  defecto y efectiva sólo en Free Fire, selecciona otra estrategia horizontal
-  por muestra. Usa el punto medio propuesto, la amplitud del reporte y la densidad
-  lógica del contexto de aplicación. Se evalúa en `Double`, conserva fracciones
-  con suma compensada y aplica después la sensibilidad X. El factor fijo `28/45`
-  iguala aproximadamente la pendiente inicial de ambas estrategias; no calibra
-  grados/cm. Y conserva su escala lineal y los mismos límites y cierres confirmados.
-  Esta ecuación por reporte no impone reversibilidad táctil ni añade filtro temporal.
-  Los documentos anteriores sin la opción se leen con `false`.
+  esta política. Se conserva la lectura de perfiles guardados con la opción de
+  compensación alternativa. Al guardarlos de nuevo, se omite dicho ajuste.
 
 La sensibilidad X/Y sigue siendo independiente. `precisionAim` se aplica mientras
 el M1 físico reconocido está mantenido, antes de compensación y sensibilidad.
