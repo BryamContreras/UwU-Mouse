@@ -57,6 +57,10 @@ class MethodChannelMapperGateway implements MapperGateway {
       _channel.invokeMethod<void>('activationCancel');
 
   @override
+  Future<void> openActivationWindow() =>
+      _channel.invokeMethod<void>('openActivationWindow');
+
+  @override
   Future<void> wirelessDebuggingSettings() =>
       _channel.invokeMethod<void>('wirelessDebuggingSettings');
 

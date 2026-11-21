@@ -2,18 +2,16 @@ package dev.uwumouse.app
 
 import android.Manifest
 import android.app.ActivityOptions
-import android.hardware.display.DisplayManager
 import android.graphics.Point
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Handler
-import android.os.Looper
 import android.net.Uri
 import android.provider.Settings
 import dev.uwumouse.app.runtime.NativeSessionHost
 import dev.uwumouse.app.editor.ExternalOverlayPermissionRequiredException
 import dev.uwumouse.app.activation.LocalActivation
-import dev.uwumouse.app.activation.ActivationNetworkPermission
+import dev.uwumouse.app.activation.ActivationFlutterActivity
+import dev.uwumouse.app.activation.LocalActivationActivity
 import dev.uwumouse.app.session.SessionController
 import dev.uwumouse.app.session.SessionService
 import dev.uwumouse.app.game.GameCoordinator
@@ -23,11 +21,10 @@ import dev.uwumouse.app.backend.BackendRegistry
 import dev.uwumouse.app.backend.BackendStatusReader
 import dev.uwumouse.app.backend.BackendStatusSnapshot
 import dev.uwumouse.app.backend.SharedStatusRead
-import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
-class MainActivity : FlutterActivity() {
+class MainActivity : ActivationFlutterActivity() {
     override fun onResume() {
         super.onResume()
         // A desktop display may have disconnected while the session service was stopped.
@@ -37,9 +34,6 @@ class MainActivity : FlutterActivity() {
     private var pendingStatusToken:Any?=null
     private var statusSubscription:SharedStatusRead.Subscription?=null
     private var profileFileResult:MethodChannel.Result?=null
-    private class PendingActivation(val result:MethodChannel.Result,val action:()->Unit)
-    private var pendingActivation:PendingActivation?=null
-    private var activationPermissionRequestInFlight=false
     companion object {
         var latest=java.lang.ref.WeakReference<MainActivity>(null)
         @Volatile var createdCount=0
@@ -57,7 +51,6 @@ class MainActivity : FlutterActivity() {
         pendingStatusToken=null
         val statusResult=pendingStatusResult;pendingStatusResult=null
         statusResult?.error("ACTIVITY_DESTROYED","La pantalla se cerró durante la consulta",null)
-        cancelPendingActivation("Se cerró la pantalla de activación; vuelve a intentarlo")
         destroyedCount++
         android.util.Log.i("UwuActivity","destroyed instance=${System.identityHashCode(this)} pid=${android.os.Process.myPid()} uptime=${android.os.SystemClock.uptimeMillis()}")
         super.onDestroy()
@@ -69,6 +62,7 @@ class MainActivity : FlutterActivity() {
         dev.uwumouse.app.backend.BackendRegistry.requestAttach(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.uwumouse/control.v1").setMethodCallHandler { call, result ->
             try {
+                if (handleConnectionCall(call, result)) return@setMethodCallHandler
                 when(call.method) {
                     "cursorStyle" -> result.success(CursorStylePreferences.get(this))
                     "setCursorStyle" -> {
@@ -78,26 +72,8 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                     "status" -> requestStatus(result)
-                    "activationStatus" -> result.success(LocalActivation.status())
-                    "activationStartDiscovery" -> {
-                        withActivationPermission(result,requestNotifications=true) { LocalActivation.startDiscovery() }
-                    }
-                    "activationPair" -> {
-                        val host=call.argument<String>("host");val port=call.argument<Int>("port")
-                        val code=requireNotNull(call.argument<String>("code"))
-                        withActivationPermission(result) { LocalActivation.pair(host,port,code) }
-                    }
-                    "activationConnect" -> {
-                        val host=call.argument<String>("host");val port=call.argument<Int>("port")
-                        withActivationPermission(result) { LocalActivation.connect(host,port) }
-                    }
-                    "activationCancel" -> { cancelPendingActivation("Activación cancelada");LocalActivation.cancel();result.success(null) }
-                    "wirelessDebuggingSettings" -> {
-                        try { startActivity(Intent("android.settings.WIRELESS_DEBUGGING_SETTINGS")) }
-                        catch(_:android.content.ActivityNotFoundException) {
-                            startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-                            android.widget.Toast.makeText(this,"Abre Depuración inalámbrica",android.widget.Toast.LENGTH_LONG).show()
-                        }
+                    "openActivationWindow" -> {
+                        launchInSeparateTask(Intent(this,LocalActivationActivity::class.java))
                         result.success(null)
                     }
                     "listApps" -> result.success(GameCatalog.list(this))
@@ -194,47 +170,6 @@ class MainActivity : FlutterActivity() {
     private fun uiStatus(backend:android.os.Bundle?):Map<String,Any?> =
         SessionController.status(this,backend)+mapOf("uiDisplayId" to (display?.displayId ?: 0),
             "drawOverlays" to Settings.canDrawOverlays(this))
-    override fun onRequestPermissionsResult(requestCode:Int,permissions:Array<out String>,grantResults:IntArray) {
-        super.onRequestPermissionsResult(requestCode,permissions,grantResults)
-        if(requestCode==42) {
-            activationPermissionRequestInFlight=false
-            val pending=pendingActivation ?: return
-            pendingActivation=null
-            if(isFinishing || isDestroyed) {
-                pending.result.error("ACTIVATION_CANCELLED","Vuelve a abrir la activación",null)
-                return
-            }
-            completeActivation(pending)
-        }
-    }
-    private fun withActivationPermission(result:MethodChannel.Result,requestNotifications:Boolean=false,action:()->Unit) {
-        check(!activationPermissionRequestInFlight && pendingActivation==null) { "Responde primero a la solicitud de permisos de Android" }
-        val permissions=mutableListOf<String>()
-        if(android.os.Build.VERSION.SDK_INT>=37 && !ActivationNetworkPermission.granted(this))
-            permissions+=Manifest.permission.ACCESS_LOCAL_NETWORK
-        if(requestNotifications && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)
-            permissions+=Manifest.permission.POST_NOTIFICATIONS
-        val pending=PendingActivation(result,action)
-        if(permissions.isEmpty()) { completeActivation(pending);return }
-        pendingActivation=pending
-        activationPermissionRequestInFlight=true
-        try { requestPermissions(permissions.toTypedArray(),42) }
-        catch(failure:Exception) { pendingActivation=null;activationPermissionRequestInFlight=false;throw failure }
-    }
-    private fun completeActivation(pending:PendingActivation) {
-        if(!ActivationNetworkPermission.granted(this)) {
-            pending.result.error("LOCAL_NETWORK_PERMISSION_REQUIRED",
-                "Permite Dispositivos cercanos en UwU Mouse para vincular el motor por red local",null)
-            return
-        }
-        try { pending.action();pending.result.success(null) }
-        catch(failure:Exception) { pending.result.error("NATIVE_STATE",failure.message,null) }
-    }
-    private fun cancelPendingActivation(message:String) {
-        val pending=pendingActivation ?: return
-        pendingActivation=null
-        pending.result.error("ACTIVATION_CANCELLED",message,null)
-    }
     @Deprecated("Android activity result bridge")
     override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?) {
         super.onActivityResult(requestCode,resultCode,data)

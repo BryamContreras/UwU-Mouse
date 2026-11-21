@@ -9,7 +9,6 @@ import '../../../application/policies/session_readiness.dart';
 import '../../../shared/widgets/uwu_icon.dart';
 import '../../connection/presentation/connection_indicators.dart';
 import '../../connection/presentation/connection_settings_panel.dart';
-import '../../connection/presentation/local_activation_sheet.dart';
 import '../../settings/presentation/cursor_settings.dart';
 import 'widgets/app_picker.dart';
 import 'widgets/profile_name_dialog.dart';
@@ -575,15 +574,7 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     );
   }
 
-  Future<void> _activateOnPhone() async {
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => LocalActivationSheet(gateway: _api),
-    );
-    if (mounted) await _poll();
-  }
+  Future<void> _activateOnPhone() => _run(_api.openActivationWindow);
 
   Future<void> _gameOptions(LocalProfile profile) async {
     await _selectProfile(profile.id);
@@ -843,6 +834,13 @@ class _GameLibraryPageState extends State<GameLibraryPage>
   );
 
   Widget _connectionSummary(NativeStatus? status) {
+    final motorActive = status?.backend;
+    final canActivateMotor =
+        status != null &&
+        !status.backend &&
+        !status.active &&
+        _safeStatus(status) &&
+        !_working;
     final decoration = BoxDecoration(
       gradient: const LinearGradient(
         colors: [Color(0xfff0f8ff), Color(0xffe8f4ff)],
@@ -853,10 +851,10 @@ class _GameLibraryPageState extends State<GameLibraryPage>
     const padding = EdgeInsets.symmetric(horizontal: 8, vertical: 2);
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Keep the same breakpoint as the former shared card's inner width.
-        final wide = constraints.maxWidth >= 616;
-        Widget option(Widget child, Key key) => wide
+        final wide = constraints.maxWidth >= 760;
+        Widget option(Widget child, Key key, {int flex = 4}) => wide
             ? Expanded(
+                flex: flex,
                 child: Container(
                   key: key,
                   padding: padding,
@@ -915,6 +913,48 @@ class _GameLibraryPageState extends State<GameLibraryPage>
                       : () => _run(_api.wirelessDebuggingSettings),
                 ),
                 const ValueKey('wireless-debugging-card'),
+              ),
+              if (wide)
+                const SizedBox(width: 12)
+              else
+                const Divider(height: 1, indent: 8, endIndent: 8),
+              option(
+                ListTile(
+                  key: const ValueKey('motor-activation'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                  minTileHeight: 56,
+                  minVerticalPadding: 4,
+                  visualDensity: VisualDensity.compact,
+                  minLeadingWidth: 28,
+                  horizontalTitleGap: 8,
+                  titleTextStyle: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    height: 1.15,
+                    color: Color(0xff10315e),
+                  ),
+                  subtitleTextStyle: const TextStyle(
+                    fontSize: 12,
+                    height: 1.2,
+                    color: Color(0xff527394),
+                  ),
+                  leading: const Icon(
+                    Icons.bolt_rounded,
+                    color: Color(0xff1966ab),
+                    size: 28,
+                  ),
+                  title: const Text('Motor'),
+                  subtitle: Text(switch (motorActive) {
+                    true => 'Activo',
+                    false =>
+                      canActivateMotor ? 'Inactivo · Activar' : 'Inactivo',
+                    null => 'Comprobando',
+                  }),
+                  trailing: connectionIcon(motorActive, size: 24),
+                  onTap: canActivateMotor ? _activateOnPhone : null,
+                ),
+                const ValueKey('motor-card'),
+                flex: 3,
               ),
               if (wide)
                 const SizedBox(width: 12)

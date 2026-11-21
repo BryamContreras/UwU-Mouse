@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:uwu_mouse/app/mapper_app.dart';
+import 'package:uwu_mouse/features/connection/presentation/local_activation_page.dart';
+import 'package:uwu_mouse/platform/android/method_channel_mapper_gateway.dart';
 
 import 'support/profile_fixtures.dart' show displayProfileWire, profileWire;
 
@@ -436,6 +438,10 @@ void main() {
     testWidgets(
       'home system options open Android with real wireless state $enabled',
       (tester) async {
+        tester.view.physicalSize = const Size(460, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
         final calls = <String>[];
         var wire = status(drawOverlays: enabled == true)
           ..['wirelessDebuggingEnabled'] = enabled;
@@ -1294,6 +1300,13 @@ void main() {
       expect(find.text('Depuración inalámbrica'), findsOneWidget);
       expect(find.text('Configurar en Android'), findsOneWidget);
       expect(find.text('Comprobar permiso en Android'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('motor-activation')),
+          matching: find.text('Comprobando'),
+        ),
+        findsOneWidget,
+      );
       expect(find.text('Captura nativa'), findsNothing);
       expect(find.text('Motor de toques'), findsNothing);
       expect(find.textContaining('Desactivad'), findsNothing);
@@ -1328,16 +1341,20 @@ void main() {
     final first = tester.getRect(
       find.byKey(const ValueKey('wireless-debugging-card')),
     );
-    final second = tester.getRect(find.byKey(const ValueKey('overlay-card')));
+    final second = tester.getRect(find.byKey(const ValueKey('motor-card')));
+    final third = tester.getRect(find.byKey(const ValueKey('overlay-card')));
     final bounds = tester.getRect(
       find.byKey(const ValueKey('connection-summary')),
     );
     expect(first.top, second.top);
+    expect(second.top, third.top);
     expect(second.left - first.right, greaterThanOrEqualTo(10));
+    expect(third.left - second.right, greaterThanOrEqualTo(10));
     expect(first.left, greaterThanOrEqualTo(bounds.left));
-    expect(second.right, lessThanOrEqualTo(bounds.right));
+    expect(third.right, lessThanOrEqualTo(bounds.right));
     await tester.tap(find.byKey(const ValueKey('wireless-debugging-settings')));
     await tester.pumpAndSettle();
+    expect(find.byType(BottomSheet), findsNothing);
     await tester.tap(find.byKey(const ValueKey('overlay-settings')));
     await tester.pumpAndSettle();
     expect(calls, contains('wirelessDebuggingSettings'));
@@ -1350,12 +1367,53 @@ void main() {
     final wireless = tester.getRect(
       find.byKey(const ValueKey('wireless-debugging-settings')),
     );
+    final motor = tester.getRect(
+      find.byKey(const ValueKey('motor-activation')),
+    );
     final overlay = tester.getRect(
       find.byKey(const ValueKey('overlay-settings')),
     );
-    expect(overlay.top, greaterThanOrEqualTo(wireless.bottom));
+    expect(motor.top, greaterThanOrEqualTo(wireless.bottom));
+    expect(overlay.top, greaterThanOrEqualTo(motor.bottom));
     expect(wireless.left, overlay.left);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('home motor card reflects engine status and session readiness', (
+    tester,
+  ) async {
+    final calls = <String>[];
+    var blocked = true;
+    var backend = false;
+    mockActivation(calls, () => status(blocked: blocked, backend: backend));
+    await tester.pumpWidget(const UwUMouseApp());
+    await tester.pumpAndSettle();
+    final motor = find.byKey(const ValueKey('motor-activation'));
+    Finder motorLabel(String label) =>
+        find.descendant(of: motor, matching: find.text(label));
+    expect(tester.widget<ListTile>(motor).onTap, isNull);
+    expect(motorLabel('Inactivo'), findsOneWidget);
+
+    blocked = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(motor).onTap, isNotNull);
+    expect(motorLabel('Inactivo · Activar'), findsOneWidget);
+    await tester.tap(motor);
+    await tester.pumpAndSettle();
+    expect(
+      calls.where((method) => method == 'openActivationWindow'),
+      hasLength(1),
+    );
+    expect(find.byType(BottomSheet), findsNothing);
+
+    backend = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+    expect(tester.widget<ListTile>(motor).onTap, isNull);
+    expect(motorLabel('Activo'), findsOneWidget);
+    expect(calls, isNot(contains('activationStartDiscovery')));
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
@@ -1507,10 +1565,11 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const UwUMouseApp());
-      await tester.pumpAndSettle();
-      await openConnectionSettings(tester);
-      await tester.tap(find.text('Activar motor'));
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: LocalActivationPage(gateway: MethodChannelMapperGateway()),
+        ),
+      );
       await tester.pumpAndSettle();
       expect(
         calls.where((c) => c.method == 'activationStartDiscovery'),
@@ -1557,10 +1616,7 @@ void main() {
       expect(find.text('Motor activo'), findsOneWidget);
       expect(calls.map((c) => c.method), isNot(contains('startProfile')));
       expect(calls.map((c) => c.method), isNot(contains('openEditor')));
-      await tester.tap(find.text('Listo'));
-      await tester.pumpAndSettle();
-      expect(calls.where((c) => c.method == 'activationCancel'), hasLength(1));
-      expect(find.text('Motor de toques'), findsNothing);
+      expect(find.text('Listo'), findsOneWidget);
       await tester.pumpWidget(const SizedBox.shrink());
     },
   );
@@ -1593,10 +1649,25 @@ void main() {
           null,
         ),
       );
-      await tester.pumpWidget(const UwUMouseApp());
-      await tester.pumpAndSettle();
-      await openConnectionSettings(tester);
-      await tester.tap(find.text('Activar motor'));
+      final platformCalls = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          platformCalls.add(call.method);
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: LocalActivationPage(gateway: MethodChannelMapperGateway()),
+        ),
+      );
       await tester.pumpAndSettle();
       final connect = find.byKey(const ValueKey('activation-connect'));
       final activationScroll = find
@@ -1638,19 +1709,13 @@ void main() {
         calls.where((c) => c == 'activationStatus').length,
         resumedReads + 1,
       );
-      await tester.scrollUntilVisible(
-        find.byTooltip('Cerrar activación'),
-        -150,
-        scrollable: activationScroll,
-      );
-      await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Cerrar activación'));
       await tester.pumpAndSettle();
-      expect(calls.where((c) => c == 'activationCancel'), hasLength(1));
+      expect(platformCalls, contains('SystemNavigator.pop'));
+      await tester.pumpWidget(const SizedBox.shrink());
       final reads = calls.where((c) => c == 'activationStatus').length;
       await tester.pump(const Duration(seconds: 3));
       expect(calls.where((c) => c == 'activationStatus').length, reads);
-      await tester.pumpWidget(const SizedBox.shrink());
     },
   );
 

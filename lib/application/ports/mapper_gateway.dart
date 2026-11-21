@@ -23,6 +23,7 @@ abstract interface class MapperGateway {
   });
   Future<void> activationConnect({String? host, int? port});
   Future<void> activationCancel();
+  Future<void> openActivationWindow();
   Future<void> wirelessDebuggingSettings();
   Future<List<LaunchableApp>> listApps();
   Future<List<LocalProfile>> listProfiles();

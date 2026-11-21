@@ -16,6 +16,20 @@
         android:icon="@mipmap/ic_uwumouse">
         <activity android:name=".ProfileFileActivity" android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
         <activity
+            android:name=".activation.LocalActivationActivity"
+            android:enableOnBackInvokedCallback="true"
+            android:exported="false"
+            android:label="@string/activate_motor"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.activation"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:resizeableActivity="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
+        </activity>
+        <activity
             android:name=".MainActivity"
             android:enableOnBackInvokedCallback="true"
             android:exported="true"
