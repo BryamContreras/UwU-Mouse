@@ -29,7 +29,7 @@ class MouseCameraSuspendProfileTest {
         assertEquals(0,restored.camera.suspendMouseButton)
         assertEquals(0,writes)
         assertFalse(ProfileInputPolicy.consumesButton(prepare(restored),16,false,false))
-        assertTrue(ProfileInputPolicy.consumesKey(prepare(restored),125,false,false))
+        assertTrue(ProfileInputPolicy.consumesKey(prepare(restored),125,textMode=false))
     }
 
     @Test fun allowedMouseMasksRoundTripAndCompileWithoutCreatingTouchBindings() {
@@ -75,7 +75,7 @@ class MouseCameraSuspendProfileTest {
         assertTrue(ProfileInputPolicy.consumesButton(prepare(mouseHold),8,true,false))
         val keyHold=p.copy(camera=p.camera.copy(suspendKey=8),action=p.action.copy(triggerKind="mouse",code=8))
         assertTrue(ProfileValidator.validate(keyHold).isEmpty())
-        assertTrue(ProfileInputPolicy.consumesKey(prepare(keyHold),8,true,false))
+        assertTrue(ProfileInputPolicy.consumesKey(prepare(keyHold),8,textMode=true))
         val profileSwitch=p.copy(camera=p.camera.copy(suspendMouseButton=16),switchKey=16)
         ProfileSwitchKeys.requireValid(listOf(profileSwitch))
     }

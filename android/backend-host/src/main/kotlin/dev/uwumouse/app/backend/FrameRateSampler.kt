@@ -6,14 +6,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /** Bounded, on-demand SurfaceFlinger queries. Never called from the input or UI threads. */
 internal class FrameRateSampler {
-    private data class Layer(val component:String, val name:String, val foundAtNanos:Long)
+    private data class Layer(val component:String, val name:String, val foundAtNanos:Long, var sampled:Boolean=false)
     private val busy=AtomicBoolean(false)
     private var cached:Layer?=null
     private var lastAttemptNanos=0L
     private var lastDiscoveryComponent:String?=null
     private var lastDiscoveryNanos=0L
 
-    fun sample(packageName:String, component:String, shortComponent:String):Double? {
+    fun sample(packageName:String, component:String, shortComponent:String):FrameStatsParser.Sample? {
         if(!validPackage(packageName) || !busy.compareAndSet(false,true)) return null
         try {
             val now=System.nanoTime()
@@ -28,11 +28,12 @@ internal class FrameRateSampler {
                 layer=Layer(component,name,now);cached=layer
             }
             val latency=command("--latency",layer.name)
-            val fps=latency?.let { FrameStatsParser.fps(it,System.nanoTime()) }
-            // Keep a good layer indefinitely; retry discovery at most every 10 s when
-            // a removed surface, device limitation or static content yields no frames.
-            if(fps==null && System.nanoTime()-layer.foundAtNanos>=LAYER_RETRY_NANOS) cached=null
-            return fps
+            val sample=latency?.let { FrameStatsParser.sample(it,System.nanoTime()) }
+            // A working surface can be replaced while the activity stays focused.
+            // Discovery retains its existing rate limit even if that surface disappears.
+            if(sample!=null) layer.sampled=true
+            else if(layer.sampled || System.nanoTime()-layer.foundAtNanos>=LAYER_RETRY_NANOS) cached=null
+            return sample
         } finally { busy.set(false) }
     }
 
@@ -46,15 +47,17 @@ internal class FrameRateSampler {
             val input=process.inputStream
             while(System.nanoTime()<deadline) {
                 val available=input.available()
-                if(available>0) {
-                    val count=input.read(buffer,0,minOf(buffer.size,available))
-                    if(count>0) {
-                        if(bytes.size()+count>MAX_BYTES) return null
-                        bytes.write(buffer,0,count)
-                    }
-                } else if(!process.isAlive) {
+                if(available==0 && process.isAlive) {
+                    Thread.sleep(10)
+                    continue
+                }
+                // Drain the pipe after exit too. Output can arrive between available() and isAlive.
+                val count=input.read(buffer,0,if(available>0) minOf(buffer.size,available) else buffer.size)
+                if(count<0) {
                     return if(process.exitValue()==0) bytes.toString(Charsets.UTF_8.name()) else null
-                } else Thread.sleep(10)
+                }
+                if(bytes.size()+count>MAX_BYTES) return null
+                bytes.write(buffer,0,count)
             }
             return null
         } catch (_:Exception) { return null }
@@ -76,8 +79,15 @@ internal class FrameRateSampler {
     }
 }
 
-/** Uses actual presented-frame timestamps, never the display refresh period. */
+/** Measures the activity surface from FrameTracker rows. The first line is display refresh period. */
 internal object FrameStatsParser {
+    enum class Source(val diagnosticValue:String) { PRESENTED("presented"), FRAME_READY("frame_ready") }
+    data class Sample(val fps:Double,val source:Source)
+    private data class Frame(val presented:Long,val ready:Long)
+    private const val HISTORY_NANOS=2_000_000_000L
+    private const val READY_FRESHNESS_NANOS=500_000_000L
+    private val whitespace=Regex("\\s+")
+
     fun chooseLayer(output:String,component:String,shortComponent:String):String? {
         val candidates=output.lineSequence().map { it.trim() }.filter {
             it.length<=1024 && it.startsWith("SurfaceView[") && it.contains("(BLAST)") &&
@@ -87,12 +97,35 @@ internal object FrameStatsParser {
         return candidates.singleOrNull()
     }
 
-    fun fps(output:String,nowNanos:Long):Double? {
-        val frames=output.lineSequence().drop(1).mapNotNull { line ->
-            val columns=line.trim().split(Regex("\\s+"))
-            if(columns.size<3) null else columns[1].toLongOrNull()
-        }.filter { it>0 && it!=Long.MAX_VALUE && it<=nowNanos && nowNanos-it<=2_000_000_000L }
-            .distinct().sorted().toList()
+    fun sample(output:String,nowNanos:Long):Sample? {
+        val rows=output.lineSequence().drop(1).mapNotNull { line ->
+            val columns=line.trim().split(whitespace)
+            if(columns.size!=3 || columns[0].toLongOrNull()==null) return@mapNotNull null
+            val presented=columns[1].toLongOrNull() ?: return@mapNotNull null
+            val ready=columns[2].toLongOrNull() ?: return@mapNotNull null
+            Frame(presented,ready)
+        }.toList()
+        val presented=rows.asSequence().map { it.presented }
+        rate(recent(presented,nowNanos))?.let { return Sample(it,Source.PRESENTED) }
+
+        // A completed producer buffer provides an estimate when an old display
+        // present fence stays fixed across newly ready frames.
+        val readyRows=rows.filter { isRecent(it.ready,nowNanos) }
+        val stuck=readyRows.map { it.presented }.filter { it>0 && it!=Long.MAX_VALUE }
+            .distinct().singleOrNull() ?: return null
+        if(stuck>=nowNanos-HISTORY_NANOS) return null
+        val ready=readyRows.filter { it.presented==stuck }.map { it.ready }.distinct().sorted()
+        if(ready.isEmpty() || nowNanos-ready.last()>READY_FRESHNESS_NANOS) return null
+        return rate(ready)?.let { Sample(it,Source.FRAME_READY) }
+    }
+
+    private fun recent(timestamps:Sequence<Long>,nowNanos:Long):List<Long> =
+        timestamps.filter { isRecent(it,nowNanos) }.distinct().sorted().toList()
+
+    private fun isRecent(value:Long,nowNanos:Long) =
+        value>0 && value!=Long.MAX_VALUE && value<=nowNanos && nowNanos-value<=HISTORY_NANOS
+
+    private fun rate(frames:List<Long>):Double? {
         if(frames.size<3) return null
         val duration=frames.last()-frames.first()
         if(duration<200_000_000L) return null

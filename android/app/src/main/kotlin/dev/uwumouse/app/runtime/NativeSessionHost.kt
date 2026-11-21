@@ -723,7 +723,9 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
     /** Main-only immutable hint. Current generation/focus/mode are checked again at ingress. */
     private fun nativeCameraRoute():NativeMotionDispatchGate.Route? {
         val captureId=nativeCaptureId
-        if(DisplayResolutionController.changing || GameCoordinator.resolutionPanelVisible || GameCoordinator.menuTextInputActive || captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
+        if(DisplayResolutionController.changing || GameCoordinator.editorVisible || GameCoordinator.bubbleMenuVisible ||
+            GameCoordinator.resolutionPanelVisible || GameCoordinator.menuTextInputActive ||
+            captureId==0L || startingNativeCapture || !appliedMouseCapture || !physicalButtonsKnown || sourceTailPending ||
             menuAwaitingRelease || wantsMenuPointer()) return null
         val route=SessionController.nativeCameraRoute(captureId,physicalButtons,GameCoordinator.profileSwitchBindings().keys) ?: return null
         return route.takeIf { captureEpoch==it.generation }
@@ -1310,7 +1312,8 @@ class NativeSessionHost private constructor(context: Context) : ContextWrapper(c
         }
         if (!SessionController.targetConfirmed) { SessionController.pause("Destino no confirmado"); forceMouseOff("focus_lost"); return false }
         if(!physical) return false
-        val bound = SessionController.consumesKey(event.keyCode)
+        val bound = !GameCoordinator.editorVisible && !GameCoordinator.bubbleMenuVisible &&
+            SessionController.consumesKey(event.keyCode,textMode=keyboardModeEnabled)
         if(!bound && cursorKeyboardMode.blocksNewOrdinaryKeys()) {
             // Existing forwarded DOWN owners were handled above, so their UP still
             // reaches Android even if text mode was disabled while a key was held.

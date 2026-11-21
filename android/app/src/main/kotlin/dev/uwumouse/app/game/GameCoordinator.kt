@@ -44,7 +44,12 @@ object GameCoordinator {
     private var monitor:PerformanceMonitorBubble?=null
     private var monitorContext:Context?=null
     private var statusVisual:TrustedStatusVisualPort?=null
-    private val monitorSampler=PerformanceMonitorSampler { fps -> monitor?.updateFps(fps) }
+    var monitorFpsSource:String?=null
+        private set
+    private val monitorSampler=PerformanceMonitorSampler { sample ->
+        monitor?.updateFps(sample?.fps)
+        monitorFpsSource=sample?.source?.takeIf { monitorFps!=null }
+    }
     private var presentationDisplayId=-1
     private var geometryInvalidated=false
     private val menuBounds=Rect()
@@ -222,6 +227,7 @@ object GameCoordinator {
     fun bubbleProfiles():List<ProfileMenuItem> = profileRows
     fun captureBubbleKey(code:Int):Boolean = bubble?.captureProfileKey(code)==true
     private fun profileSwitchAllowed()=toolsRequested && !waiting && !editorVisible && !bubbleMenuVisible &&
+        service?.keyboardModeEnabled!=true &&
         SessionController.targetConfirmed && !SessionController.releaseUnverified && !SessionController.isTransitioning() &&
         (SessionController.mode==SessionMode.PAUSED || SessionController.mode==SessionMode.PLAYING)
     fun profileSwitchBindings():Map<Int,String> = if(profileSwitchAllowed()) profileKeys else emptyMap()
@@ -814,6 +820,7 @@ object GameCoordinator {
     }
     private fun hideMonitor() {
         monitorSampler.stop()
+        monitorFpsSource=null
         val current=monitor ?: return
         if(!current.visible) return
         current.hide()
@@ -982,6 +989,7 @@ object GameCoordinator {
         val displayId=presentationDisplayId.takeIf { it>=0 } ?: SessionController.targetDisplayId
         val oldEditor=editor;val oldBubble=bubble;val oldControls=controls;val oldMonitor=monitor;val oldVisual=statusVisual
         monitorSampler.stop()
+        monitorFpsSource=null
         operation++;waiting=false;startPending=false;toolsRequested=false;resolutionToolsDisplayId=-1;settledTarget=null;activeWindow=null
         profileKeys=emptyMap();profileRows=emptyList()
         presentationRestore?.let { main.removeCallbacks(it) };presentationRestore=null

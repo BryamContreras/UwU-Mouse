@@ -179,7 +179,6 @@ class MappingEngine(
     private fun cursorPointValid(x:Float,y:Float)=x.isFinite() && y.isFinite() && x>=0 && y>=0 && x<geometry.width && y<geometry.height
 
     fun key(keyCode: Int, down: Boolean): Boolean {
-        if(cursorEnabled) return false
         if (!bindings.handlesKey(keyCode)) return false
         if (composer.paused) return true
         val changed = if (down) physicalKeys.add(keyCode) else physicalKeys.remove(keyCode)

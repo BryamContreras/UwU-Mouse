@@ -33,12 +33,32 @@ class GameCursorTest {
         h.engine.setCameraEnabled(true);h.engine.relativeMouse(5f,2f)
         assertEquals(3,h.composer.activeCount)
         assertTrue(h.engine.enterCursorMode());assertEquals(0,h.composer.activeCount)
-        assertFalse(h.engine.key(MappingEngine.W,true));assertFalse(h.engine.mouseButton(1,true))
+        assertTrue(h.engine.key(MappingEngine.W,false));assertEquals(0,h.composer.activeCount)
+        assertFalse(h.engine.mouseButton(1,true))
         h.engine.cursorButton(true,300f,400f)
         assertTrue(h.engine.leaveCursorMode());assertEquals(0,h.composer.activeCount)
         assertTrue(h.engine.cameraEnabled);assertFalse(h.engine.cursorEnabled)
         h.engine.key(MappingEngine.W,false)
         assertEquals(0,h.composer.activeCount)
+    }
+
+    @Test fun diagonalMovementAndKeyboardActionCanShareTheCursorTouchStream() {
+        val h=Harness();assertTrue(h.engine.enterCursorMode())
+        assertTrue(h.engine.cursorButton(true,300f,400f))
+        assertTrue(h.engine.key(MappingEngine.W,true))
+        assertTrue(h.engine.key(MappingEngine.A,true))
+        val diagonal=h.composer.snapshot().single { it.owner==MappingEngine.JOYSTICK_OWNER }
+        assertTrue(diagonal.x<200f && diagonal.y<1440f)
+        assertTrue(h.engine.key(MappingEngine.SPACE,true));assertEquals(3,h.composer.activeCount)
+        assertTrue(h.engine.cursorMove(320f,420f))
+        assertTrue(h.engine.key(MappingEngine.W,false))
+        val left=h.composer.snapshot().single { it.owner==MappingEngine.JOYSTICK_OWNER }
+        assertEquals(diagonal.id,left.id);assertEquals(1440f,left.y,.01f)
+        assertTrue(h.engine.key(MappingEngine.SPACE,false))
+        assertTrue(h.engine.key(MappingEngine.A,false))
+        assertEquals(MappingEngine.CURSOR_OWNER,h.composer.snapshot().single().owner)
+        assertTrue(h.engine.cursorButton(false,320f,420f));assertEquals(0,h.composer.activeCount)
+        assertFalse(h.engine.cameraEnabled)
     }
     @Test fun rejectedHandoffRetainsUnverifiedContactAndCannotEnableCursor() {
         val h=Harness(true);h.engine.key(MappingEngine.W,true)

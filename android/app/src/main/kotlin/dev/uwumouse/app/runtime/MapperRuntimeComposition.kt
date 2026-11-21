@@ -76,6 +76,7 @@ private class AndroidSessionEvents : SessionEvents {
         "controlsVisible" to GameCoordinator.controlsVisible,
         "monitorVisible" to GameCoordinator.monitorVisible,
         "monitorFps" to GameCoordinator.monitorFps,
+        "monitorFpsSource" to GameCoordinator.monitorFpsSource,
         "monitorBattery" to GameCoordinator.monitorBattery,
         "bubbleAppearance" to GameCoordinator.bubbleAppearance,
         "targetPreparation" to GameCoordinator.lastTargetPreparation,

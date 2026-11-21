@@ -21,40 +21,26 @@ class ProfileInputPolicyTest {
         ), 1080, 1920, 0)
     }
 
-    @Test fun editAndStopStayOwnedInCameraCursorAndDuringHandoff() {
+    @Test fun sessionShortcutsStayOwnedWhileTyping() {
         val profile = profile()
-        for (cursor in listOf(false, true)) for (pending in listOf(false, true)) {
-            assertTrue(ProfileInputPolicy.consumesKey(profile, 141, cursor, pending))
-            assertTrue(ProfileInputPolicy.consumesKey(profile, 139, cursor, pending))
+        for (textMode in listOf(false, true)) for (shortcut in listOf(138, 139, 140, 141)) {
+            assertTrue(ProfileInputPolicy.consumesKey(profile, shortcut, textMode))
         }
     }
 
-    @Test fun cursorKeepsModeCommandsButPassesOrdinaryGameplayKeys() {
+    @Test fun mappedGameKeysAndCursorActionsAreForwardedWhenTyping() {
         val profile = profile()
-        for (command in listOf(138, 140, 61)) {
-            assertTrue(ProfileInputPolicy.consumesKey(profile, command, true, false))
+        for (gameKey in listOf(profile.profile.joystick.upKey, profile.profile.action.code, 61)) {
+            assertTrue(ProfileInputPolicy.consumesKey(profile, gameKey, textMode = false))
+            assertFalse(ProfileInputPolicy.consumesKey(profile, gameKey, textMode = true))
         }
-        for (gameKey in listOf(profile.profile.joystick.upKey, profile.profile.action.code)) {
-            assertFalse(ProfileInputPolicy.consumesKey(profile, gameKey, true, false))
-            assertTrue(ProfileInputPolicy.consumesKey(profile, gameKey, false, false))
-        }
-        assertFalse(ProfileInputPolicy.consumesKey(profile, 44, true, false))
     }
 
     @Test fun disabledCameraDoesNotOwnItsToggleOrHoldKey() {
         val profile = profile(cameraEnabled = false)
-        for (cursor in listOf(false, true)) for (code in listOf(138, 140)) {
-            assertFalse(ProfileInputPolicy.consumesKey(profile, code, cursor, false))
+        for (textMode in listOf(false, true)) for (code in listOf(138, 140)) {
+            assertFalse(ProfileInputPolicy.consumesKey(profile, code, textMode))
         }
-        assertTrue(ProfileInputPolicy.consumesKey(profile, 141, true, false))
-        assertTrue(ProfileInputPolicy.consumesKey(profile, 139, true, false))
-    }
-
-    @Test fun handoffRetainsExistingGameplayOwnershipUntilItsBarrierCompletes() {
-        val profile = profile()
-        val up = profile.profile.joystick.upKey
-        assertTrue(ProfileInputPolicy.consumesKey(profile, up, true, true))
-        assertFalse(ProfileInputPolicy.consumesKey(profile, up, true, false))
     }
 
     @Test fun unassignedAndUnknownCodesDoNotBecomeSessionCommands() {
@@ -64,8 +50,8 @@ class ProfileInputPolicyTest {
             shortcuts = SessionShortcuts(cameraToggle = 138, stop = 0, edit = 0),
         ), 1080, 1920, 0)
         for (code in listOf(-1, 0, 44, 141)) {
-            assertFalse(ProfileInputPolicy.consumesKey(profile, code, false, false))
-            assertFalse(ProfileInputPolicy.consumesKey(profile, code, true, false))
+            assertFalse(ProfileInputPolicy.consumesKey(profile, code, textMode = false))
+            assertFalse(ProfileInputPolicy.consumesKey(profile, code, textMode = true))
         }
     }
 }

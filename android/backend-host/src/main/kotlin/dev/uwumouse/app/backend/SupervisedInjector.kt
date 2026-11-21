@@ -303,11 +303,14 @@ class SupervisedInjector(private val context: Context,private val identity:Backe
                 else ((focusTopField ?: info.javaClass.getField("topActivity")).get(info) as? ComponentName)
             }.getOrNull()?.takeIf { it.packageName==packageName }
             val component=focusedComponent() ?: return Bundle().apply { putBoolean("available",false) }
-            val fps=frameRateSampler.sample(packageName,component.flattenToString(),component.flattenToShortString())
+            val sample=frameRateSampler.sample(packageName,component.flattenToString(),component.flattenToShortString())
+                ?.takeIf { !closed && focusedComponent()==component }
             return Bundle().apply {
-                val valid=fps!=null && !closed && focusedComponent()==component
-                putBoolean("available",valid)
-                if(valid) putDouble("fps",fps)
+                putBoolean("available",sample!=null)
+                if(sample!=null) {
+                    putDouble("fps",sample.fps)
+                    putString("source",sample.source.diagnosticValue)
+                }
             }
         } finally { Binder.restoreCallingIdentity(identity) }
     }

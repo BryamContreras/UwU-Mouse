@@ -6,8 +6,10 @@ import dev.uwumouse.app.backend.BackendRegistry
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
+internal data class MonitorFpsSample(val fps:Float,val source:String?)
+
 /** Samples the shell backend off the UI and input threads only while the monitor is shown. */
-internal class PerformanceMonitorSampler(private val onSample:(Float?)->Unit) {
+internal class PerformanceMonitorSampler(private val onSample:(MonitorFpsSample?)->Unit) {
     private val main=Handler(Looper.getMainLooper())
     // Binder may ignore interruption. Reuse this lane across visibility changes so a
     // blocked call can never leave another executor/thread behind on each restart.
@@ -28,7 +30,9 @@ internal class PerformanceMonitorSampler(private val onSample:(Float?)->Unit) {
         remove={ main.removeCallbacks(it) },
         sample={ packageName,display ->
             val result=BackendRegistry.injector?.sampleGameFps(packageName,display)
-            if(result?.getBoolean("available")==true) result.getDouble("fps").toFloat() else null
+            if(result?.getBoolean("available")==true)
+                MonitorFpsSample(result.getDouble("fps").toFloat(),result.getString("source"))
+            else null
         },
         onSample=onSample,
     )
@@ -49,11 +53,11 @@ internal class PerformanceSampleLoop(
     private val schedule:(Long,()->Unit)->(()->Unit),
     private val post:(Runnable)->Unit,
     private val remove:(Runnable)->Unit,
-    private val sample:(String,Int)->Float?,
-    private val onSample:(Float?)->Unit,
+    private val sample:(String,Int)->MonitorFpsSample?,
+    private val onSample:(MonitorFpsSample?)->Unit,
 ) {
     private class Target(val packageName:String,val displayId:Int)
-    private class Result(val target:Target,val fps:Float?)
+    private class Result(val target:Target,val sample:MonitorFpsSample?)
     private val lock=Any()
     private var target:Target?=null
     private var inFlight=false
@@ -63,7 +67,7 @@ internal class PerformanceSampleLoop(
         val result=synchronized(lock) {
             pending.also { pending=null }?.takeIf { it.target===target }
         }
-        if(result!=null) onSample(result.fps)
+        if(result!=null) onSample(result.sample)
     }
 
     /** start, stop and result delivery share the UI thread; sampling uses the worker lane. */
@@ -94,11 +98,11 @@ internal class PerformanceSampleLoop(
             if(target!==expected) return
             cancelScheduled=null;inFlight=true
         }
-        val fps=runCatching { sample(expected.packageName,expected.displayId) }.getOrNull()
+        val reading=runCatching { sample(expected.packageName,expected.displayId) }.getOrNull()
         synchronized(lock) {
             inFlight=false
             if(target===expected) {
-                pending=Result(expected,fps)
+                pending=Result(expected,reading)
                 remove(deliver);post(deliver)
                 scheduleNext(3_000L)
             } else if(target!=null) {

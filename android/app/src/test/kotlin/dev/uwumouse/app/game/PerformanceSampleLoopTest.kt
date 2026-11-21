@@ -24,8 +24,11 @@ class PerformanceSampleLoopTest {
             },
             post={ synchronized(queueLock) { deliveries.add(it) } },
             remove={ synchronized(queueLock) { deliveries.remove(it) } },
-            sample={ name,display -> calls.add(name to display);sampling(name,display) },
-            onSample={ results.add(it) },
+            sample={ name,display ->
+                calls.add(name to display)
+                sampling(name,display)?.let { MonitorFpsSample(it,"presented") }
+            },
+            onSample={ results.add(it?.fps) },
         )
         fun nextTask():Task=synchronized(queueLock) { tasks.removeAt(0) }
         fun taskDelays():List<Long> = synchronized(queueLock) { tasks.map { it.delay } }

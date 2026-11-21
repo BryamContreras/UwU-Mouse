@@ -180,12 +180,12 @@ object SessionController {
             }
             try { when(type) {
                 1 -> {
-                    val canStart=camera && !pointerTransition.pending && cursorActionRunner?.pending!=true
+                    val canStart=!pointerTransitionPending && cursorActionRunner?.pending!=true
                     when {
                         cursorActionRunner?.input("key",code,x!=0f)==true -> publishActionState()
                         repeatRunner?.input("key",code,x!=0f,canStart)==true -> publishActionState()
                         macroRunner?.input("key",code,x!=0f,canStart)==true -> publishMacroState()
-                        !pointerTransition.pending && cursorActionRunner?.pending!=true && (runtimeProfile==null || camera) -> engine?.key(code,x!=0f)
+                        canStart -> engine?.key(code,x!=0f)
                     }
                 }
                 2 -> {
@@ -965,12 +965,11 @@ object SessionController {
             if(code in (runtimeProfile?.bindings?.commandKeys ?: emptySet())) {
                 queue.offer(1,code,if(down)1f else 0f,generation=generation);return
             }
-            // A consumed DOWN may be followed by its UP after switching to the cursor.
-            // Let the runner clear its latch without starting anything in that mode.
+            // Always release a consumed macro trigger, including during pointer handoff.
             if(!down && code in (runtimeProfile?.bindings?.macroKeys ?: emptySet())) {
                 queue.offer(1,code,0f,generation=generation);return
             }
-            if(cursorMode || pointerTransitionPending) return
+            if(pointerTransitionPending) return
             if(runtimeProfile?.bindings?.handlesKey(code)==true) queue.offer(1,code,if(down)1f else 0f,generation=generation)
             return
         }
@@ -1130,10 +1129,10 @@ object SessionController {
     }
     fun wheel(vertical: Float) { wheelSteps += vertical } // observation only, no fake binding
     fun backendDied() { pause("Backend perdido; la liberación requiere comprobarse en receptor") }
-    fun consumesKey(code:Int):Boolean {
+    fun consumesKey(code:Int,textMode:Boolean):Boolean {
         if(!active || !targetConfirmed) return false
         val p=runtimeProfile ?: return SessionKeys.consumes(code)
-        return ProfileInputPolicy.consumesKey(p,code,cursorMode,pointerTransitionPending)
+        return ProfileInputPolicy.consumesKey(p,code,textMode)
     }
     fun consumesButton(code:Int):Boolean {
         if(!active || !targetConfirmed) return false
