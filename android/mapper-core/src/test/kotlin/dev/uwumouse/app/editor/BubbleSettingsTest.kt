@@ -13,15 +13,27 @@ class BubbleSettingsTest {
         assertThrows(IllegalArgumentException::class.java) { BubbleSettings.decode(old.toString()) }
     }
     @Test fun monitorAppearanceRoundTripsAndOldDocumentsKeepDefaults() {
-        val configured=BubbleSettings(monitorEnabled=true,monitorOpacity=.45f,monitorX=.32f,monitorY=.89f)
+        val configured=BubbleSettings(monitorEnabled=true,monitorOpacity=.45f,monitorX=.32f,monitorY=.89f,
+            monitorSizePercent=145)
         assertEquals(configured,BubbleSettings.decode(configured.encode()))
         val old=org.json.JSONObject(configured.encode()).apply {
-            remove("monitorOpacity");remove("monitorX");remove("monitorY")
+            remove("monitorOpacity");remove("monitorX");remove("monitorY");remove("monitorSizePercent")
         }
         val decoded=BubbleSettings.decode(old.toString())
         assertEquals(1f,decoded.monitorOpacity,0f)
+        assertEquals(100,decoded.monitorSizePercent)
         assertNull(decoded.monitorX);assertNull(decoded.monitorY)
         assertTrue(decoded.monitorEnabled)
+    }
+    @Test fun monitorSizeAcceptsOnlyWholePercentagesWithinItsRange() {
+        for(size in listOf(75,100,175)) {
+            val settings=BubbleSettings(monitorSizePercent=size)
+            assertEquals(settings,BubbleSettings.decode(settings.encode()))
+        }
+        for(invalid in listOf(74,176,100.5,"150",true,org.json.JSONObject.NULL)) {
+            val stored=org.json.JSONObject(BubbleSettings().encode()).put("monitorSizePercent",invalid)
+            assertThrows(IllegalArgumentException::class.java) { BubbleSettings.decode(stored.toString()) }
+        }
     }
     @Test fun monitorAppearanceRejectsInvalidOpacityAndPosition() {
         for(value in listOf(.09f,1.01f,Float.NaN,Float.POSITIVE_INFINITY))

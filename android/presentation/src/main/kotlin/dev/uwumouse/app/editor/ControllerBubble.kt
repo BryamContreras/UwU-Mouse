@@ -109,7 +109,7 @@ class ControllerBubble(
         "opacity" to it.opacity.toDouble(),"x" to it.x.toDouble(),"y" to it.y.toDouble(),
         "dockEdge" to it.dockEdge,"showControls" to it.showControls,"controlsOpacity" to it.controlsOpacity.toDouble(),
         "cursorSensitivity" to it.cursorSensitivity.toDouble(),"cursorSizeDp" to it.cursorSizeDp.toDouble(),
-        "monitorEnabled" to it.monitorEnabled) }
+        "monitorEnabled" to it.monitorEnabled,"monitorSizePercent" to it.monitorSizePercent) }
 
     fun show(label: String, profileName: String, onMenu: () -> Unit, onEdit: () -> Unit,
              onPlay: () -> Unit, onKeyboard: () -> Unit, onStop: () -> Unit, playing: Boolean,
@@ -177,7 +177,7 @@ class ControllerBubble(
                         closeMenu()
                         val size = screen(); val p = requireNotNull(bubbleParams)
                         val position=BubblePlacement.drag(originalX+dx.roundToInt(),originalY+dy.roundToInt(),
-                            size.x,size.y,p.width,clipAtEdge=!independentDisplay)
+                            size.x,size.y,p.width)
                         if(p.x!=position.x || p.y!=position.y) {
                             p.x=position.x;p.y=position.y
                             updateBubbleVisual(view,p)
@@ -200,7 +200,7 @@ class ControllerBubble(
         }
         val params = params("UwUMouse · Burbuja")
         val size=screen();val side=bubbleSide(size)
-        val position=BubblePlacement.position(style,size.x,size.y,side,clipAtEdge=!independentDisplay)
+        val position=BubblePlacement.position(style,size.x,size.y,side)
         params.width=side;params.height=side;params.x=position.x;params.y=position.y
         params.flags=bubbleFlags()
         params.alpha=if(params.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE!=0)
@@ -222,7 +222,7 @@ class ControllerBubble(
     private fun applyBubble() {
         val view = bubble ?: return
         val p = requireNotNull(bubbleParams); val size = screen(); val side = bubbleSide(size)
-        val position=BubblePlacement.position(style,size.x,size.y,side,clipAtEdge=!independentDisplay)
+        val position=BubblePlacement.position(style,size.x,size.y,side)
         // F8 releases camera input using the existing source/UP transition, without per-sample UI work.
         val flags=bubbleFlags()
         val oldWidth=p.width;val oldHeight=p.height;val oldX=p.x;val oldY=p.y;val oldFlags=p.flags;val oldAlpha=p.alpha
@@ -441,17 +441,21 @@ class ControllerBubble(
                 isChecked=style.monitorEnabled
             }
             detail.addView(monitor,LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,LinearLayout.LayoutParams.WRAP_CONTENT))
-            val monitorOpacity=LinearLayout(uiContext).apply { orientation=LinearLayout.VERTICAL }
-            slider(monitorOpacity,"Opacidad del monitor",10,100,(style.monitorOpacity*100).roundToInt(),{ "$it%" }) {
+            val monitorSettings=LinearLayout(uiContext).apply { orientation=LinearLayout.VERTICAL }
+            slider(monitorSettings,"Opacidad del monitor",10,100,(style.monitorOpacity*100).roundToInt(),{ "$it%" }) {
                 style=style.copy(monitorOpacity=it/100f);onVisualSettingsChanged()
             }
-            monitorOpacity.addView(text("Arrastra el monitor con el menú abierto.",10f))
-            monitorOpacity.visibility=if(style.monitorEnabled) View.VISIBLE else View.GONE
-            detail.addView(monitorOpacity)
+            slider(monitorSettings,"Tamaño del monitor",BubbleSettings.MIN_MONITOR_SIZE_PERCENT,
+                BubbleSettings.MAX_MONITOR_SIZE_PERCENT,style.monitorSizePercent,{ "$it%" }) {
+                style=style.copy(monitorSizePercent=it);onVisualSettingsChanged()
+            }
+            monitorSettings.addView(text("Arrastra el monitor con el menú abierto.",10f))
+            monitorSettings.visibility=if(style.monitorEnabled) View.VISIBLE else View.GONE
+            detail.addView(monitorSettings)
             monitor.setOnCheckedChangeListener { _,checked ->
                 if(checked!=style.monitorEnabled) {
                     style=style.copy(monitorEnabled=checked);saveStyle();monitor.isChecked=style.monitorEnabled
-                    monitorOpacity.visibility=if(style.monitorEnabled) View.VISIBLE else View.GONE
+                    monitorSettings.visibility=if(style.monitorEnabled) View.VISIBLE else View.GONE
                     centerMenu()
                 }
             }
@@ -650,12 +654,14 @@ class ControllerBubble(
         leadingIcon(caption,when(name) {
             "Opacidad", "Opacidad de controles", "Opacidad del monitor" -> R.drawable.mm_setting_opacity
             "Sensibilidad del cursor", "Tamaño del cursor" -> R.drawable.mm_setting_cursor
+            "Tamaño del monitor" -> R.drawable.mm_setting_monitor
             else -> R.drawable.mm_brand
         })
         val explanation=when(name) {
             "Opacidad" -> "Transparencia de la burbuja. Un valor mayor facilita verla sobre el juego."
             "Opacidad de controles" -> "Transparencia de los marcadores del perfil cuando Mostrar controles está activado."
             "Opacidad del monitor" -> "Transparencia del monitor de batería y FPS sobre el juego."
+            "Tamaño del monitor" -> "Escala del monitor de batería y FPS. 100 % usa el tamaño habitual de esta pantalla."
             "Sensibilidad del cursor" -> "Velocidad de nuestro cursor en el juego y los menús. 100% conserva la escala original. No cambia la sensibilidad de la cámara."
             "Tamaño del cursor" -> "Altura visible de nuestro cursor. La punta sigue indicando el lugar del clic aunque cambies su tamaño."
             else -> "Tamaño visible de la burbuja. Puedes arrastrarla para colocarla en otro borde."

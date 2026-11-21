@@ -13,6 +13,7 @@ import android.graphics.drawable.GradientDrawable
 import android.hardware.display.DisplayManager
 import android.os.BatteryManager
 import android.os.Looper
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -28,15 +29,16 @@ import kotlin.math.roundToInt
 /** A passive monitor: no timer, polling, or input handling while used over a game. */
 class PerformanceMonitorBubble(private val service:Context,private val overlayContext:Context=service,visual:StatusVisualPort?=null,
                                private val onPositionChanged:(Float,Float)->Unit={_,_->}) {
+    private class MonitorViews(val root:LinearLayout,val battery:TextView,val fps:TextView,val icon:ImageView)
+
     private val windows=overlayContext.getSystemService(WindowManager::class.java)
     private val uiContext = DesktopPresentation.contextForControls(overlayContext)
     private val screenSize=Point()
     private val statusVisual=StatusVisualRenderer(visual,StatusVisualPort.MONITOR,
         runCatching { overlayContext.display?.displayId }.getOrNull() ?: 0)
-    private var view:View?=null
+    private var views:MonitorViews?=null
+    private val view:View? get()=views?.root
     private var params:WindowManager.LayoutParams?=null
-    private var batteryLabel:TextView?=null
-    private var fpsLabel:TextView?=null
     private var batteryReceiver:BroadcastReceiver?=null
     private var batteryPercent:Int?=null
     private var displayedFps:Int?=null
@@ -44,6 +46,7 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
     private var positionY:Int?=null
     private var movable=false
     private var opacity=1f
+    private var sizePercent=BubbleSettings.DEFAULT_MONITOR_SIZE_PERCENT
     private var normalizedX:Float?=null
     private var normalizedY:Float?=null
     private var dragging=false
@@ -63,22 +66,18 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
         if(existing!=null) { setMovable(movable);return }
         this.movable=movable
         val battery=TextView(uiContext).apply {
-            textSize=11f;setTextColor(Color.WHITE);typeface=Typeface.DEFAULT_BOLD
+            setTextColor(Color.WHITE);typeface=Typeface.DEFAULT_BOLD
             gravity=Gravity.CENTER_VERTICAL;text="--%";includeFontPadding=false
-            setShadowLayer(dp(2).toFloat(),0f,dp(1).toFloat(),Color.argb(220,0,0,0))
         }
         val fps=TextView(uiContext).apply {
-            textSize=11f;setTextColor(Color.rgb(224,239,255));typeface=Typeface.DEFAULT_BOLD
+            setTextColor(Color.rgb(224,239,255));typeface=Typeface.DEFAULT_BOLD
             gravity=Gravity.CENTER_VERTICAL;text="-- FPS";includeFontPadding=false
-            setShadowLayer(dp(2).toFloat(),0f,dp(1).toFloat(),Color.argb(220,0,0,0))
         }
         val root=LinearLayout(uiContext).apply {
             orientation=LinearLayout.HORIZONTAL;gravity=Gravity.CENTER
-            setPadding(dp(4),dp(2),dp(4),dp(2))
             alpha=opacity
             background=GradientDrawable().apply {
                 setColor(Color.argb(105,8,17,34))
-                cornerRadius=dp(8).toFloat()
             }
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_YES
         }
@@ -86,32 +85,26 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
             setImageResource(R.drawable.mm_battery);scaleType=ImageView.ScaleType.FIT_CENTER
             importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        root.addView(batteryIcon,LinearLayout.LayoutParams(dp(16),dp(16)).apply { marginEnd=dp(2) })
+        root.addView(batteryIcon,LinearLayout.LayoutParams(0,0))
         root.addView(battery,LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT))
-        root.addView(fps,LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart=dp(4) })
+        root.addView(fps,LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT,LinearLayout.LayoutParams.WRAP_CONTENT))
         root.setOnTouchListener { _,event ->
             if(!this.movable) return@setOnTouchListener false
             handleDrag(event.actionMasked,event.rawX,event.rawY)
         }
-        // Reserve only the space needed for the longest displayed values, using the
-        // actual scaled fonts so large system text does not truncate either label.
-        val textWidth=ceil(battery.paint.measureText("100%")).toInt()+ceil(fps.paint.measureText("1000 FPS")).toInt()
-        val textHeight=ceil(maxOf(battery.paint.fontMetrics.descent-battery.paint.fontMetrics.ascent,
-            fps.paint.fontMetrics.descent-fps.paint.fontMetrics.ascent).toDouble()).toInt()
-        val width=dp(4)*2+dp(16)+dp(2)+dp(4)+textWidth+dp(2)
-        val height=maxOf(dp(26),textHeight+dp(4));val size=screen()
-        val p=WindowManager.LayoutParams(width,height,OverlayWindows.type(overlayContext),
+        val content=MonitorViews(root,battery,fps,batteryIcon)
+        val screen=screen()
+        val extent=measureContent(content,screen)
+        val p=WindowManager.LayoutParams(extent.x,extent.y,OverlayWindows.type(overlayContext),
             flags(movable),PixelFormat.TRANSLUCENT).apply {
             gravity=Gravity.TOP or Gravity.START;title="UwU Mouse · Monitor"
-            val availableX=(size.x-width).coerceAtLeast(0);val availableY=(size.y-height).coerceAtLeast(0)
-            x=(normalizedX?.let { (it*availableX).roundToInt() } ?: positionX ?: (availableX-dp(12))).coerceIn(0,availableX)
-            y=(normalizedY?.let { (it*availableY).roundToInt() } ?: positionY ?: dp(12)).coerceIn(0,availableY)
+            positionWindow(this,screen)
             alpha=if(movable) 1f else OverlayWindows.nonTouchAlpha(overlayContext)
             layoutInDisplayCutoutMode=WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
             setFitInsetsTypes(0)
         }
         windows.addView(root,p)
-        view=root;params=p;batteryLabel=battery;fpsLabel=fps
+        views=content;params=p
         val receiver=object:BroadcastReceiver() {
             override fun onReceive(context:Context?,intent:Intent?) {
                 if(intent?.action!=Intent.ACTION_BATTERY_CHANGED) return
@@ -140,20 +133,31 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
     }
 
     /** Opacity is a view property; the window still obeys the Android touch-opacity budget. */
-    fun updateSettings(opacity:Float,x:Float?,y:Float?) {
+    fun updateSettings(opacity:Float,sizePercent:Int,x:Float?,y:Float?) {
         check(Looper.myLooper()==Looper.getMainLooper())
         require(opacity.isFinite() && opacity in .1f..1f)
+        require(sizePercent in BubbleSettings.MIN_MONITOR_SIZE_PERCENT..BubbleSettings.MAX_MONITOR_SIZE_PERCENT)
         require((x==null && y==null) || (x!=null && y!=null && x.isFinite() && y.isFinite() && x in 0f..1f && y in 0f..1f))
-        this.opacity=opacity
-        val changed=normalizedX!=x || normalizedY!=y
-        normalizedX=x;normalizedY=y
-        if(changed && !dragging && x!=null && y!=null) {
-            val p=params ?: return;val root=view ?: return;val size=screen()
-            p.x=(x*(size.x-p.width).coerceAtLeast(0)).roundToInt()
-            p.y=(y*(size.y-p.height).coerceAtLeast(0)).roundToInt()
-            positionX=p.x;positionY=p.y;windows.updateViewLayout(root,p)
+        val resized=this.sizePercent!=sizePercent
+        val moved=normalizedX!=x || normalizedY!=y
+        if(!resized && !moved && this.opacity==opacity) return
+        if(resized && dragging) handleDrag(MotionEvent.ACTION_CANCEL,startX,startY)
+        this.opacity=opacity;this.sizePercent=sizePercent;normalizedX=x;normalizedY=y
+        val p=params ?: return
+        val content=views ?: return
+        if((resized || moved) && !dragging) {
+            val screen=screen()
+            if(resized) {
+                val extent=measureContent(content,screen)
+                p.width=extent.x;p.height=extent.y
+                statusVisual.invalidate()
+            }
+            positionWindow(p,screen)
+            updateVisual(content.root,p)
+            windows.updateViewLayout(content.root,p)
+        } else {
+            refreshWindowOpacity()
         }
-        refreshWindowOpacity()
     }
 
     fun containsCursorPoint(x:Float,y:Float):Boolean {
@@ -236,18 +240,60 @@ class PerformanceMonitorBubble(private val service:Context,private val overlayCo
         statusVisual.hide()
         batteryReceiver?.let { service.unregisterReceiver(it) };batteryReceiver=null
         val old=view ?: return
-        view=null;params=null;batteryLabel=null;fpsLabel=null;batteryPercent=null;displayedFps=null
+        views=null;params=null;batteryPercent=null;displayedFps=null
         try { windows.removeViewImmediate(old) } catch (_:IllegalArgumentException) { /* Already detached. */ }
     }
 
     private fun render() {
+        val content=views ?: return
         val battery=batteryPercent?.let { "$it%" } ?: "--%"
         val fps=displayedFps?.let { "$it FPS" } ?: "-- FPS"
-        batteryLabel?.let { if(it.text.toString()!=battery) it.text=battery }
-        fpsLabel?.let { if(it.text.toString()!=fps) it.text=fps }
-        view?.contentDescription="Monitor: batería $battery, $fps"
+        if(content.battery.text.toString()!=battery) content.battery.text=battery
+        if(content.fps.text.toString()!=fps) content.fps.text=fps
+        content.root.contentDescription="Monitor: batería $battery, $fps"
         statusVisual.invalidate()
-        if(view!=null) refreshWindowOpacity()
+        refreshWindowOpacity()
+    }
+
+    private fun measureContent(content:MonitorViews,screen:Point):Point {
+        val metrics=uiContext.resources.displayMetrics
+        val textPixels=TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP,11f,metrics)
+        fun measure(scale:Float):Point {
+            fun scaledDp(value:Int)=(value*metrics.density*scale).roundToInt()
+            val textSize=textPixels*scale
+            for(label in listOf(content.battery,content.fps)) {
+                label.setTextSize(TypedValue.COMPLEX_UNIT_PX,textSize)
+                label.setShadowLayer(scaledDp(2).toFloat(),0f,scaledDp(1).toFloat(),Color.argb(220,0,0,0))
+            }
+            val horizontal=scaledDp(4);val vertical=scaledDp(2)
+            content.root.setPadding(horizontal,vertical,horizontal,vertical)
+            (content.root.background as GradientDrawable).cornerRadius=scaledDp(8).toFloat()
+            val iconSize=scaledDp(16)
+            val iconParams=content.icon.layoutParams as LinearLayout.LayoutParams
+            iconParams.width=iconSize;iconParams.height=iconSize;iconParams.marginEnd=vertical
+            content.icon.layoutParams=iconParams
+            val fpsParams=content.fps.layoutParams as LinearLayout.LayoutParams
+            fpsParams.marginStart=horizontal;content.fps.layoutParams=fpsParams
+            // Reserve the widest text that can be displayed, using the actual accessibility font.
+            val battery=content.battery.paint;val fps=content.fps.paint
+            val textWidth=ceil(battery.measureText("100%")).toInt()+ceil(fps.measureText("1000 FPS")).toInt()
+            val textHeight=ceil(maxOf(battery.fontMetrics.descent-battery.fontMetrics.ascent,
+                fps.fontMetrics.descent-fps.fontMetrics.ascent)).toInt()
+            return Point(horizontal*3+iconSize+vertical*2+textWidth,maxOf(scaledDp(26),textHeight+horizontal))
+        }
+        val scale=sizePercent/100f
+        val extent=measure(scale)
+        val fit=minOf(1f,screen.x.toFloat()/extent.x,screen.y.toFloat()/extent.y)
+        if(fit>=1f) return extent
+        return measure(scale*fit).apply {
+            x=x.coerceIn(1,screen.x);y=y.coerceIn(1,screen.y)
+        }
+    }
+
+    private fun positionWindow(p:WindowManager.LayoutParams,screen:Point) {
+        val availableX=(screen.x-p.width).coerceAtLeast(0);val availableY=(screen.y-p.height).coerceAtLeast(0)
+        p.x=(normalizedX?.let { (it*availableX).roundToInt() } ?: positionX ?: (availableX-dp(12))).coerceIn(0,availableX)
+        p.y=(normalizedY?.let { (it*availableY).roundToInt() } ?: positionY ?: dp(12)).coerceIn(0,availableY)
     }
     private fun flags(movable:Boolean)=WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
         WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or

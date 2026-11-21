@@ -1141,11 +1141,11 @@ object SessionController {
         return ProfileInputPolicy.consumesButton(profile,code,cursorMode,pointerTransitionPending)
     }
     fun isTransitioning()=armed || starting || stopping || testRunning
-    fun pauseThen(reason:String,onReady:(Boolean)->Unit) {
+    fun pauseThen(reason:String,onCancelled:()->Unit={},onReady:(Boolean)->Unit) {
         pause(reason)
         val run=generation
         worker.post { val safe=SessionPolicy.mayEdit(contacts,releaseUnverified,active)
-            main.post { if(run==generation) onReady(safe) }
+            main.post { if(run==generation) onReady(safe) else onCancelled() }
         }
     }
     @Synchronized fun editorClosed() {

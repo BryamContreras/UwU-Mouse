@@ -56,7 +56,7 @@ internal class TrustedStatusVisuals(private val context:Context,private val allo
         if(!display.isValid) return false
         val size=Point()
         @Suppress("DEPRECATION") display.getRealSize(size)
-        // Phone docking can leave half of the bubble outside the display.
+        // Docking can leave half of the bubble outside the display.
         // Bound that clipping for all callers.
         return width<=size.x && height<=size.y && x>=-width/2 && y>=-height/2 &&
             x.toLong()+width/2<=size.x && y.toLong()+height/2<=size.y

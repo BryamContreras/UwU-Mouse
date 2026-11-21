@@ -42,7 +42,7 @@ internal class StatusVisualRenderer(private val port:StatusVisualPort?,private v
         val ok=try {
             val bitmap=if(previous!=null && previous.width==p.width && previous.height==p.height &&
                 previous.revision==revision && image!=null) requireNotNull(image) else {
-                if(view.width!=p.width || view.height!=p.height) {
+                if(view.width!=p.width || view.height!=p.height || view.isLayoutRequested) {
                     view.measure(View.MeasureSpec.makeMeasureSpec(p.width,View.MeasureSpec.EXACTLY),
                         View.MeasureSpec.makeMeasureSpec(p.height,View.MeasureSpec.EXACTLY))
                     view.layout(0,0,p.width,p.height)

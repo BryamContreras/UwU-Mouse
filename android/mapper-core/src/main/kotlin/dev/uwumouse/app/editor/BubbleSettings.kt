@@ -9,7 +9,8 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
                           val dockEdge:String="none",val showControls:Boolean=false,val controlsOpacity:Float=.55f,
                           val cursorSensitivity:Float=1f,val cursorSizeDp:Float=DEFAULT_CURSOR_SIZE_DP,
                           val monitorEnabled:Boolean=false,val monitorOpacity:Float=1f,
-                          val monitorX:Float?=null,val monitorY:Float?=null) {
+                          val monitorX:Float?=null,val monitorY:Float?=null,
+                          val monitorSizePercent:Int=DEFAULT_MONITOR_SIZE_PERCENT) {
     init {
         require(sizeDp in 32..72)
         require(opacity.isFinite() && opacity in .30f..1f)
@@ -19,6 +20,7 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
         require(cursorSensitivity.isFinite() && cursorSensitivity in MIN_CURSOR_SENSITIVITY..MAX_CURSOR_SENSITIVITY)
         require(cursorSizeDp.isFinite() && cursorSizeDp in MIN_CURSOR_SIZE_DP..MAX_CURSOR_SIZE_DP)
         require(monitorOpacity.isFinite() && monitorOpacity in .10f..1f)
+        require(monitorSizePercent in MIN_MONITOR_SIZE_PERCENT..MAX_MONITOR_SIZE_PERCENT)
         require((monitorX==null && monitorY==null) ||
             (monitorX!=null && monitorY!=null && monitorX.isFinite() && monitorY.isFinite() && monitorX in 0f..1f && monitorY in 0f..1f))
     }
@@ -27,6 +29,7 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
         .putValue("showControls",showControls).putValue("controlsOpacity",controlsOpacity)
         .putValue("cursorSensitivity",cursorSensitivity).putValue("cursorSizeDp",cursorSizeDp)
         .putValue("monitorEnabled",monitorEnabled).putValue("monitorOpacity",monitorOpacity)
+        .putValue("monitorSizePercent",monitorSizePercent)
         .putValue("monitorX",monitorX).putValue("monitorY",monitorY).toString()
     companion object {
         const val MIN_CURSOR_SENSITIVITY=.10f
@@ -34,6 +37,9 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
         const val MIN_CURSOR_SIZE_DP=16f
         const val MAX_CURSOR_SIZE_DP=48f
         const val DEFAULT_CURSOR_SIZE_DP=24f
+        const val MIN_MONITOR_SIZE_PERCENT=75
+        const val MAX_MONITOR_SIZE_PERCENT=175
+        const val DEFAULT_MONITOR_SIZE_PERCENT=100
 
         fun decode(text: String): BubbleSettings {
             val value = JSONObject(text)
@@ -53,6 +59,13 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
                 require(value.get("monitorEnabled") is Boolean) { "Ajuste de monitor no válido" }
                 value.getBoolean("monitorEnabled")
             } else false
+            val monitorSize=if(value.has("monitorSizePercent")) {
+                val size=value.get("monitorSizePercent")
+                require(size is Number) { "Tamaño de monitor no válido" }
+                val percent=size.toInt()
+                require(size.toDouble()==percent.toDouble()) { "Tamaño de monitor no válido" }
+                percent
+            } else DEFAULT_MONITOR_SIZE_PERCENT
             fun monitorPosition(name:String):Float? = if(value.has(name)) {
                 require(value.get(name) is Number) { "Posición del monitor no válida" }
                 value.getDouble(name).toFloat()
@@ -63,7 +76,7 @@ data class BubbleSettings(val sizeDp: Int = 44, val opacity: Float = .85f, val x
                 if(schema==2) value.getBoolean("showControls") else false,
                 if(schema==2) value.getDouble("controlsOpacity").toFloat() else .55f,
                 cursorNumber("cursorSensitivity",1f),cursorNumber("cursorSizeDp",DEFAULT_CURSOR_SIZE_DP),monitorEnabled,
-                cursorNumber("monitorOpacity",1f),monitorPosition("monitorX"),monitorPosition("monitorY"))
+                cursorNumber("monitorOpacity",1f),monitorPosition("monitorX"),monitorPosition("monitorY"),monitorSize)
         }
     }
 }

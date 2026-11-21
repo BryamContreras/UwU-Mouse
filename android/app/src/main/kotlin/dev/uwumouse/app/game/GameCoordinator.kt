@@ -493,10 +493,11 @@ object GameCoordinator {
     }
     fun editCurrent() { (SessionController.activeProfileId ?: currentId ?: store().selected()?.id)?.let { openEditor(it) } }
     fun startProfile(id:String,cursor:Boolean=true,requireCurrentContext:Boolean=false,displayId:Int=SessionController.targetDisplayId) {
-        val returnEpoch=if(automaticReturnRequest) contextReturn.identity?.manualPauseEpoch else null
-        if(automaticReturnRequest && (returnEpoch==null || returnEpoch!=SessionController.manualPauseEpoch)) {
+        val automaticReturnEpoch=if(automaticReturnRequest) contextReturn.identity?.manualPauseEpoch else null
+        if(automaticReturnRequest && (automaticReturnEpoch==null || automaticReturnEpoch!=SessionController.manualPauseEpoch)) {
             clearContextReturn("manual_pause");return
         }
+        val returnEpoch=automaticReturnEpoch ?: SessionController.manualPauseEpoch
         if(!automaticReturnRequest) { clearContextReturn("manual_start");runtimeDisplayProfile=null;runtimeProfileSource=null }
         check(!DisplayResolutionController.changing) { "Espera a que termine el cambio de resolución" }
         check(SessionController.mode!=SessionMode.RECOVERING && SessionController.mode!=SessionMode.BLOCKED && !SessionController.releaseUnverified) { "Recupera la secuencia anterior antes de iniciar" }
@@ -511,13 +512,17 @@ object GameCoordinator {
         GameCatalog.requireLaunchable(app,p.packageName)
         service?.prepareKeyboardMode(p.id,p.packageName,displayId,continueCursorCycle=cursor && profileMenuCursor)
         val ticket=++operation; currentId=p.id; waiting=true; toolsRequested=true
-        if(automaticReturnRequest) contextReturn.rebase(ContextReturnGate.Identity(ticket,p.id,p.packageName,displayId,requireNotNull(returnEpoch)))
+        if(automaticReturnRequest) contextReturn.rebase(ContextReturnGate.Identity(ticket,p.id,p.packageName,displayId,returnEpoch))
         refreshProfileLibrary(p.packageName,displayId)
         pendingCursorStart=cursor;startPending=true
         editor?.close(); bubble?.closeMenu();controls?.hide()
-        SessionController.pauseThen("Preparando perfil; sin reanudar entradas antiguas") { safe ->
+        SessionController.pauseThen("Preparando perfil; sin reanudar entradas antiguas",onCancelled={
+            if(ticket==operation) {
+                waiting=false;startPending=false;clearContextReturn("profile_start_cancelled");refreshControls()
+            }
+        }) { safe ->
             if(ticket!=operation) return@pauseThen
-            if(returnEpoch!=null && returnEpoch!=SessionController.manualPauseEpoch) {
+            if(returnEpoch!=SessionController.manualPauseEpoch) {
                 waiting=false;startPending=false;clearContextReturn("manual_pause");refreshControls();return@pauseThen
             }
             if(!safe) { waiting=false; fail("Recupera la secuencia anterior antes de iniciar"); return@pauseThen }
@@ -543,8 +548,7 @@ object GameCoordinator {
                 require(area.left>=window.left && area.top>=window.top && area.right<=window.right && area.bottom<=window.bottom) { "El área calibrada ya no cabe en la ventana; recalibra el perfil" }
                 activeWindow=Rect(window)
                 runtimeDisplayProfile=runtimeProfile;runtimeProfileSource=p
-                if(returnEpoch==null) SessionController.armProfile(prepared,pendingCursorStart,displayId)
-                else if(!SessionController.tryArmProfileAfterInterruption(prepared,pendingCursorStart,displayId,returnEpoch))
+                if(!SessionController.tryArmProfileAfterInterruption(prepared,pendingCursorStart,displayId,returnEpoch))
                     clearContextReturn("manual_pause")
                 startPending=false
                 refreshControls()
@@ -798,7 +802,7 @@ object GameCoordinator {
         val current=monitor ?: return
         val context=monitorContext ?: return
         val appearance=bubble?.settingsSnapshot ?: return
-        current.updateSettings(appearance.monitorOpacity,appearance.monitorX,appearance.monitorY)
+        current.updateSettings(appearance.monitorOpacity,appearance.monitorSizePercent,appearance.monitorX,appearance.monitorY)
         if(!current.visible) {
             // Rebalance all existing passive windows before admitting another overlapping one.
             OverlayWindows.setMonitorActive(context,true)
@@ -855,12 +859,38 @@ object GameCoordinator {
     }
     private fun keyboardMode() {
         clearContextReturn("manual_keyboard_mode")
-        if(!toolsRequested || waiting || editorVisible || !SessionController.targetConfirmed ||
-            SessionController.isTransitioning() || SessionController.releaseUnverified) return
-        // Opening the controls menu already completed its release barrier. Text mode
-        // is an explicit choice inside this cursor cycle, not another mapping pause.
-        service?.toggleKeyboardMode()
-        refreshControls()
+        if(!toolsRequested || waiting || editorVisible || !bubbleMenuVisible ||
+            !SessionController.targetConfirmed || SessionController.isTransitioning() ||
+            SessionController.releaseUnverified) return
+        val capture=service ?: return
+        if(capture.keyboardModeEnabled) {
+            capture.toggleKeyboardMode()
+            refreshControls()
+            return
+        }
+        val id=currentId ?: SessionController.activeProfileId ?: return
+        val displayId=SessionController.targetDisplayId
+        val profile=runCatching { matchingProfile(id,displayId) }.getOrNull()
+        if(profile?.calibration?.confirmed!=true) {
+            message("Guarda un perfil calibrado para volver al juego con el teclado")
+            return
+        }
+        if(!capture.toggleKeyboardMode()) {
+            refreshControls()
+            return
+        }
+        // Authorize the cursor return before startProfile closes the menu and refreshes
+        // capture. Text input belongs to this profile, display and explicit cursor cycle.
+        val wasCursor=profileMenuCursor
+        profileMenuCursor=true
+        keyboardMenuManualPauseEpoch=SessionController.manualPauseEpoch
+        runCatching { startProfile(profile.id,cursor=true,requireCurrentContext=true,displayId=displayId) }
+            .onFailure {
+                profileMenuCursor=wasCursor
+                if(bubbleMenuVisible && capture.keyboardModeEnabled) capture.toggleKeyboardMode()
+                message(it.message ?: "No se pudo volver al juego con el teclado")
+                refreshControls()
+            }
     }
     fun pauseByUser() {
         clearContextReturn("manual_pause")

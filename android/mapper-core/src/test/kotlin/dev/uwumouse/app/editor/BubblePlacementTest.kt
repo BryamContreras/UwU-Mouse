@@ -10,17 +10,18 @@ class BubblePlacementTest {
         val desktopSide=BubblePlacement.sideInPixels(style.sizeDp,1.35f,1000,500)
         assertEquals(44,phoneSide)
         assertEquals(59,desktopSide)
-        assertEquals(1000-desktopSide,BubblePlacement.position(style,1000,500,desktopSide,clipAtEdge=false).x)
-        assertEquals(1000-desktopSide,BubblePlacement.drag(1000,0,1000,500,desktopSide,clipAtEdge=false).x)
+        assertEquals(1000-desktopSide/2,BubblePlacement.position(style,1000,500,desktopSide).x)
+        assertEquals(1000-desktopSide/2,BubblePlacement.drag(1000,0,1000,500,desktopSide).x)
         assertEquals(31,BubblePlacement.sideInPixels(72,1.35f,32,120))
     }
 
-    @Test fun desktopRestoresSavedTopDockWithoutHidingHalfOfTheBubble() {
+    @Test fun desktopRestoresSavedTopDockWithItsLargerBubblePartlyVisible() {
         val style = BubbleSettings(x=.65f,dockEdge="top")
         val side = BubblePlacement.sideInPixels(style.sizeDp,1.35f,2560,1440)
-        val position = BubblePlacement.position(style,2560,1440,side,clipAtEdge=false)
-        assertEquals(0,position.y)
-        assertEquals(0,BubblePlacement.drag(position.x,-side,2560,1440,side,clipAtEdge=false).y)
+        val position = BubblePlacement.position(style,2560,1440,side)
+        assertEquals(-29,position.y)
+        assertEquals(30,position.y+side)
+        assertEquals(-29,BubblePlacement.drag(position.x,-side,2560,1440,side).y)
         assertEquals("top",BubblePlacement.settle(style,position.x,position.y,2560,1440,side,10).dockEdge)
     }
 

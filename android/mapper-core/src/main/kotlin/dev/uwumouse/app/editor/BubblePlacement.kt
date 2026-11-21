@@ -2,31 +2,26 @@ package dev.uwumouse.app.editor
 
 import kotlin.math.roundToInt
 
-/** Screen pixel geometry; desktop docking keeps the whole bubble inside the display. */
+/** Screen pixel geometry; the docked bubble rests halfway over one edge. */
 object BubblePlacement {
     data class Position(val x:Int,val y:Int)
 
     fun sideInPixels(sizeDp: Int, density: Float, width: Int, height: Int): Int =
         (sizeDp * density).roundToInt().coerceIn(1, minOf(width, height) - 1)
 
-    fun position(style:BubbleSettings,width:Int,height:Int,side:Int,clipAtEdge:Boolean=true):Position {
+    fun position(style:BubbleSettings,width:Int,height:Int,side:Int):Position {
         require(width>side && height>side && side>0)
         val x=(style.x*(width-side)).roundToInt();val y=(style.y*(height-side)).roundToInt()
-        val nearEdge=if(clipAtEdge) -side/2 else 0
-        val farInset=if(clipAtEdge) side/2 else side
         return when(style.dockEdge) {
-            "left" -> Position(nearEdge,y)
-            "right" -> Position(width-farInset,y)
-            "top" -> Position(x,nearEdge)
-            "bottom" -> Position(x,height-farInset)
+            "left" -> Position(-side/2,y)
+            "right" -> Position(width-side/2,y)
+            "top" -> Position(x,-side/2)
+            "bottom" -> Position(x,height-side/2)
             else -> Position(x,y)
         }
     }
-    fun drag(x:Int,y:Int,width:Int,height:Int,side:Int,clipAtEdge:Boolean=true):Position {
-        val nearEdge=if(clipAtEdge) -side/2 else 0
-        val farInset=if(clipAtEdge) side/2 else side
-        return Position(x.coerceIn(nearEdge,width-farInset),y.coerceIn(nearEdge,height-farInset))
-    }
+    fun drag(x:Int,y:Int,width:Int,height:Int,side:Int)=Position(
+        x.coerceIn(-side/2,width-side/2),y.coerceIn(-side/2,height-side/2))
     fun settle(style:BubbleSettings,x:Int,y:Int,width:Int,height:Int,side:Int,threshold:Int):BubbleSettings {
         val centerX=x+side/2;val centerY=y+side/2
         val distances=listOf("left" to centerX,"right" to width-centerX,"top" to centerY,"bottom" to height-centerY)
